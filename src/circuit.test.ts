@@ -351,6 +351,53 @@ describe('BigInt state indices (no 32-bit overflow)', () => {
   })
 })
 
+// ─── Phase rotation aliases (r2 = S, r4 = T, r8 = Rz(π/8)) ─────────────────
+// These mirror the named phase gates in the broader gate-set literature.
+// Expressed as rz(angle) — the algebra is what matters, not the name.
+
+describe('Phase rotation gates via rz', () => {
+  it('r2 (Rz(π/2) = S): X then S leaves qubit measurable as |1⟩', () => {
+    // S only adds a phase to |1⟩, measurement outcome unchanged
+    const r = new Circuit(1).x(0).rz(Math.PI / 2, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('r4 (Rz(π/4) = T): X then T leaves qubit measurable as |1⟩', () => {
+    const r = new Circuit(1).x(0).rz(Math.PI / 4, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('r8 (Rz(π/8)): X then R8 leaves qubit measurable as |1⟩', () => {
+    const r = new Circuit(1).x(0).rz(Math.PI / 8, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('H then r8: superposition with phase, still produces |0⟩ and |1⟩', () => {
+    const r = new Circuit(1).h(0).rz(Math.PI / 8, 0).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('four S gates = identity (S⁴ = I)', () => {
+    const r = new Circuit(1).h(0).s(0).s(0).s(0).s(0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 8)
+  })
+})
+
+// ─── Y gate measurement ───────────────────────────────────────────────────────
+
+describe('Y gate measurement', () => {
+  it('Y|0⟩ measures as |1⟩ (Y|0⟩ = i|1⟩, phase unobservable)', () => {
+    const r = new Circuit(1).y(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('YY = I', () => {
+    const r = new Circuit(1).y(0).y(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {
