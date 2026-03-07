@@ -132,6 +132,42 @@ export function applyTwo(sv: StateVector, a: number, b: number, gate: Gate4x4): 
 }
 
 /**
+ * Apply a Toffoli (CCX) gate: flip target if both c1 = |1⟩ and c2 = |1⟩.
+ * Pure permutation — no amplitude arithmetic.
+ */
+export function applyToffoli(sv: StateVector, c1: number, c2: number, target: number): StateVector {
+  const next: StateVector = new Map()
+  const c1mask = 1n << BigInt(c1)
+  const c2mask = 1n << BigInt(c2)
+  const tmask  = 1n << BigInt(target)
+  for (const [idx, amp] of sv) {
+    next.set((idx & c1mask) !== 0n && (idx & c2mask) !== 0n ? idx ^ tmask : idx, amp)
+  }
+  return next
+}
+
+/**
+ * Apply a Fredkin (CSWAP) gate: swap qubits a and b if control = |1⟩.
+ * Pure permutation — no amplitude arithmetic.
+ */
+export function applyCSwap(sv: StateVector, control: number, a: number, b: number): StateVector {
+  const next: StateVector = new Map()
+  const cmask = 1n << BigInt(control)
+  const amask = 1n << BigInt(a)
+  const bmask = 1n << BigInt(b)
+  for (const [idx, amp] of sv) {
+    if ((idx & cmask) === 0n) {
+      next.set(idx, amp)
+    } else {
+      const bitA = (idx & amask) !== 0n
+      const bitB = (idx & bmask) !== 0n
+      next.set(bitA === bitB ? idx : idx ^ amask ^ bmask, amp)
+    }
+  }
+  return next
+}
+
+/**
  * Apply a controlled single-qubit gate: if control = |1⟩, apply gate to target.
  */
 export function applyControlled(sv: StateVector, control: number, target: number, [[a,b],[c,d]]: Gate2x2): StateVector {

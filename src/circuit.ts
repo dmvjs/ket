@@ -6,7 +6,7 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applyControlled, applySingle, applySWAP, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applyControlled, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -15,7 +15,9 @@ type CNOTOp       = { kind: 'cnot';       control: number; target: number       
 type SWAPOp       = { kind: 'swap';       a: number;       b: number                    }
 type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: Gate4x4  }
 type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2 }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp
+type ToffoliOp    = { kind: 'toffoli';    c1: number; c2: number; target: number }
+type CSwapOp      = { kind: 'cswap';      control: number; a: number; b: number }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
@@ -218,6 +220,18 @@ export class Circuit {
   csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si) }
   ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti) }
 
+  // ── Three-qubit gates ────────────────────────────────────────────────────
+
+  /** Toffoli (CCX): flip target if both c1 and c2 are |1⟩. Universal for reversible computation. */
+  ccx(c1: number, c2: number, target: number): Circuit {
+    return this.#add({ kind: 'toffoli', c1, c2, target })
+  }
+
+  /** Fredkin (CSWAP): swap qubits a and b if control is |1⟩. */
+  cswap(control: number, a: number, b: number): Circuit {
+    return this.#add({ kind: 'cswap', control, a, b })
+  }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
@@ -233,6 +247,10 @@ export class Circuit {
         sv = applyControlled(sv, op.control, op.target, op.gate)
       } else if (op.kind === 'swap') {
         sv = applySWAP(sv, op.a, op.b)
+      } else if (op.kind === 'toffoli') {
+        sv = applyToffoli(sv, op.c1, op.c2, op.target)
+      } else if (op.kind === 'cswap') {
+        sv = applyCSwap(sv, op.control, op.a, op.b)
       } else {
         sv = applyTwo(sv, op.a, op.b, op.gate)
       }

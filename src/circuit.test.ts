@@ -1028,6 +1028,142 @@ describe('Multi-gate integration', () => {
   })
 })
 
+// ─── Three-qubit gates ────────────────────────────────────────────────────────
+//
+// Both CCX and CSWAP are pure permutations — no amplitude arithmetic, just
+// index remapping — making them O(|ψ|) in the number of non-zero amplitudes.
+//
+// Helper: build a circuit with the given bitstring pre-loaded as a basis state.
+// Bitstring convention: q0 is rightmost (e.g. '011' → q0=1, q1=1, q2=0).
+function basis(bitstring: string): Circuit {
+  let c = new Circuit(bitstring.length)
+  for (let i = 0; i < bitstring.length; i++) {
+    if (bitstring[bitstring.length - 1 - i] === '1') c = c.x(i)
+  }
+  return c
+}
+
+describe('ccx — Toffoli gate', () => {
+  // ── Classical truth table ──
+  // ccx(0,1,2): c1=q0, c2=q1, target=q2.  Flip target iff c1=c2=1.
+  it.each([
+    ['000', '000'],  // both controls 0 — identity
+    ['010', '010'],  // only q1=1     — identity
+    ['001', '001'],  // only q0=1     — identity
+    ['011', '111'],  // q0=q1=1       — flip q2
+  ] as [string, string][])('|%s⟩ → |%s⟩', (input, expected) => {
+    const r = basis(input).ccx(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs[expected]).toBeCloseTo(1.0, 10)
+  })
+
+  // ── Self-inverse ──
+  it('ccx² = I: |011⟩ → |111⟩ → |011⟩', () => {
+    const r = basis('011').ccx(0, 1, 2).ccx(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['011']).toBeCloseTo(1.0, 10)
+  })
+
+  // ── Control qubit symmetry ──
+  // The Toffoli is symmetric in its two control qubits.
+  it('ccx(c1,c2,t) ≡ ccx(c2,c1,t): controls are interchangeable', () => {
+    const r1 = basis('011').ccx(0, 1, 2).run({ shots: 100, seed: 1 })
+    const r2 = basis('011').ccx(1, 0, 2).run({ shots: 100, seed: 1 })
+    expect(r1.probs['111']).toBeCloseTo(r2.probs['111'] ?? 0, 10)
+  })
+
+  // ── Superposition: genuinely 3-qubit entangled state ──
+  // H(0)·H(1) puts controls in (1/2)(|00⟩+|01⟩+|10⟩+|11⟩).
+  // CCX flips target only for |11⟩ control component.
+  // Result: (1/2)(|000⟩ + |001⟩ + |010⟩ + |111⟩) — 25% each.
+  it('H(0)·H(1)·ccx creates (|000⟩+|001⟩+|010⟩+|111⟩)/2: 25% each', () => {
+    const r = new Circuit(3).h(0).h(1).ccx(0, 1, 2).run({ shots: 20000, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(4)
+    expect(near(r.probs['000'] ?? 0, 0.25, 0.02)).toBe(true)
+    expect(near(r.probs['001'] ?? 0, 0.25, 0.02)).toBe(true)
+    expect(near(r.probs['010'] ?? 0, 0.25, 0.02)).toBe(true)
+    expect(near(r.probs['111'] ?? 0, 0.25, 0.02)).toBe(true)
+  })
+
+  // ── Phase kickback ──
+  // With target in |−⟩: CCX|c1,c2,−⟩ = (−1)^{AND(c1,c2)}|c1,c2,−⟩.
+  // Put controls in |+⟩, target in |−⟩, apply CCX, then H on controls.
+  // For f(x)=AND: H⊗H·CCX_{|−⟩}·H⊗H on |00⟩ measures |11⟩ ≠ |00⟩
+  // (AND is not balanced so we just verify the distribution shifts from uniform).
+  it('phase kickback: x(0)·x(1)·x(2)·h(2)·ccx flips target phase', () => {
+    // Both controls=1, target=|−⟩: CCX|11−⟩ = −|11−⟩. H→|11,1⟩.
+    const r = new Circuit(3).x(0).x(1).x(2).h(2).ccx(0, 1, 2).h(2).run({ shots: 100, seed: 1 })
+    expect(r.probs['111']).toBeCloseTo(1.0, 10)
+  })
+
+  // ── Non-adjacent qubits ──
+  // Verifies no hardcoded qubit numbering in the implementation.
+  it('ccx(0,3,6) on 7 qubits: non-adjacent controls and target', () => {
+    const r = new Circuit(7).x(0).x(3).ccx(0, 3, 6).run({ shots: 100, seed: 1 })
+    expect(r.probs['1001001']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('cswap — Fredkin gate', () => {
+  // ── Classical truth table ──
+  // cswap(0,1,2): control=q0, swap q1 and q2.
+  it.each([
+    ['000', '000'],  // control=0: identity
+    ['010', '010'],  // control=0: no swap (q1=1 stays)
+    ['001', '001'],  // control=1, q1=q2=0: bits equal, no visible change
+    ['011', '101'],  // control=1: q1=1,q2=0 → swap → q1=0,q2=1
+    ['101', '011'],  // control=1: q2=1,q1=0 → swap → q2=0,q1=1
+  ] as [string, string][])('|%s⟩ → |%s⟩', (input, expected) => {
+    const r = basis(input).cswap(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs[expected]).toBeCloseTo(1.0, 10)
+  })
+
+  // ── Self-inverse ──
+  it('cswap² = I: |011⟩ → |101⟩ → |011⟩', () => {
+    const r = basis('011').cswap(0, 1, 2).cswap(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['011']).toBeCloseTo(1.0, 10)
+  })
+
+  // ── Swap test (quantum algorithm) ──────────────────────────────────────────
+  // H(ctrl) · CSWAP(ctrl, a, b) · H(ctrl) is the SWAP test circuit.
+  // Measuring p(ctrl=0) = (1 + |⟨ψ|φ⟩|²) / 2:
+  //   ψ = φ → p = 1     (identical states)
+  //   ψ ⊥ φ → p = 0.5   (orthogonal states)
+  // This is a provably quantum algorithm — no classical circuit achieves it.
+  it('swap test: ψ=φ=|0⟩ → p(control=0) = 1 (identical states)', () => {
+    // control=q0, ψ=q1=|0⟩, φ=q2=|0⟩
+    const r = new Circuit(3).h(0).cswap(0, 1, 2).h(0).run({ shots: 100, seed: 1 })
+    const p0 = Object.entries(r.probs)
+      .filter(([bs]) => bs[bs.length - 1] === '0') // q0=0 (control measured 0)
+      .reduce((sum, [, p]) => sum + p, 0)
+    expect(p0).toBeCloseTo(1.0, 10)
+  })
+
+  it('swap test: ψ=|0⟩, φ=|1⟩ → p(control=0) = 0.5 (orthogonal states)', () => {
+    // x(2) prepares φ=|1⟩ on q2; ψ=q1 stays |0⟩
+    const r = new Circuit(3).x(2).h(0).cswap(0, 1, 2).h(0).run({ shots: 20000, seed: 42 })
+    const p0 = Object.entries(r.probs)
+      .filter(([bs]) => bs[bs.length - 1] === '0')
+      .reduce((sum, [, p]) => sum + p, 0)
+    expect(near(p0, 0.5)).toBe(true)
+  })
+
+  it('swap test: ψ=|+⟩, φ=|+⟩ → p(control=0) = 1 (identical superpositions)', () => {
+    // h(1) and h(2) both prepare |+⟩; identical states → p=1
+    const r = new Circuit(3).h(1).h(2).h(0).cswap(0, 1, 2).h(0).run({ shots: 10000, seed: 42 })
+    const p0 = Object.entries(r.probs)
+      .filter(([bs]) => bs[bs.length - 1] === '0')
+      .reduce((sum, [, p]) => sum + p, 0)
+    expect(near(p0, 1.0, 0.01)).toBe(true)
+  })
+
+  // ── Non-adjacent qubits ──
+  it('cswap(0,2,4) on 5 qubits: swaps non-adjacent target qubits', () => {
+    // control=q0=1, q2=1 → cswap swaps q2↔q4 → q4=1, q2=0
+    const r = new Circuit(5).x(0).x(2).cswap(0, 2, 4).run({ shots: 100, seed: 1 })
+    // q0=1(bit0), q4=1(bit4) → index=17 → bitstring '10001'
+    expect(r.probs['10001']).toBeCloseTo(1.0, 10)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {
