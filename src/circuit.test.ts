@@ -201,16 +201,14 @@ describe('Bell states', () => {
 // ─── Multi-qubit algorithms ────────────────────────────────────────────────────
 
 describe('GHZ state', () => {
-  for (const n of [3, 5, 8, 12, 16, 20]) {
-    it(`${n}-qubit GHZ produces only |${'0'.repeat(n)}⟩ and |${'1'.repeat(n)}⟩`, () => {
-      let c = new Circuit(n).h(0)
-      for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
-      const r = c.run({ shots: 512, seed: 42 })
-      expect(Object.keys(r.probs)).toHaveLength(2)
-      expect(near(r.probs['0'.repeat(n)] ?? 0, 0.5, 0.1)).toBe(true)
-      expect(near(r.probs['1'.repeat(n)] ?? 0, 0.5, 0.1)).toBe(true)
-    })
-  }
+  it.each([3, 5, 8, 12, 16, 20])('%i-qubit GHZ produces only |0…⟩ and |1…⟩', (n) => {
+    let c = new Circuit(n).h(0)
+    for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
+    const r = c.run({ shots: 512, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['0'.repeat(n)] ?? 0, 0.5, 0.1)).toBe(true)
+    expect(near(r.probs['1'.repeat(n)] ?? 0, 0.5, 0.1)).toBe(true)
+  })
 })
 
 describe('Deutsch-Jozsa', () => {
@@ -302,13 +300,11 @@ describe('Distribution', () => {
     }
   })
 
-  it('entropy of uniform superposition over 2^n outcomes = n bits', () => {
-    for (const n of [1, 2, 3, 4]) {
-      let c = new Circuit(n)
-      for (let i = 0; i < n; i++) c = c.h(i)
-      const r = c.run({ shots: 200000, seed: 42 })
-      expect(r.entropy).toBeCloseTo(n, 1)
-    }
+  it.each([1, 2, 3, 4])('entropy of H⊗%i |0⟩ = %i bits', (n) => {
+    let c = new Circuit(n)
+    for (let i = 0; i < n; i++) c = c.h(i)
+    const r = c.run({ shots: 200000, seed: 42 })
+    expect(r.entropy).toBeCloseTo(n, 1)
   })
 
   it('seed produces reproducible results', () => {

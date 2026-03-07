@@ -5,13 +5,12 @@
  * Simulation is lazy: nothing runs until `.run()` is called.
  */
 
-import { c } from './complex.js'
 import * as G from './gates.js'
-import { applyCNOT, applySingle, applySWAP, applyTwo, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applySingle, applySWAP, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
-type SingleOp = { kind: 'single'; q: number;  gate: G.Gate2x2 extends infer T ? T : never }
+type SingleOp = { kind: 'single'; q: number;  gate: Gate2x2 }
 type CNOTOp   = { kind: 'cnot';   control: number; target: number }
 type SWAPOp   = { kind: 'swap';   a: number; b: number }
 type TwoOp    = { kind: 'two';    a: number; b: number; gate: Gate4x4 }
@@ -83,7 +82,7 @@ export class Distribution {
 
   /** ASCII bar chart of measurement outcomes. */
   render(): string {
-    const entries = Object.entries(this.probs).sort(([a], [b]) => a.localeCompare(b))
+    const entries = Object.entries(this.probs).toSorted(([a], [b]) => a.localeCompare(b))
     const maxP    = Math.max(...entries.map(([, p]) => p))
     const width   = 40
     const lines   = entries.map(([bs, p]) => {
@@ -99,88 +98,88 @@ export class Distribution {
 
 export class Circuit {
   readonly qubits: number
-  private readonly ops: readonly Op[]
+  readonly #ops: readonly Op[]
 
   constructor(qubits: number, ops: readonly Op[] = []) {
     this.qubits = qubits
-    this.ops    = ops
+    this.#ops   = ops
   }
 
-  private add(op: Op): Circuit {
-    return new Circuit(this.qubits, [...this.ops, op])
+  #add(op: Op): Circuit {
+    return new Circuit(this.qubits, [...this.#ops, op])
   }
 
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
 
-  h(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.H  }) }
-  x(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.X  }) }
-  y(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.Y  }) }
-  z(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.Z  }) }
-  s(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.S  }) }
-  si(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Si }) }
-  t(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.T  }) }
-  ti(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Ti }) }
-  v(q: number):  Circuit { return this.add({ kind: 'single', q, gate: G.V  }) }
-  vi(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Vi }) }
+  h(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.H  }) }
+  x(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.X  }) }
+  y(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Y  }) }
+  z(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Z  }) }
+  s(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.S  }) }
+  si(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Si }) }
+  t(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.T  }) }
+  ti(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ti }) }
+  v(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V  }) }
+  vi(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi }) }
 
   // ── Rotation gates ───────────────────────────────────────────────────────
 
-  rx(theta: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Rx(theta) }) }
-  ry(theta: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Ry(theta) }) }
-  rz(theta: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Rz(theta) }) }
+  rx(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rx(theta) }) }
+  ry(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ry(theta) }) }
+  rz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta) }) }
 
   // ── Named phase rotation gates ───────────────────────────────────────────
 
   /** Rz(π/2) — phase rotation by a half-turn; S up to global phase. */
-  r2(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R2 }) }
+  r2(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R2 }) }
 
   /** Rz(π/4) — phase rotation by a quarter-turn; T up to global phase. */
-  r4(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R4 }) }
+  r4(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R4 }) }
 
   /** Rz(π/8) — phase rotation by an eighth-turn. */
-  r8(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R8 }) }
+  r8(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R8 }) }
 
   // ── OpenQASM basis gates ─────────────────────────────────────────────────
 
   /** U1(λ) — phase gate; equal to Rz(λ) up to global phase. */
-  u1(lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U1(lambda) }) }
+  u1(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda) }) }
 
   /** U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H. */
-  u2(phi: number, lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U2(phi, lambda) }) }
+  u2(phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda) }) }
 
   /** U3(θ, φ, λ) — general single-qubit unitary; OpenQASM 2.0 basis gate. */
-  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U3(theta, phi, lambda) }) }
+  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U3(theta, phi, lambda) }) }
 
   // ── Two-qubit gates ──────────────────────────────────────────────────────
 
   /** Controlled-NOT. IonQ name: cnot. */
   cnot(control: number, target: number): Circuit {
-    return this.add({ kind: 'cnot', control, target })
+    return this.#add({ kind: 'cnot', control, target })
   }
 
   swap(a: number, b: number): Circuit {
-    return this.add({ kind: 'swap', a, b })
+    return this.#add({ kind: 'swap', a, b })
   }
 
   // ── Two-qubit interaction gates ─────────────────────────────────────────
 
   /** XX(θ) = exp(−iθ/2 · X⊗X) — Ising-XX interaction; IonQ native. */
-  xx(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Xx(theta) }) }
+  xx(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xx(theta) }) }
 
   /** YY(θ) = exp(−iθ/2 · Y⊗Y) — Ising-YY interaction; IonQ native. */
-  yy(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Yy(theta) }) }
+  yy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Yy(theta) }) }
 
   /** ZZ(θ) = exp(−iθ/2 · Z⊗Z) — Ising-ZZ interaction; IonQ native. */
-  zz(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Zz(theta) }) }
+  zz(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Zz(theta) }) }
 
   /** XY(θ) interaction gate. XY(π) = iSWAP, XY(π/2) = √iSWAP. */
-  xy(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Xy(theta) }) }
+  xy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xy(theta) }) }
 
   /** iSWAP = XY(π): swaps qubits and multiplies each by i. */
-  iswap(a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.ISwap }) }
+  iswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.ISwap }) }
 
   /** √iSWAP = XY(π/2): square root of iSWAP. */
-  srswap(a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.SrSwap }) }
+  srswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.SrSwap }) }
 
   // ── Execution ────────────────────────────────────────────────────────────
 
@@ -188,7 +187,7 @@ export class Circuit {
   run({ shots = 1024, seed }: RunOptions = {}): Distribution {
     let sv: StateVector = zero(this.qubits)
 
-    for (const op of this.ops) {
+    for (const op of this.#ops) {
       if (op.kind === 'single') {
         sv = applySingle(sv, op.q, op.gate)
       } else if (op.kind === 'cnot') {
@@ -202,7 +201,7 @@ export class Circuit {
 
     // Sample shots from the probability distribution
     const probs  = probabilities(sv)
-    const sorted = [...probs.entries()].sort(([a], [b]) => (a < b ? -1 : 1))
+    const sorted = [...probs.entries()].toSorted(([a], [b]) => (a < b ? -1 : 1))
 
     const cdf: { idx: bigint; cumP: number }[] = []
     let cum = 0
@@ -210,7 +209,8 @@ export class Circuit {
       cum += p
       cdf.push({ idx, cumP: cum })
     }
-    if (cdf.length > 0) cdf[cdf.length - 1]!.cumP = 1.0 // clamp
+    const last = cdf.at(-1)
+    if (last) last.cumP = 1.0 // clamp floating-point drift
 
     const rng    = makePrng(seed)
     const counts = new Map<bigint, number>()
