@@ -1,0 +1,17 @@
+{
+  "name": "ket",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Quantum circuit simulation with IonQ-native gate names. BigInt statevector, no 32-bit limits.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "dev": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
