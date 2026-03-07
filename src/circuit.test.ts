@@ -666,6 +666,271 @@ describe('xy(θ) — XY interaction (root gate for iswap/srswap)', () => {
   })
 })
 
+// ─── Controlled single-qubit gates ────────────────────────────────────────────
+//
+// All controlled gates share the same structure:
+//   • control=0 → identity (gate never fires)
+//   • control=1 → underlying gate applied to target
+//   • Composition identities prove the correct gate fires at the correct angle
+//
+// Key identities:
+//   cx = cnot                      CX(control=0) ≡ I
+//   H(t)·CZ·H(t) = CNOT           cs² = cz   (S² = Z)
+//   ct⁴ = cz                      cu1(π) = cz  (U1(π) = Z)
+//   cu3(π,0,π) = cx  (U3(π,0,π) = X)
+//
+// Bitstring convention: q0 is rightmost, so x(0) → '01' in a 2-qubit system.
+
+describe('cx (= cnot alias)', () => {
+  it('cx(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cx(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cx = cnot: identical Bell state distributions', () => {
+    const rCnot = new Circuit(2).h(0).cnot(0, 1).run({ shots: 2048, seed: 42 })
+    const rCx   = new Circuit(2).h(0).cx(0, 1).run({ shots: 2048, seed: 42 })
+    expect(rCx.probs['00']).toBeCloseTo(rCnot.probs['00'] ?? 0, 5)
+    expect(rCx.probs['11']).toBeCloseTo(rCnot.probs['11'] ?? 0, 5)
+  })
+})
+
+describe('cy — controlled-Y', () => {
+  it('cy(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cy(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('x(0)·cy(0,1): Y|0⟩ = i|1⟩ → measures as |11⟩', () => {
+    const r = new Circuit(2).x(0).cy(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  // Y² = -I (global phase unobservable) → double application restores state
+  it('cy² restores target: x(0)·cy·cy returns to |10⟩', () => {
+    const r = new Circuit(2).x(0).cy(0, 1).cy(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // H(0)·cy(0,1)|00⟩: cy fires half the time → |00⟩ or i|11⟩, each with p=½
+  it('h(0)·cy(0,1) creates |00⟩/|11⟩ Bell-like state', () => {
+    const r = new Circuit(2).h(0).cy(0, 1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+})
+
+describe('cz — controlled-Z', () => {
+  it('cz(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cz(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('x(0)·cz(0,1): Z|0⟩ = |0⟩ → state unchanged (phase unobservable)', () => {
+    const r = new Circuit(2).x(0).cz(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // H(t)·CZ·H(t) = CNOT: canonical identity
+  it('H(1)·cz(0,1)·H(1) = cnot(0,1): x(0) case gives |11⟩', () => {
+    const r = new Circuit(2).x(0).h(1).cz(0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  // cs² = cz: S² = Z, so two CS gates on control=1 are identical to CZ
+  it('cs² = cz: x(0)·h(1)·cs·cs·h(1) matches x(0)·h(1)·cz·h(1)', () => {
+    const rCz = new Circuit(2).x(0).h(1).cz(0, 1).h(1).run({ shots: 100, seed: 1 })
+    const rCs = new Circuit(2).x(0).h(1).cs(0, 1).cs(0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(rCs.probs['11']).toBeCloseTo(rCz.probs['11'] ?? 0, 10)
+  })
+})
+
+describe('ch — controlled-H', () => {
+  it('ch(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).ch(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  // H fires on q1 → superposition of |01⟩ and |11⟩ (q0=1 throughout)
+  it('x(0)·ch(0,1): H|0⟩ produces 50/50 over |01⟩/|11⟩', () => {
+    const r = new Circuit(2).x(0).ch(0, 1).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  // H² = I: two CH applications with control=1 restore the state
+  it('ch² = I: x(0)·ch·ch returns to |10⟩', () => {
+    const r = new Circuit(2).x(0).ch(0, 1).ch(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('crx(θ) — controlled-Rx', () => {
+  it('crx(0) = I', () => {
+    const r = new Circuit(2).x(0).crx(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // Rx(π) = X up to global phase → CRx(π) = CX
+  it('crx(π) = cx: x(0)·crx(π) → |11⟩', () => {
+    const r = new Circuit(2).x(0).crx(Math.PI, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 5)
+  })
+
+  it('crx(π/2) produces 50/50 superposition on target (control=1)', () => {
+    const r = new Circuit(2).x(0).crx(Math.PI / 2, 0, 1).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('crx(θ)·crx(-θ) = I on activated subspace', () => {
+    const θ = 0.7
+    const r = new Circuit(2).x(0).crx(θ, 0, 1).crx(-θ, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('cry(θ) — controlled-Ry', () => {
+  it('cry(0) = I', () => {
+    const r = new Circuit(2).x(0).cry(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // Ry(π) flips |0⟩ → |1⟩
+  it('cry(π): x(0)·cry(π) → |11⟩', () => {
+    const r = new Circuit(2).x(0).cry(Math.PI, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 5)
+  })
+
+  it('cry(θ)·cry(-θ) = I on activated subspace', () => {
+    const θ = 0.7
+    const r = new Circuit(2).x(0).cry(θ, 0, 1).cry(-θ, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('crz(θ) — controlled-Rz', () => {
+  it('crz(0) = I', () => {
+    const r = new Circuit(2).x(0).crz(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // Rz(π)|+⟩ = i|-⟩; H·i|-⟩ = i|1⟩ → deterministic |1⟩ on target
+  it('x(0)·h(1)·crz(π)·h(1): Rz(π)|+⟩ → |-⟩ → H → |1⟩, measures |11⟩', () => {
+    const r = new Circuit(2).x(0).h(1).crz(Math.PI, 0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 5)
+  })
+
+  it('crz(θ)·crz(-θ) = I on activated subspace', () => {
+    const θ = 0.7
+    const r = new Circuit(2).x(0).crz(θ, 0, 1).crz(-θ, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('cu1(λ) — controlled phase gate', () => {
+  it('cu1(0) = I', () => {
+    const r = new Circuit(2).x(0).cu1(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // U1(π) = Z → CU1(π) = CZ → H(t)·CU1(π)·H(t) = CNOT
+  it('cu1(π) = cz: x(0)·h(1)·cu1(π)·h(1) → |11⟩', () => {
+    const r = new Circuit(2).x(0).h(1).cu1(Math.PI, 0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  // Ramsey fringe: H·U1(λ)·H|0⟩ → p(|0⟩) = (1+cosλ)/2
+  it('Ramsey: x(0)·h(1)·cu1(π/4)·h(1) → p(|01⟩) ≈ 0.854', () => {
+    const expected = (1 + Math.cos(Math.PI / 4)) / 2
+    const r = new Circuit(2).x(0).h(1).cu1(Math.PI / 4, 0, 1).h(1).run({ shots: 50000, seed: 42 })
+    expect(near(r.probs['01'] ?? 0, expected, 0.01)).toBe(true)
+  })
+})
+
+describe('cu3(θ,φ,λ) — controlled general unitary', () => {
+  it('cu3(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cu3(Math.PI, 0, Math.PI, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  // U3(π,0,π) = X → CU3(π,0,π) = CX
+  it('cu3(π,0,π) = cx: x(0)·cu3(π,0,π) → |11⟩', () => {
+    const r = new Circuit(2).x(0).cu3(Math.PI, 0, Math.PI, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  // Unitarity: U3⁻¹(θ,φ,λ) = U3(-θ,-λ,-φ)
+  it('unitarity: x(0)·cu3(θ,φ,λ)·cu3(-θ,-λ,-φ) restores |10⟩', () => {
+    const [θ, φ, λ] = [1.1, 0.7, 0.3]
+    const r = new Circuit(2).x(0).cu3(θ, φ, λ, 0, 1).cu3(-θ, -λ, -φ, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('cs — controlled-S', () => {
+  it('cs(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cs(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cs·csdg = I: x(0)·cs·csdg restores |10⟩', () => {
+    const r = new Circuit(2).x(0).cs(0, 1).csdg(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // S² = Z → cs² = cz (tested via Hadamard-basis equivalence)
+  it('cs² = cz: x(0)·h(1)·cs·cs·h(1) matches x(0)·h(1)·cz·h(1)', () => {
+    const rCz = new Circuit(2).x(0).h(1).cz(0, 1).h(1).run({ shots: 100, seed: 1 })
+    const rCs = new Circuit(2).x(0).h(1).cs(0, 1).cs(0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(rCs.probs['11']).toBeCloseTo(rCz.probs['11'] ?? 0, 10)
+  })
+})
+
+describe('csdg — controlled-S†', () => {
+  it('csdg(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).csdg(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('csdg·cs = I: x(0)·csdg·cs restores |10⟩', () => {
+    const r = new Circuit(2).x(0).csdg(0, 1).cs(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('ct — controlled-T', () => {
+  it('ct(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).ct(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('ct·ctdg = I: x(0)·ct·ctdg restores |10⟩', () => {
+    const r = new Circuit(2).x(0).ct(0, 1).ctdg(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // T⁴ = Z → ct⁴ = cz (tested via Hadamard-basis equivalence)
+  it('ct⁴ = cz: x(0)·h(1)·ct⁴·h(1) matches x(0)·h(1)·cz·h(1)', () => {
+    const rCz = new Circuit(2).x(0).h(1).cz(0, 1).h(1).run({ shots: 100, seed: 1 })
+    const rCt = new Circuit(2).x(0).h(1).ct(0,1).ct(0,1).ct(0,1).ct(0,1).h(1).run({ shots: 100, seed: 1 })
+    expect(rCt.probs['11']).toBeCloseTo(rCz.probs['11'] ?? 0, 10)
+  })
+})
+
+describe('ctdg — controlled-T†', () => {
+  it('ctdg(control=0) leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).ctdg(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('ctdg·ct = I: x(0)·ctdg·ct restores |10⟩', () => {
+    const r = new Circuit(2).x(0).ctdg(0, 1).ct(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
 // ─── Y gate measurement ───────────────────────────────────────────────────────
 
 describe('Y gate measurement', () => {
@@ -674,9 +939,92 @@ describe('Y gate measurement', () => {
     expect(r.probs['1']).toBeCloseTo(1.0, 10)
   })
 
+  it('Y|1⟩ measures as |0⟩ (Y|1⟩ = −i|0⟩, phase unobservable)', () => {
+    const r = new Circuit(1).x(0).y(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
   it('YY = I', () => {
     const r = new Circuit(1).y(0).y(0).run({ shots: 100, seed: 1 })
     expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+})
+
+// ─── Quantum Fourier Transform ────────────────────────────────────────────────
+//
+// 2-qubit QFT circuit: H(q1) · CU1(π/2, q0, q1) · H(q0) · SWAP(q0, q1)
+//
+// Key property: QFT|j⟩ has uniform measurement distribution over all 2ⁿ states,
+// regardless of |j⟩. This follows from |QFT|j⟩_k|² = 1/N for all k.
+//
+// This validates H + cu1 (controlled phase) + SWAP working together correctly —
+// the same circuit pattern used in Shor's algorithm and phase estimation.
+
+describe('Quantum Fourier Transform (2-qubit)', () => {
+  function qft2<C extends Circuit>(c: C): Circuit {
+    // H(q1) · CU1(π/2, q0→q1) · H(q0) · SWAP
+    return c.h(1).cu1(Math.PI / 2, 0, 1).h(0).swap(0, 1)
+  }
+
+  it('QFT|00⟩ produces uniform distribution over all 4 states', () => {
+    const r = qft2(new Circuit(2)).run({ shots: 20000, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(4)
+    for (const p of Object.values(r.probs)) expect(near(p, 0.25, 0.02)).toBe(true)
+  })
+
+  it('QFT|01⟩ (q0=1) also produces uniform distribution', () => {
+    const r = qft2(new Circuit(2).x(0)).run({ shots: 20000, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(4)
+    for (const p of Object.values(r.probs)) expect(near(p, 0.25, 0.02)).toBe(true)
+  })
+
+  // IQFT · QFT = I: SWAP · H(q0) · CU1(−π/2, q0, q1) · H(q1) is QFT†
+  it('IQFT · QFT = I: round-trip recovers |01⟩', () => {
+    const r = new Circuit(2)
+      .x(0)
+      .h(1).cu1(Math.PI / 2, 0, 1).h(0).swap(0, 1)          // QFT
+      .swap(0, 1).h(0).cu1(-Math.PI / 2, 0, 1).h(1)          // QFT†
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+// ─── Multi-gate integration ────────────────────────────────────────────────────
+//
+// Tests gate composition across all gate families in a single circuit.
+// Any unitary sequence U applied then reversed (U · U⁻¹) must restore |0…0⟩.
+// Mirrors quantum-circuit's Issue_97 test (h, s, t, cx, srn sequence).
+
+describe('Multi-gate integration', () => {
+  // Forward: h · s · t · cnot · v  — Inverse: vi · cnot · ti · si · h
+  it('mixed single/two-qubit sequence is invertible: U · U⁻¹ = I', () => {
+    const r = new Circuit(2)
+      .h(0).s(0).t(1).cnot(0, 1).v(0)   // U
+      .vi(0).cnot(0, 1).ti(1).si(0).h(0) // U⁻¹
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  // Controlled + interaction gates in composition
+  it('controlled + interaction gate sequence is invertible', () => {
+    const θ = 0.9
+    const r = new Circuit(2)
+      .h(0).cx(0, 1).crz(θ, 0, 1).xx(θ, 0, 1)   // U
+      .xx(-θ, 0, 1).crz(-θ, 0, 1).cx(0, 1).h(0)  // U⁻¹
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  // 3-qubit round-trip spanning single, two-qubit, and controlled families
+  it('3-qubit U · U⁻¹ across all gate families returns to |000⟩', () => {
+    const θ = 0.6
+    const r = new Circuit(3)
+      .h(0).rx(θ, 1).ry(θ, 2)
+      .cnot(0, 1).cy(1, 2).crz(θ, 0, 2)
+      .crz(-θ, 0, 2).cy(1, 2).cnot(0, 1)
+      .ry(-θ, 2).rx(-θ, 1).h(0)
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['000']).toBeCloseTo(1.0, 10)
   })
 })
 

@@ -6,15 +6,16 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applySingle, applySWAP, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applyControlled, applySingle, applySWAP, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
-type SingleOp = { kind: 'single'; q: number;  gate: Gate2x2 }
-type CNOTOp   = { kind: 'cnot';   control: number; target: number }
-type SWAPOp   = { kind: 'swap';   a: number; b: number }
-type TwoOp    = { kind: 'two';    a: number; b: number; gate: Gate4x4 }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp
+type SingleOp     = { kind: 'single';     q: number;                      gate: Gate2x2 }
+type CNOTOp       = { kind: 'cnot';       control: number; target: number               }
+type SWAPOp       = { kind: 'swap';       a: number;       b: number                    }
+type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: Gate4x4  }
+type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2 }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
@@ -109,6 +110,10 @@ export class Circuit {
     return new Circuit(this.qubits, [...this.#ops, op])
   }
 
+  #ctrl(control: number, target: number, gate: Gate2x2): Circuit {
+    return this.#add({ kind: 'controlled', control, target, gate })
+  }
+
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
 
   h(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.H  }) }
@@ -181,6 +186,38 @@ export class Circuit {
   /** √iSWAP = XY(π/2): square root of iSWAP. */
   srswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.SrSwap }) }
 
+  // ── Controlled single-qubit gates ────────────────────────────────────────
+
+  /** Controlled-NOT; alias for cnot. IBM/OpenQASM name. */
+  cx(control: number, target: number): Circuit { return this.cnot(control, target) }
+
+  cy(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Y) }
+  cz(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Z) }
+  ch(control: number, target: number): Circuit { return this.#ctrl(control, target, G.H) }
+
+  // ── Controlled rotation gates ────────────────────────────────────────────
+
+  crx(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rx(theta)) }
+  cry(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ry(theta)) }
+  crz(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rz(theta)) }
+
+  // ── Controlled parameterized unitaries ───────────────────────────────────
+
+  /** CU1(λ) — controlled phase gate; CU1(π) = CZ. */
+  cu1(lambda: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.U1(lambda)) }
+
+  /** CU3(θ,φ,λ) — controlled general unitary; CU3(π,0,π) = CX. */
+  cu3(theta: number, phi: number, lambda: number, control: number, target: number): Circuit {
+    return this.#ctrl(control, target, G.U3(theta, phi, lambda))
+  }
+
+  // ── Controlled phase gates ────────────────────────────────────────────────
+
+  cs(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.S)  }
+  ct(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.T)  }
+  csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si) }
+  ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti) }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
@@ -192,6 +229,8 @@ export class Circuit {
         sv = applySingle(sv, op.q, op.gate)
       } else if (op.kind === 'cnot') {
         sv = applyCNOT(sv, op.control, op.target)
+      } else if (op.kind === 'controlled') {
+        sv = applyControlled(sv, op.control, op.target, op.gate)
       } else if (op.kind === 'swap') {
         sv = applySWAP(sv, op.a, op.b)
       } else {

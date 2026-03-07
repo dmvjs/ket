@@ -131,6 +131,32 @@ export function applyTwo(sv: StateVector, a: number, b: number, gate: Gate4x4): 
   return next
 }
 
+/**
+ * Apply a controlled single-qubit gate: if control = |1⟩, apply gate to target.
+ */
+export function applyControlled(sv: StateVector, control: number, target: number, [[a,b],[c,d]]: Gate2x2): StateVector {
+  const next: StateVector = new Map()
+  const cmask = 1n << BigInt(control)
+  const tmask = 1n << BigInt(target)
+  const seen  = new Set<bigint>()
+
+  for (const [idx, amp] of sv) {
+    if ((idx & cmask) === 0n) {
+      accumulate(next, idx, amp)
+      continue
+    }
+    const base = idx & ~tmask
+    if (seen.has(base)) continue
+    seen.add(base)
+    const amp0 = sv.get(base)         ?? ZERO
+    const amp1 = sv.get(base | tmask) ?? ZERO
+    accumulate(next, base,         add(mul(a, amp0), mul(b, amp1)))
+    accumulate(next, base | tmask, add(mul(c, amp0), mul(d, amp1)))
+  }
+
+  return next
+}
+
 /** Return probability of each basis state as a plain Record<decimal-string, number>. */
 export function probabilities(sv: StateVector): Map<bigint, number> {
   const probs = new Map<bigint, number>()
