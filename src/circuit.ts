@@ -203,6 +203,15 @@ export class Circuit {
   cry(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ry(theta)) }
   crz(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rz(theta)) }
 
+  /** Controlled-Rz(π/2) — controlled phase half-turn. */
+  cr2(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R2) }
+
+  /** Controlled-Rz(π/4) — controlled phase quarter-turn. */
+  cr4(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R4) }
+
+  /** Controlled-Rz(π/8) — controlled phase eighth-turn. */
+  cr8(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R8) }
+
   // ── Controlled parameterized unitaries ───────────────────────────────────
 
   /** CU1(λ) — controlled phase gate; CU1(π) = CZ. */

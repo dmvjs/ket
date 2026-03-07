@@ -18,11 +18,11 @@ A living document charting the path from a correct, minimal core to a complete, 
 `h` `x` `y` `z` `s` `si` `t` `ti` `v` `vi` `rx` `ry` `rz` `cnot` `swap`
 `r2` `r4` `r8` `u1` `u2` `u3`
 `xx` `yy` `zz` `xy` `iswap` `srswap`
-`cx` `cy` `cz` `ch` `crx` `cry` `crz` `cu1` `cu3` `cs` `ct` `csdg` `ctdg`
+`cx` `cy` `cz` `ch` `crx` `cry` `crz` `cr2` `cr4` `cr8` `cu1` `cu3` `cs` `ct` `csdg` `ctdg`
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (175 tests, ~70ms)**
+**Test suite (184 tests, ~70ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -36,6 +36,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Full controlled gate family with QFT integration test
 - Toffoli and Fredkin truth tables, phase kickback, swap test
 - Native IonQ gates: GPI Ramsey fringe, GPI2 inverse pair, MS Bell states
+- Quantum teleportation: |0⟩, |1⟩, |+⟩, Rx(π/3)|0⟩
 
 ---
 

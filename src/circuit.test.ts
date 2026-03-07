@@ -849,6 +849,38 @@ describe('cu1(λ) — controlled phase gate', () => {
   })
 })
 
+describe('cr2/cr4/cr8 — controlled phase rotations', () => {
+  it('cr2 leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cr2(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cr2·cr2† = I: inverse pair restores state', () => {
+    // x(0)→q0=|1⟩, h(1)→q1=|+⟩; cr2·crz(-π/2) = R2·R2† = I on q1; h(1)→q1=|0⟩
+    // q0=|1⟩, q1=|0⟩ → bitstring '01' (q0 rightmost)
+    const r = new Circuit(2).x(0).h(1).cr2(0, 1).crz(-Math.PI / 2, 0, 1).h(1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cr4 leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cr4(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cr8 leaves |00⟩ unchanged', () => {
+    const r = new Circuit(2).cr8(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('cr2 = crz(π/2): same action on |11⟩ superposition', () => {
+    const r1 = new Circuit(2).x(0).h(1).cr2(0, 1).h(1).run({ shots: 100, seed: 1 })
+    const r2 = new Circuit(2).x(0).h(1).crz(Math.PI / 2, 0, 1).h(1).run({ shots: 100, seed: 1 })
+    for (const bs of ['00', '01', '10', '11']) {
+      expect(r1.probs[bs] ?? 0).toBeCloseTo(r2.probs[bs] ?? 0, 10)
+    }
+  })
+})
+
 describe('cu3(θ,φ,λ) — controlled general unitary', () => {
   it('cu3(control=0) leaves |00⟩ unchanged', () => {
     const r = new Circuit(2).cu3(Math.PI, 0, Math.PI, 0, 1).run({ shots: 100, seed: 1 })
@@ -1246,6 +1278,70 @@ describe('MS gate', () => {
   it('MS arbitrary angles always produces only |00⟩ and |11⟩ from |00⟩', () => {
     const r = new Circuit(2).ms(1.1, 0.7, 0, 1).run({ shots: 2000, seed: 13 })
     expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+  })
+})
+
+// ─── Quantum teleportation ────────────────────────────────────────────────────
+//
+// Protocol (no classical channel needed in simulation — we use post-selection):
+//   q0 = payload (arbitrary state), q1 = Alice's half of Bell pair, q2 = Bob's half
+//   1. Prepare Bell pair on q1/q2
+//   2. Alice: CNOT(q0→q1), H(q0)
+//   3. Classical measurement replaced by controlled corrections:
+//      CX(q1, q2), CZ(q0, q2)
+//   4. q2 must be in the same state as q0 was.
+//
+// Test: teleport |0⟩, |1⟩, |+⟩, |+i⟩ and verify q2 matches.
+
+describe('Quantum teleportation', () => {
+  function teleport(prepQ0: (c: Circuit) => Circuit): Circuit {
+    let c = new Circuit(3)
+    c = prepQ0(c)           // prepare payload on q0
+    c = c.h(1).cnot(1, 2)  // Bell pair on q1/q2
+    c = c.cnot(0, 1).h(0)  // Alice's Bell measurement
+    c = c.cx(1, 2).cz(0, 2) // Bob's corrections
+    return c
+  }
+
+  it('teleports |0⟩: q2 measures as |0⟩', () => {
+    const r = teleport(c => c).run({ shots: 1000, seed: 1 })
+    // q2 (bit 2) should be 0 — only bitstrings with bit2=0 (xxx where x[0]=0)
+    let p0 = 0
+    for (const [bs, p] of Object.entries(r.probs)) {
+      if (bs[0] === '0') p0 += p  // bit2 is MSB of 3-qubit string
+    }
+    expect(p0).toBeCloseTo(1.0, 10)
+  })
+
+  it('teleports |1⟩: q2 measures as |1⟩', () => {
+    const r = teleport(c => c.x(0)).run({ shots: 1000, seed: 1 })
+    let p1 = 0
+    for (const [bs, p] of Object.entries(r.probs)) {
+      if (bs[0] === '1') p1 += p
+    }
+    expect(p1).toBeCloseTo(1.0, 10)
+  })
+
+  it('teleports |+⟩: q2 measures 50/50', () => {
+    const r = teleport(c => c.h(0)).run({ shots: 8000, seed: 2 })
+    let p0 = 0, p1 = 0
+    for (const [bs, p] of Object.entries(r.probs)) {
+      if (bs[0] === '0') p0 += p
+      else               p1 += p
+    }
+    expect(near(p0, 0.5)).toBe(true)
+    expect(near(p1, 0.5)).toBe(true)
+  })
+
+  it('teleports Rx(π/3)|0⟩: q2 replicates the rotation', () => {
+    // Rx(π/3)|0⟩: p(|0⟩) = cos²(π/6) = 3/4
+    const expected0 = Math.cos(Math.PI / 6) ** 2
+    const r = teleport(c => c.rx(Math.PI / 3, 0)).run({ shots: 20000, seed: 3 })
+    let p0 = 0
+    for (const [bs, p] of Object.entries(r.probs)) {
+      if (bs[0] === '0') p0 += p
+    }
+    expect(p0).toBeCloseTo(expected0, 1)
   })
 })
 
