@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
+import type { IonQCircuit } from './circuit.js'
 
 // ─── Tolerance helpers ────────────────────────────────────────────────────────
 
@@ -1646,6 +1647,181 @@ describe('measure + reset integration', () => {
     // q0: x → measure(→1) → reset(→|0⟩) → x again → final |1⟩
     const r = new Circuit(1).x(0).measure(0, 'c', 0).reset(0).x(0).run({ shots: 100, seed: 1 })
     expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+})
+
+// ─── IonQ JSON import / export (3a) ──────────────────────────────────────────
+//
+// Round-trip invariant: Circuit.fromIonQ(c.toIonQ()) produces a circuit whose
+// statevector is identical to c's.  Also covers the IonQ angle convention
+// (rotation in π-radians, phase/phases in turns) and error cases.
+
+describe('toIonQ() — serialization', () => {
+  it('empty circuit serializes to empty gate list', () => {
+    const j = new Circuit(2).toIonQ()
+    expect(j.format).toBe('ionq.circuit.v0')
+    expect(j.qubits).toBe(2)
+    expect(j.circuit).toHaveLength(0)
+  })
+
+  it('single H gate', () => {
+    const j = new Circuit(1).h(0).toIonQ()
+    expect(j.circuit).toEqual([{ gate: 'h', target: 0 }])
+  })
+
+  it('CNOT gate carries control and target', () => {
+    const j = new Circuit(2).cnot(0, 1).toIonQ()
+    expect(j.circuit).toEqual([{ gate: 'cnot', control: 0, target: 1 }])
+  })
+
+  it('SWAP gate uses targets array', () => {
+    const j = new Circuit(2).swap(0, 1).toIonQ()
+    expect(j.circuit).toEqual([{ gate: 'swap', targets: [0, 1] }])
+  })
+
+  it('rx: rotation stored as θ/π (half-turns)', () => {
+    const j = new Circuit(1).rx(Math.PI / 2, 0).toIonQ()
+    expect(j.circuit[0]!.rotation).toBeCloseTo(0.5, 10)
+  })
+
+  it('rz: rotation stored as θ/π', () => {
+    const j = new Circuit(1).rz(Math.PI / 4, 0).toIonQ()
+    expect(j.circuit[0]!.rotation).toBeCloseTo(0.25, 10)
+  })
+
+  it('r2/r4/r8 serialize as named gates with no rotation field', () => {
+    const j = new Circuit(1).r2(0).r4(0).r8(0).toIonQ()
+    expect(j.circuit[0]!.gate).toBe('r2')
+    expect(j.circuit[0]!.rotation).toBeUndefined()
+    expect(j.circuit[1]!.gate).toBe('r4')
+    expect(j.circuit[2]!.gate).toBe('r8')
+  })
+
+  it('gpi: phase stored as φ/(2π) (turns)', () => {
+    const j = new Circuit(1).gpi(Math.PI / 2, 0).toIonQ()
+    expect(j.circuit[0]!.phase).toBeCloseTo(0.25, 10)
+  })
+
+  it('gpi2: phase stored as φ/(2π) (turns)', () => {
+    const j = new Circuit(1).gpi2(Math.PI, 0).toIonQ()
+    expect(j.circuit[0]!.phase).toBeCloseTo(0.5, 10)
+  })
+
+  it('ms: phases stored as [φ₀/(2π), φ₁/(2π)] (turns)', () => {
+    const j = new Circuit(2).ms(Math.PI / 2, Math.PI, 0, 1).toIonQ()
+    expect(j.circuit[0]!.phases![0]).toBeCloseTo(0.25, 10)
+    expect(j.circuit[0]!.phases![1]).toBeCloseTo(0.5, 10)
+  })
+
+  it('xx/yy/zz: rotation stored as θ/π', () => {
+    const j = new Circuit(2).xx(Math.PI / 2, 0, 1).yy(Math.PI / 4, 0, 1).zz(Math.PI, 0, 1).toIonQ()
+    expect(j.circuit[0]!.rotation).toBeCloseTo(0.5,  10)
+    expect(j.circuit[1]!.rotation).toBeCloseTo(0.25, 10)
+    expect(j.circuit[2]!.rotation).toBeCloseTo(1.0,  10)
+  })
+
+  it('throws for an unsupported gate (e.g. cy — controlled-Y)', () => {
+    expect(() => new Circuit(2).cy(0, 1).toIonQ()).toThrow(TypeError)
+  })
+
+  it('throws for u1 (OpenQASM gate, no IonQ representation)', () => {
+    expect(() => new Circuit(1).u1(Math.PI / 4, 0).toIonQ()).toThrow(TypeError)
+  })
+
+  it('throws for mid-circuit measure ops', () => {
+    expect(() => new Circuit(1).measure(0, 'c', 0).toIonQ()).toThrow(TypeError)
+  })
+})
+
+describe('fromIonQ() — parsing', () => {
+  it('parses a Bell-state circuit', () => {
+    const json: IonQCircuit = {
+      format: 'ionq.circuit.v0',
+      qubits: 2,
+      circuit: [
+        { gate: 'h', target: 0 },
+        { gate: 'cnot', control: 0, target: 1 },
+      ],
+    }
+    const r = Circuit.fromIonQ(json).run({ shots: 4000, seed: 5 })
+    expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('rotation angle round-trip: rx(π/3) through JSON', () => {
+    const json: IonQCircuit = {
+      format: 'ionq.circuit.v0',
+      qubits: 1,
+      circuit: [{ gate: 'rx', rotation: 1 / 3, target: 0 }],
+    }
+    const c = Circuit.fromIonQ(json)
+    // Rx(π/3)|0⟩: p(|0⟩) = cos²(π/6) ≈ 0.75
+    expect(c.probability('0')).toBeCloseTo(Math.cos(Math.PI / 6) ** 2, 5)
+  })
+
+  it('phase angle round-trip: gpi(π/4) through JSON', () => {
+    const json: IonQCircuit = {
+      format: 'ionq.circuit.v0',
+      qubits: 1,
+      circuit: [{ gate: 'gpi', phase: 0.125, target: 0 }],  // 0.125 turns = π/4 rad
+    }
+    const c = Circuit.fromIonQ(json)
+    // GPI(π/4)|0⟩ = e^{iπ/4}|1⟩ → always measures |1⟩
+    expect(c.probability('1')).toBeCloseTo(1, 10)
+  })
+
+  it('throws for unknown gate name', () => {
+    const json = {
+      format: 'ionq.circuit.v0' as const,
+      qubits: 1,
+      circuit: [{ gate: 'bogus', target: 0 }],
+    }
+    expect(() => Circuit.fromIonQ(json)).toThrow(TypeError)
+  })
+})
+
+describe('IonQ round-trip: toIonQ() → fromIonQ() → identical statevector', () => {
+  function roundTrip(c: Circuit): Circuit { return Circuit.fromIonQ(c.toIonQ()) }
+
+  it('H gate', () => {
+    const c = new Circuit(1).h(0)
+    expect(roundTrip(c).amplitude('0').re).toBeCloseTo(c.amplitude('0').re, 10)
+    expect(roundTrip(c).amplitude('1').re).toBeCloseTo(c.amplitude('1').re, 10)
+  })
+
+  it('Bell state: H + CNOT', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    expect(roundTrip(c).amplitude('00').re).toBeCloseTo(c.amplitude('00').re, 10)
+    expect(roundTrip(c).amplitude('11').re).toBeCloseTo(c.amplitude('11').re, 10)
+  })
+
+  it('parametric: rx(0.7) + rz(1.3)', () => {
+    const c = new Circuit(1).rx(0.7, 0).rz(1.3, 0)
+    for (const bs of ['0', '1']) {
+      const { re, im } = roundTrip(c).amplitude(bs)
+      expect(re).toBeCloseTo(c.amplitude(bs).re, 8)
+      expect(im).toBeCloseTo(c.amplitude(bs).im, 8)
+    }
+  })
+
+  it('native gates: gpi2 + ms', () => {
+    const c = new Circuit(2).gpi2(0.4, 0).ms(0.6, 0.8, 0, 1)
+    for (const bs of ['00', '01', '10', '11']) {
+      const rt = roundTrip(c)
+      expect(rt.amplitude(bs).re).toBeCloseTo(c.amplitude(bs).re, 8)
+      expect(rt.amplitude(bs).im).toBeCloseTo(c.amplitude(bs).im, 8)
+    }
+  })
+
+  it('mixed gate set: h, x, s, cnot, xx, r2', () => {
+    const c = new Circuit(3).h(0).x(1).s(2).cnot(0, 1).xx(0.9, 1, 2).r2(0)
+    const rt = roundTrip(c)
+    const sv = c.statevector()
+    for (const bs of sv.keys()) {
+      const key = bs.toString(2).padStart(3, '0')
+      expect(rt.amplitude(key).re).toBeCloseTo(c.amplitude(key).re, 8)
+      expect(rt.amplitude(key).im).toBeCloseTo(c.amplitude(key).im, 8)
+    }
   })
 })
 

@@ -11,10 +11,13 @@ import { Complex, ZERO } from './complex.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
-type SingleOp     = { kind: 'single';     q: number;                      gate: Gate2x2 }
-type CNOTOp       = { kind: 'cnot';       control: number; target: number               }
-type SWAPOp       = { kind: 'swap';       a: number;       b: number                    }
-type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: Gate4x4  }
+/** Serialization tag carried on ops that have an IonQ JSON representation. */
+type GateMeta = { name: string; params?: readonly number[] }
+
+type SingleOp     = { kind: 'single';     q: number;                      gate: Gate2x2; meta?: GateMeta }
+type CNOTOp       = { kind: 'cnot';       control: number; target: number                                }
+type SWAPOp       = { kind: 'swap';       a: number;       b: number                                    }
+type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: Gate4x4;  meta?: GateMeta }
 type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2 }
 type ToffoliOp    = { kind: 'toffoli';    c1: number; c2: number; target: number }
 type CSwapOp      = { kind: 'cswap';      control: number; a: number; b: number }
@@ -102,6 +105,26 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
     }
   }
   return sv
+}
+
+// ─── IonQ JSON types ──────────────────────────────────────────────────────────
+
+/** A single gate entry in the IonQ `ionq.circuit.v0` JSON format. */
+export interface IonQGate {
+  gate:     string
+  target?:  number
+  targets?: [number, number]
+  control?: number
+  rotation?: number
+  phase?:   number
+  phases?:  [number, number]
+}
+
+/** The `ionq.circuit.v0` circuit object accepted by IonQ Cloud and qsim. */
+export interface IonQCircuit {
+  format:  'ionq.circuit.v0'
+  qubits:  number
+  circuit: readonly IonQGate[]
 }
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
@@ -218,33 +241,33 @@ export class Circuit {
 
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
 
-  h(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.H  }) }
-  x(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.X  }) }
-  y(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Y  }) }
-  z(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Z  }) }
-  s(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.S  }) }
-  si(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Si }) }
-  t(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.T  }) }
-  ti(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ti }) }
-  v(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V  }) }
-  vi(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi }) }
+  h(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.H,  meta: { name: 'h'  } }) }
+  x(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.X,  meta: { name: 'x'  } }) }
+  y(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Y,  meta: { name: 'y'  } }) }
+  z(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Z,  meta: { name: 'z'  } }) }
+  s(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.S,  meta: { name: 's'  } }) }
+  si(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'si' } }) }
+  t(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.T,  meta: { name: 't'  } }) }
+  ti(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'ti' } }) }
+  v(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'v'  } }) }
+  vi(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'vi' } }) }
 
   // ── Rotation gates ───────────────────────────────────────────────────────
 
-  rx(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rx(theta) }) }
-  ry(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ry(theta) }) }
-  rz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta) }) }
+  rx(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rx(theta), meta: { name: 'rx', params: [theta] } }) }
+  ry(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ry(theta), meta: { name: 'ry', params: [theta] } }) }
+  rz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'rz', params: [theta] } }) }
 
   // ── Named phase rotation gates ───────────────────────────────────────────
 
   /** Rz(π/2) — phase rotation by a half-turn; S up to global phase. */
-  r2(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R2 }) }
+  r2(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R2, meta: { name: 'r2' } }) }
 
   /** Rz(π/4) — phase rotation by a quarter-turn; T up to global phase. */
-  r4(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R4 }) }
+  r4(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R4, meta: { name: 'r4' } }) }
 
   /** Rz(π/8) — phase rotation by an eighth-turn. */
-  r8(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R8 }) }
+  r8(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.R8, meta: { name: 'r8' } }) }
 
   // ── OpenQASM basis gates ─────────────────────────────────────────────────
 
@@ -271,13 +294,13 @@ export class Circuit {
   // ── Two-qubit interaction gates ─────────────────────────────────────────
 
   /** XX(θ) = exp(−iθ/2 · X⊗X) — Ising-XX interaction; IonQ native. */
-  xx(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xx(theta) }) }
+  xx(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xx(theta), meta: { name: 'xx', params: [theta] } }) }
 
   /** YY(θ) = exp(−iθ/2 · Y⊗Y) — Ising-YY interaction; IonQ native. */
-  yy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Yy(theta) }) }
+  yy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Yy(theta), meta: { name: 'yy', params: [theta] } }) }
 
   /** ZZ(θ) = exp(−iθ/2 · Z⊗Z) — Ising-ZZ interaction; IonQ native. */
-  zz(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Zz(theta) }) }
+  zz(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Zz(theta), meta: { name: 'zz', params: [theta] } }) }
 
   /** XY(θ) interaction gate. XY(π) = iSWAP, XY(π/2) = √iSWAP. */
   xy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xy(theta) }) }
@@ -332,14 +355,14 @@ export class Circuit {
   // ── Native IonQ gates ────────────────────────────────────────────────────
 
   /** GPI(φ) — IonQ hardware-native single-qubit gate. GPI(0) = X, GPI(π/2) = Y. */
-  gpi(phi: number, q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi(phi)  }) }
+  gpi(phi: number, q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi(phi),  meta: { name: 'gpi',  params: [phi] } }) }
 
   /** GPI2(φ) — IonQ hardware-native half-rotation. GPI2(0) = Rx(π/2), GPI2(π/2) = Ry(π/2). */
-  gpi2(phi: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi2(phi) }) }
+  gpi2(phi: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi2(phi), meta: { name: 'gpi2', params: [phi] } }) }
 
   /** MS(φ₀, φ₁) — Mølmer-Sørensen entangling gate; IonQ's native two-qubit operation. MS(0,0) = XX(π/2). */
   ms(phi0: number, phi1: number, a: number, b: number): Circuit {
-    return this.#add({ kind: 'two', a, b, gate: G.Ms(phi0, phi1) })
+    return this.#add({ kind: 'two', a, b, gate: G.Ms(phi0, phi1), meta: { name: 'ms', params: [phi0, phi1] } })
   }
 
   // ── Three-qubit gates ────────────────────────────────────────────────────
@@ -419,6 +442,92 @@ export class Circuit {
   if(creg: string, value: number, build: (c: Circuit) => Circuit): Circuit {
     const inner = build(new Circuit(this.qubits))
     return this.#add({ kind: 'if', creg, value, ops: inner.#ops })
+  }
+
+  // ── IonQ JSON import / export ────────────────────────────────────────────
+
+  /**
+   * Parse an `ionq.circuit.v0` JSON object into a `Circuit`.
+   *
+   * Angle convention: `rotation` fields are in π-radians (1.0 = π rad);
+   * `phase` / `phases` fields are in turns (1.0 = 2π rad).
+   */
+  static fromIonQ({ qubits, circuit }: IonQCircuit): Circuit {
+    let c = new Circuit(qubits)
+    for (const g of circuit) {
+      const t  = g.target  ?? 0
+      const [a, b] = g.targets ?? [0, 1]
+      const rot = (g.rotation ?? 0) * Math.PI
+      const ph  = (g.phase   ?? 0) * 2 * Math.PI
+      switch (g.gate) {
+        case 'h':    c = c.h(t);  break
+        case 'x':    c = c.x(t);  break
+        case 'y':    c = c.y(t);  break
+        case 'z':    c = c.z(t);  break
+        case 's':    c = c.s(t);  break
+        case 'si':   c = c.si(t); break
+        case 't':    c = c.t(t);  break
+        case 'ti':   c = c.ti(t); break
+        case 'v':    c = c.v(t);  break
+        case 'vi':   c = c.vi(t); break
+        case 'rx':   c = c.rx(rot, t); break
+        case 'ry':   c = c.ry(rot, t); break
+        case 'rz':   c = c.rz(rot, t); break
+        case 'r2':   c = c.r2(t); break
+        case 'r4':   c = c.r4(t); break
+        case 'r8':   c = c.r8(t); break
+        case 'gpi':  c = c.gpi(ph, t);  break
+        case 'gpi2': c = c.gpi2(ph, t); break
+        case 'cnot': c = c.cnot(g.control ?? 0, t); break
+        case 'swap': c = c.swap(a, b); break
+        case 'xx':   c = c.xx(rot, a, b); break
+        case 'yy':   c = c.yy(rot, a, b); break
+        case 'zz':   c = c.zz(rot, a, b); break
+        case 'ms': {
+          const [p0, p1] = (g.phases ?? [0, 0]).map(p => p * 2 * Math.PI)
+          c = c.ms(p0!, p1!, a, b)
+          break
+        }
+        default: throw new TypeError(`Unknown IonQ gate: '${g.gate}'`)
+      }
+    }
+    return c
+  }
+
+  /**
+   * Serialize to an `ionq.circuit.v0` JSON object ready for IonQ Cloud or qsim.
+   *
+   * Throws `TypeError` for any gate that has no IonQ JSON representation
+   * (controlled variants, U-gates, XY/iSWAP, mid-circuit measurement, etc.).
+   */
+  toIonQ(): IonQCircuit {
+    const circuit: IonQGate[] = []
+    for (const op of this.#ops) {
+      if (op.kind === 'cnot') {
+        circuit.push({ gate: 'cnot', control: op.control, target: op.target })
+      } else if (op.kind === 'swap') {
+        circuit.push({ gate: 'swap', targets: [op.a, op.b] })
+      } else if (op.kind === 'single' && op.meta) {
+        const { name, params } = op.meta
+        const g: IonQGate = { gate: name, target: op.q }
+        if (params) {
+          if (name === 'gpi' || name === 'gpi2') g.phase    = params[0]! / (2 * Math.PI)
+          else                                   g.rotation = params[0]! / Math.PI
+        }
+        circuit.push(g)
+      } else if (op.kind === 'two' && op.meta) {
+        const { name, params } = op.meta
+        const g: IonQGate = { gate: name, targets: [op.a, op.b] }
+        if (params) {
+          if (name === 'ms') g.phases   = [params[0]! / (2 * Math.PI), params[1]! / (2 * Math.PI)]
+          else               g.rotation = params[0]! / Math.PI
+        }
+        circuit.push(g)
+      } else {
+        throw new TypeError(`Op '${op.kind}' is not serializable to IonQ JSON`)
+      }
+    }
+    return { format: 'ionq.circuit.v0', qubits: this.qubits, circuit }
   }
 
   // ── Execution ────────────────────────────────────────────────────────────

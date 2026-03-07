@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (224 tests, ~110ms)**
+**Test suite (247 tests, ~115ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -100,7 +100,7 @@ Needed for algorithms where you want exact amplitudes, not sampled counts.
 
 A circuit library only reaches its potential when it speaks other languages.
 
-### 3a. IonQ JSON (import + export)
+### 3a. IonQ JSON (import + export) ✓
 The IonQ native circuit format (`ionq.circuit.v0`) — the format used by qsim and IonQ Cloud.
 `Circuit.fromIonQ(json)` — parse an IonQ JSON object into a `Circuit`.
 `circuit.toIonQ()` — serialize to IonQ JSON.
