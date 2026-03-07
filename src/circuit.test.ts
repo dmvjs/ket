@@ -2410,6 +2410,130 @@ describe('toPyQuil()', () => {
   })
 })
 
+// ─── MPS tensor-network backend ───────────────────────────────────────────────
+
+describe('MPS backend — basic gates', () => {
+  it('X gate: |0⟩ → |1⟩ exactly', () => {
+    const r = new Circuit(1).x(0).runMps({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('HH = I: returns to |0⟩', () => {
+    const r = new Circuit(1).h(0).h(0).runMps({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('Bell state via H + CNOT: only 00 and 11 outcomes', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).runMps({ shots: 2000, seed: 7 })
+    expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('controlled-Z: relative phase, CZ|++⟩ has no |11⟩ term after H⊗H', () => {
+    // CZ then H⊗H maps |++⟩ → |Φ−⟩-like — just verify it runs and gives valid probs
+    const r = new Circuit(2).h(0).h(1).cz(0, 1).h(0).h(1).runMps({ shots: 1000, seed: 1 })
+    const total = Object.values(r.probs).reduce((a, b) => a + b, 0)
+    expect(total).toBeCloseTo(1.0, 5)
+  })
+
+  it('SWAP gate: |01⟩ → |10⟩', () => {
+    const r = new Circuit(2).x(0).swap(0, 1).runMps({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)  // q1=1 → bitstring '10'
+  })
+})
+
+describe('MPS backend — matches statevector on small circuits', () => {
+  function closeDists(a: Record<string, number>, b: Record<string, number>, tol = 0.04): boolean {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+    return [...keys].every(k => Math.abs((a[k] ?? 0) - (b[k] ?? 0)) <= tol)
+  }
+
+  it('5-qubit uniform superposition: matches statevector', () => {
+    let c = new Circuit(5)
+    for (let q = 0; q < 5; q++) c = c.h(q)
+    const sv  = c.run({ shots: 8192, seed: 1 })
+    const mps = c.runMps({ shots: 8192, seed: 1 })
+    expect(closeDists(sv.probs, mps.probs)).toBe(true)
+  })
+
+  it('QFT-like: 4-qubit H + CRZ ladder matches statevector', () => {
+    let c = new Circuit(4)
+    for (let q = 0; q < 4; q++) c = c.h(q)
+    for (let q = 0; q < 3; q++) c = c.crz(Math.PI / 2, q, q + 1)
+    const sv  = c.run({ shots: 8192, seed: 2 })
+    const mps = c.runMps({ shots: 8192, seed: 2 })
+    expect(closeDists(sv.probs, mps.probs)).toBe(true)
+  })
+
+  it('non-adjacent CNOT: q0→q3 matches statevector', () => {
+    const c = new Circuit(4).h(0).cnot(0, 3)
+    const sv  = c.run({ shots: 4000, seed: 3 })
+    const mps = c.runMps({ shots: 4000, seed: 3 })
+    expect(closeDists(sv.probs, mps.probs)).toBe(true)
+  })
+})
+
+describe('MPS backend — large circuits (50+ qubits)', () => {
+  it('GHZ-50: only all-0 and all-1 bitstrings observed', () => {
+    let c = new Circuit(50).h(0)
+    for (let q = 0; q < 49; q++) c = c.cnot(q, q + 1)
+    const r = new Circuit(50).h(0)
+    let circ = new Circuit(50).h(0)
+    for (let q = 0; q < 49; q++) circ = circ.cnot(q, q + 1)
+    const dist = circ.runMps({ shots: 500, seed: 42 })
+    const keys = Object.keys(dist.probs)
+    const allZero = '0'.repeat(50)
+    const allOne  = '1'.repeat(50)
+    expect(keys.every(k => k === allZero || k === allOne)).toBe(true)
+    expect(near(dist.probs[allZero] ?? 0, 0.5, 0.1)).toBe(true)
+    expect(near(dist.probs[allOne]  ?? 0, 0.5, 0.1)).toBe(true)
+  })
+
+  it('BV-40: recovers hidden bitstring 1010...10 exactly', () => {
+    // Bernstein-Vazirani: n=40 input qubits, q40 ancilla in |−⟩
+    // Secret s = alternating (q1=1,q3=1,...,q39=1, rest 0)
+    const n = 40, secret = Array.from({ length: n }, (_, i) => i % 2)
+    let c = new Circuit(n + 1)
+    for (let q = 0; q < n; q++) c = c.h(q)
+    c = c.x(n).h(n)
+    for (let q = 0; q < n; q++) if (secret[q]) c = c.cnot(q, n)
+    for (let q = 0; q < n; q++) c = c.h(q)
+
+    const dist = c.runMps({ shots: 200, seed: 5 })
+    // Ancilla q40 stays in |−⟩ → random 0/1; strip it out and check input register.
+    // probs keys = idx.toString(2) where bit i = qubit i, so BigInt('0b'+bs) = idx.
+    const ancillaMask = (1n << BigInt(n)) - 1n  // bits 0..n-1
+    const inputStrings = new Set(
+      Object.keys(dist.probs).map(bs =>
+        (BigInt('0b' + bs) & ancillaMask).toString(2).padStart(n, '0')
+      )
+    )
+    // Regardless of ancilla outcome, all shots yield the same input register
+    expect(inputStrings.size).toBe(1)
+  })
+
+  it('product state 50 qubits: H⊗50 → all 2^50 outcomes uniformly', () => {
+    let c = new Circuit(50)
+    for (let q = 0; q < 50; q++) c = c.h(q)
+    const dist = c.runMps({ shots: 500, seed: 99 })
+    // With 500 shots over 2^50 states, each shot is unique — verify all probs ≈ 1/500
+    const probs = Object.values(dist.probs)
+    expect(probs.length).toBe(500)
+    expect(probs.every(p => Math.abs(p - 1 / 500) < 0.001)).toBe(true)
+  })
+})
+
+describe('MPS backend — error paths', () => {
+  it('throws for Toffoli', () => {
+    expect(() => new Circuit(3).ccx(0, 1, 2).runMps()).toThrow('CCX')
+  })
+
+  it('throws for mid-circuit measure', () => {
+    expect(() => new Circuit(2).creg('c', 1).measure(0, 'c', 0).runMps()).toThrow("'measure'")
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {

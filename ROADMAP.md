@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (338 tests, ~150ms)**
+**Test suite (351 tests, ~190ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -40,6 +40,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - OpenQASM 2.0: gate name mapping, angle notation, round-trip statevector fidelity
 - Export targets: Qiskit, Cirq, Q#, pyQuil — gate name mapping, angle formatting, throw-on-unsupported
 - Noise models: depolarizing (p1/p2) + SPAM (pMeas); named device profiles; zero-overhead fast path preserved
+- MPS backend: GHZ-50, BV-40, product-state-50, non-adjacent gates, statevector cross-check
 
 ---
 
@@ -47,25 +48,25 @@ A living document charting the path from a correct, minimal core to a complete, 
 
 Fill out the standard gate set so any published circuit can be expressed.
 
-### 1a. Phase rotation gates
+### 1a. Phase rotation gates ✓
 `r2` (Rz(π/2) = S), `r4` (Rz(π/4) = T), `r8` (Rz(π/8))
 Already expressible as `rz(Math.PI/N)` — add named aliases for readability and IonQ JSON compatibility.
 
-### 1b. Parameterized unitaries
+### 1b. Parameterized unitaries ✓
 `u1(λ)`, `u2(φ, λ)`, `u3(θ, φ, λ)` — OpenQASM basis gates used by IBM circuits.
 
-### 1c. Two-qubit interaction gates
+### 1c. Two-qubit interaction gates ✓
 `xx(θ)`, `yy(θ)`, `zz(θ)` — IonQ's native all-to-all interaction gates, fundamental to trapped-ion hardware.
 `iswap`, `srswap` — common in superconducting and trapped-ion literature.
 `xy(θ)` — XY interaction, used in quantum chemistry and QAOA.
 
-### 1d. Controlled single-qubit gates
+### 1d. Controlled single-qubit gates ✓
 `cx`/`cy`/`cz`/`ch` — the standard controlled family.
 `crx(θ)`, `cry(θ)`, `crz(θ)` — parameterized controlled rotations.
 `cu1`, `cu3` — controlled parameterized unitaries.
 `cs`, `ct`, `csdg`, `ctdg` — controlled phase gates.
 
-### 1e. Three-qubit gates
+### 1e. Three-qubit gates ✓
 `ccx` (Toffoli) — universal for classical reversible computation.
 `cswap` (Fredkin) — controlled swap.
 
@@ -156,9 +157,11 @@ Named device profiles: `aria-1` (p1=0.03%, p2=0.5%, pMeas=0.4%), `forte-1`, `har
 Custom `NoiseParams` for any combination of p1 / p2 / pMeas.
 Pure circuits without noise use the fast path (simulate once, sample N times) — zero overhead.
 
-### 5b. Tensor network simulation
+### 5b. Tensor network simulation ✓
 For circuits with bounded entanglement (Bernstein-Vazirani, QAOA with low depth, product-state preparations), a matrix-product-state simulator can handle 50+ qubits in kilobytes.
-Implemented as a second simulation backend; the `Circuit` API is unchanged.
+`circuit.runMps({ shots, seed, maxBond? })` — MPS backend with configurable bond dimension χ (default 64).
+`src/mps.ts` — standalone MPS engine: `mpsInit`, `mpsApply1`, `mpsApply2` (SWAP network for non-adjacent), `mpsSample`, `qrMGS` (Modified Gram-Schmidt with implicit column pivoting).
+Memory: O(n·χ²·2) vs O(2ⁿ) — GHZ-50 and BV-40 run in milliseconds with χ=2.
 
 ### 5c. Shots-free exact probabilities
 For small circuits where the user wants exact floating-point probabilities without sampling variance, expose a `circuit.exactProbs()` that returns the full probability map directly from the statevector.

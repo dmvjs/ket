@@ -8,6 +8,7 @@
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
+import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -309,6 +310,13 @@ export interface RunOptions {
   seed?: number
   /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
   noise?: string | NoiseParams
+}
+
+export interface MpsRunOptions {
+  shots?: number
+  seed?: number
+  /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
+  maxBond?: number
 }
 
 /**
@@ -1245,6 +1253,48 @@ export class Circuit {
       }
     }
 
+    return new Distribution(this.qubits, shots, counts, cregCounts)
+  }
+
+  /**
+   * Run the circuit using MPS (tensor-network) simulation.
+   *
+   * Efficient for circuits with bounded entanglement (GHZ, BV, shallow QFT, QAOA low-depth).
+   * Memory: O(n · χ² · 2) vs O(2ⁿ) for full statevector.
+   * Handles 50+ qubit circuits that would be intractable with the statevector backend.
+   *
+   * Limitations: no noise, no mid-circuit measure/reset/if; Toffoli and CSWAP
+   * must be decomposed into single- and two-qubit gates first.
+   *
+   * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
+   */
+  runMps({ shots = 1024, seed, maxBond = 64 }: MpsRunOptions = {}): Distribution {
+    const rng = makePrng(seed)
+    let state = mpsInit(this.qubits)
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'single':     state = mpsApply1(state, op.q, op.gate);                                        break
+        case 'cnot':       state = mpsApply2(state, op.control, op.target, CNOT4, maxBond);                break
+        case 'swap':       state = mpsApply2(state, op.a, op.b, SWAP4, maxBond);                           break
+        case 'two':        state = mpsApply2(state, op.a, op.b, op.gate, maxBond);                         break
+        case 'controlled': state = mpsApply2(state, op.control, op.target, controlledGate(op.gate), maxBond); break
+        case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
+        case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+        case 'measure': case 'reset': case 'if':
+          throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+      }
+    }
+
+    const counts = new Map<bigint, number>()
+    for (let i = 0; i < shots; i++) {
+      const idx = mpsSample(state, rng)
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+    }
+
+    const cregCounts = new Map<string, number[]>(
+      this.#cregs.entries().map(([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
     return new Distribution(this.qubits, shots, counts, cregCounts)
   }
 }
