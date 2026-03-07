@@ -156,3 +156,52 @@ export const ISwap: Gate4x4 = Xy(Math.PI)
 
 /** √iSWAP = XY(π/2): square root of iSWAP. */
 export const SrSwap: Gate4x4 = Xy(Math.PI / 2)
+
+// ── IonQ hardware-native gates ───────────────────────────────────────────────
+
+/**
+ * GPI(φ) = [[0, e^{−iφ}], [e^{iφ}, 0]] — IonQ hardware-native single-qubit gate.
+ *
+ * Key identities:
+ *   GPI(0)   = X        GPI(π/2) = Y
+ *   GPI(φ)†  = GPI(φ)  (Hermitian: self-adjoint and self-inverse, GPI² = I)
+ */
+export const Gpi = (phi: number): Gate2x2 => {
+  const cos = Math.cos(phi), sin = Math.sin(phi)
+  return [[ZERO, c(cos, -sin)], [c(cos, sin), ZERO]]
+}
+
+/**
+ * GPI2(φ) = (1/√2)[[1, −ie^{−iφ}], [−ie^{iφ}, 1]] — IonQ hardware-native half-rotation.
+ *
+ * Key identities:
+ *   GPI2(0)     = Rx(π/2)    GPI2(π/2)  = Ry(π/2)
+ *   GPI2(φ)⁻¹  = GPI2(φ+π)  GPI2(0)²   = X  (up to global phase)
+ */
+export const Gpi2 = (phi: number): Gate2x2 => {
+  const cos = Math.cos(phi), sin = Math.sin(phi)
+  // −i·e^{−iφ} = −i(cosφ − i·sinφ) = −sinφ − i·cosφ
+  // −i·e^{ iφ} = −i(cosφ + i·sinφ) =  sinφ − i·cosφ
+  return [[c(sq2), c(-sq2 * sin, -sq2 * cos)], [c(sq2 * sin, -sq2 * cos), c(sq2)]]
+}
+
+/**
+ * MS(φ₀, φ₁) — Mølmer-Sørensen entangling gate; IonQ's native two-qubit operation.
+ *
+ * MS(0, 0)       = XX(π/2)   (maximally entangling)
+ * MS(π/2, π/2)   = YY(π/2)
+ * MS(φ₀, φ₁)|00⟩ always produces a superposition of |00⟩ and |11⟩ with equal probability.
+ */
+export const Ms = (phi0: number, phi1: number): Gate4x4 => {
+  const sp = Math.sin(phi0 + phi1), cp = Math.cos(phi0 + phi1)
+  const sd = Math.sin(phi0 - phi1), cd = Math.cos(phi0 - phi1)
+  // Entries = (1/√2) × { diagonal: 1,
+  //   [0][3]: −i·e^{−i(φ₀+φ₁)},  [1][2]: −i·e^{−i(φ₀−φ₁)},
+  //   [2][1]: −i·e^{ i(φ₀−φ₁)},  [3][0]: −i·e^{ i(φ₀+φ₁)} }
+  return [
+    [c(sq2),                  ZERO,                    ZERO,                    c(-sp * sq2, -cp * sq2)],
+    [ZERO,                    c(sq2),                  c(-sd * sq2, -cd * sq2), ZERO                  ],
+    [ZERO,                    c( sd * sq2, -cd * sq2), c(sq2),                  ZERO                  ],
+    [c( sp * sq2, -cp * sq2), ZERO,                    ZERO,                    c(sq2)                ],
+  ]
+}

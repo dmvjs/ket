@@ -16,8 +16,13 @@ A living document charting the path from a correct, minimal core to a complete, 
 
 **Gates implemented**
 `h` `x` `y` `z` `s` `si` `t` `ti` `v` `vi` `rx` `ry` `rz` `cnot` `swap`
+`r2` `r4` `r8` `u1` `u2` `u3`
+`xx` `yy` `zz` `xy` `iswap` `srswap`
+`cx` `cy` `cz` `ch` `crx` `cry` `crz` `cu1` `cu3` `cs` `ct` `csdg` `ctdg`
+`ccx` `cswap`
+`gpi` `gpi2` `ms`
 
-**Test suite (49 tests, 54ms)**
+**Test suite (175 tests, ~70ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -26,6 +31,11 @@ A living document charting the path from a correct, minimal core to a complete, 
 - 8-qubit uniform superposition (all 256 outcomes present)
 - Entropy equals n bits for H⊗n states (n = 1…4)
 - BigInt correctness at qubits 30, 31, 40 — exactly where 32-bit operations fail
+- Phase rotation and OpenQASM basis gates (U1/U2/U3)
+- Two-qubit interaction gates (XX/YY/ZZ/XY/iSWAP/√iSWAP)
+- Full controlled gate family with QFT integration test
+- Toffoli and Fredkin truth tables, phase kickback, swap test
+- Native IonQ gates: GPI Ramsey fringe, GPI2 inverse pair, MS Bell states
 
 ---
 
@@ -55,12 +65,12 @@ Already expressible as `rz(Math.PI/N)` — add named aliases for readability and
 `ccx` (Toffoli) — universal for classical reversible computation.
 `cswap` (Fredkin) — controlled swap.
 
-### 1f. Native IonQ gates
+### 1f. Native IonQ gates ✓
 `gpi(φ)`, `gpi2(φ)` — IonQ's hardware-native single-qubit gates.
 `ms(φ₀, φ₁)` — Mølmer-Sørensen entangling gate, the native two-qubit operation on IonQ hardware.
 These express circuits more compactly when targeting real IonQ devices.
 
-**Tests to add with each gate family:** unitarity (U†U = I), known analytic outputs, relationship to existing gates (e.g. `cs` = controlled-S = controlled-Rz(π/2)).
+Tests: unitarity (U†U = I), known analytic outputs (GPI(0)=X, Ramsey fringe, GPI2² = X), relationship to existing gates (MS(0,0) = XX(π/2), MS(π/2,π/2) = YY(π/2)).
 
 ---
 

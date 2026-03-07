@@ -1164,6 +1164,91 @@ describe('cswap — Fredkin gate', () => {
   })
 })
 
+// ─── Native IonQ gates ────────────────────────────────────────────────────────
+
+describe('GPI gate', () => {
+  it('GPI(0) = X: flips |0⟩ to |1⟩', () => {
+    const r = new Circuit(1).gpi(0, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('GPI(π/2) = Y: flips |0⟩ to i|1⟩ — same measurement outcome', () => {
+    const r = new Circuit(1).gpi(Math.PI / 2, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('GPI² = I: self-inverse (Hermitian)', () => {
+    const phi = Math.PI / 3
+    const r = new Circuit(1).x(0).gpi(phi, 0).gpi(phi, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('Ramsey fringe: H·GPI(φ)·H|0⟩ → p(|0⟩) = cos²(φ)', () => {
+    const phi = Math.PI / 6  // cos²(π/6) = 3/4
+    const r = new Circuit(1).h(0).gpi(phi, 0).h(0).run({ shots: 20000, seed: 7 })
+    const expected = Math.cos(phi) ** 2
+    expect(r.probs['0'] ?? 0).toBeCloseTo(expected, 1)
+  })
+})
+
+describe('GPI2 gate', () => {
+  it('GPI2(0) = Rx(π/2): maps |0⟩ to equal superposition', () => {
+    const r = new Circuit(1).gpi2(0, 0).run({ shots: 10000, seed: 3 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('GPI2(0)² = X: two half-rotations flip the qubit', () => {
+    const r = new Circuit(1).gpi2(0, 0).gpi2(0, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('GPI2(φ)⁻¹ = GPI2(φ+π): inverse pair cancels to I', () => {
+    const phi = Math.PI / 5
+    const r = new Circuit(1).x(0).gpi2(phi, 0).gpi2(phi + Math.PI, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('GPI2(π/2)|+⟩ = |1⟩: known analytic output', () => {
+    // Ry(π/2)|+⟩ = |1⟩ and GPI2(π/2) = Ry(π/2)
+    const r = new Circuit(1).h(0).gpi2(Math.PI / 2, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('MS gate', () => {
+  it('MS(0,0)|00⟩ produces Bell state — only |00⟩ and |11⟩', () => {
+    const r = new Circuit(2).ms(0, 0, 0, 1).run({ shots: 4000, seed: 5 })
+    expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('MS(0,0) = XX(π/2): same measurement outcomes', () => {
+    const r1 = new Circuit(2).ms(0, 0, 0, 1).run({ shots: 4000, seed: 9 })
+    const r2 = new Circuit(2).xx(Math.PI / 2, 0, 1).run({ shots: 4000, seed: 9 })
+    expect(near(r1.probs['00'] ?? 0, r2.probs['00'] ?? 0, 0.02)).toBe(true)
+    expect(near(r1.probs['11'] ?? 0, r2.probs['11'] ?? 0, 0.02)).toBe(true)
+  })
+
+  it('MS(π/2,π/2) = YY(π/2): same measurement outcomes from |00⟩', () => {
+    const r1 = new Circuit(2).ms(Math.PI / 2, Math.PI / 2, 0, 1).run({ shots: 4000, seed: 11 })
+    const r2 = new Circuit(2).yy(Math.PI / 2, 0, 1).run({ shots: 4000, seed: 11 })
+    expect(near(r1.probs['00'] ?? 0, r2.probs['00'] ?? 0, 0.02)).toBe(true)
+    expect(near(r1.probs['11'] ?? 0, r2.probs['11'] ?? 0, 0.02)).toBe(true)
+  })
+
+  it('MS(0,0)·XX(-π/2) = I: unitarity — inverse cancels', () => {
+    const r = new Circuit(2).ms(0, 0, 0, 1).xx(-Math.PI / 2, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  it('MS arbitrary angles always produces only |00⟩ and |11⟩ from |00⟩', () => {
+    const r = new Circuit(2).ms(1.1, 0.7, 0, 1).run({ shots: 2000, seed: 13 })
+    expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {

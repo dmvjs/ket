@@ -220,6 +220,19 @@ export class Circuit {
   csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si) }
   ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti) }
 
+  // ── Native IonQ gates ────────────────────────────────────────────────────
+
+  /** GPI(φ) — IonQ hardware-native single-qubit gate. GPI(0) = X, GPI(π/2) = Y. */
+  gpi(phi: number, q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi(phi)  }) }
+
+  /** GPI2(φ) — IonQ hardware-native half-rotation. GPI2(0) = Rx(π/2), GPI2(π/2) = Ry(π/2). */
+  gpi2(phi: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi2(phi) }) }
+
+  /** MS(φ₀, φ₁) — Mølmer-Sørensen entangling gate; IonQ's native two-qubit operation. MS(0,0) = XX(π/2). */
+  ms(phi0: number, phi1: number, a: number, b: number): Circuit {
+    return this.#add({ kind: 'two', a, b, gate: G.Ms(phi0, phi1) })
+  }
+
   // ── Three-qubit gates ────────────────────────────────────────────────────
 
   /** Toffoli (CCX): flip target if both c1 and c2 are |1⟩. Universal for reversible computation. */
