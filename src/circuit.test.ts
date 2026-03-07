@@ -1825,6 +1825,243 @@ describe('IonQ round-trip: toIonQ() → fromIonQ() → identical statevector', (
   })
 })
 
+// ─── OpenQASM 2.0 ────────────────────────────────────────────────────────────
+
+describe('toQASM() — serialization', () => {
+  it('emits a valid OPENQASM 2.0 header', () => {
+    const q = new Circuit(2).toQASM()
+    expect(q).toContain('OPENQASM 2.0;')
+    expect(q).toContain('include "qelib1.inc";')
+    expect(q).toContain('qreg q[2];')
+  })
+
+  it('H gate → h q[0]', () => {
+    const q = new Circuit(1).h(0).toQASM()
+    expect(q).toContain('h q[0];')
+  })
+
+  it('cnot → cx q[control],q[target]', () => {
+    const q = new Circuit(2).cnot(0, 1).toQASM()
+    expect(q).toContain('cx q[0],q[1];')
+  })
+
+  it('cx alias also emits cx', () => {
+    const q = new Circuit(2).cx(0, 1).toQASM()
+    expect(q).toContain('cx q[0],q[1];')
+  })
+
+  it('si → sdg, ti → tdg, v → sx, vi → sxdg', () => {
+    const q = new Circuit(1).si(0).ti(0).v(0).vi(0).toQASM()
+    expect(q).toContain('sdg q[0];')
+    expect(q).toContain('tdg q[0];')
+    expect(q).toContain('sx q[0];')
+    expect(q).toContain('sxdg q[0];')
+  })
+
+  it('r2/r4/r8 → rz with π-fraction params', () => {
+    const q = new Circuit(1).r2(0).r4(0).r8(0).toQASM()
+    expect(q).toContain('rz(pi/2) q[0];')
+    expect(q).toContain('rz(pi/4) q[0];')
+    expect(q).toContain('rz(pi/8) q[0];')
+  })
+
+  it('rx/ry/rz carry angle in QASM angle notation', () => {
+    const q = new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).toQASM()
+    expect(q).toContain('rx(pi/2) q[0];')
+    expect(q).toContain('ry(pi/4) q[0];')
+  })
+
+  it('u1/u2/u3 emit with params', () => {
+    const q = new Circuit(1).u1(Math.PI / 4, 0).u2(0, Math.PI, 0).u3(Math.PI, 0, Math.PI, 0).toQASM()
+    expect(q).toContain('u1(pi/4) q[0];')
+    expect(q).toContain('u2(0,pi) q[0];')
+    expect(q).toContain('u3(pi,0,pi) q[0];')
+  })
+
+  it('cy/cz/ch controlled gates', () => {
+    const q = new Circuit(2).cy(0, 1).cz(0, 1).ch(0, 1).toQASM()
+    expect(q).toContain('cy q[0],q[1];')
+    expect(q).toContain('cz q[0],q[1];')
+    expect(q).toContain('ch q[0],q[1];')
+  })
+
+  it('crx/cry/crz carry angle params', () => {
+    const q = new Circuit(2).crx(Math.PI / 2, 0, 1).cry(Math.PI / 4, 0, 1).crz(Math.PI / 8, 0, 1).toQASM()
+    expect(q).toContain('crx(pi/2) q[0],q[1];')
+    expect(q).toContain('cry(pi/4) q[0],q[1];')
+    expect(q).toContain('crz(pi/8) q[0],q[1];')
+  })
+
+  it('cr2/cr4/cr8 → crz with π-fraction params', () => {
+    const q = new Circuit(2).cr2(0, 1).cr4(0, 1).cr8(0, 1).toQASM()
+    expect(q).toContain('crz(pi/2) q[0],q[1];')
+    expect(q).toContain('crz(pi/4) q[0],q[1];')
+    expect(q).toContain('crz(pi/8) q[0],q[1];')
+  })
+
+  it('cs/csdg/ct/ctdg → cu1 with ±π-fraction params', () => {
+    const q = new Circuit(2).cs(0, 1).csdg(0, 1).ct(0, 1).ctdg(0, 1).toQASM()
+    expect(q).toContain('cu1(pi/2) q[0],q[1];')
+    expect(q).toContain('cu1(-pi/2) q[0],q[1];')
+    expect(q).toContain('cu1(pi/4) q[0],q[1];')
+    expect(q).toContain('cu1(-pi/4) q[0],q[1];')
+  })
+
+  it('ccx (Toffoli) → ccx', () => {
+    const q = new Circuit(3).ccx(0, 1, 2).toQASM()
+    expect(q).toContain('ccx q[0],q[1],q[2];')
+  })
+
+  it('cswap (Fredkin) → cswap', () => {
+    const q = new Circuit(3).cswap(0, 1, 2).toQASM()
+    expect(q).toContain('cswap q[0],q[1],q[2];')
+  })
+
+  it('measure and reset', () => {
+    const q = new Circuit(1).creg('c', 1).h(0).measure(0, 'c', 0).toQASM()
+    expect(q).toContain('creg c[1];')
+    expect(q).toContain('measure q[0] -> c[0];')
+  })
+
+  it('reset emits reset statement', () => {
+    const q = new Circuit(1).reset(0).toQASM()
+    expect(q).toContain('reset q[0];')
+  })
+
+  it('throws for gpi (no QASM representation)', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toQASM()).toThrow(TypeError)
+  })
+
+  it('throws for gpi2 (no QASM representation)', () => {
+    expect(() => new Circuit(1).gpi2(0, 0).toQASM()).toThrow(TypeError)
+  })
+
+  it('throws for xx (no QASM representation)', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 2, 0, 1).toQASM()).toThrow(TypeError)
+  })
+
+  it('throws for if ops', () => {
+    expect(() => new Circuit(1).creg('c', 1).if('c', 1, q => q.x(0)).toQASM()).toThrow(TypeError)
+  })
+})
+
+describe('fromQASM() — parsing', () => {
+  it('parses minimal header and H gate', () => {
+    const src = `OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[1];
+h q[0];`
+    const c = Circuit.fromQASM(src)
+    expect(c.qubits).toBe(1)
+    expect(c.probability('0')).toBeCloseTo(0.5, 5)
+    expect(c.probability('1')).toBeCloseTo(0.5, 5)
+  })
+
+  it('parses Bell state: h + cx', () => {
+    const src = `OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0],q[1];`
+    const r = Circuit.fromQASM(src).run({ shots: 4000, seed: 7 })
+    expect(Object.keys(r.probs).every(k => k === '00' || k === '11')).toBe(true)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('parses QASM name aliases: sdg, tdg, sx, sxdg', () => {
+    // sdg = si, so s·si = I → |0⟩
+    const src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\nh q[0];\nsdg q[0];\ns q[0];\nh q[0];`
+    expect(Circuit.fromQASM(src).probability('0')).toBeCloseTo(1, 5)
+  })
+
+  it('parses angle expressions: pi/2, pi/4, 2*pi/3', () => {
+    const src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\nrx(pi/2) q[0];`
+    const c = Circuit.fromQASM(src)
+    // Rx(π/2)|0⟩: p(|0⟩) = cos²(π/4) = 0.5
+    expect(c.probability('0')).toBeCloseTo(0.5, 5)
+  })
+
+  it('parses measure and creg', () => {
+    const src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\ncreg c[1];\nh q[0];\nmeasure q[0] -> c[0];`
+    const d = Circuit.fromQASM(src).run({ shots: 4000, seed: 3 })
+    expect(near(d.cregs['c']?.[0] ?? -1, 0.5)).toBe(true)
+  })
+
+  it('strips single-line comments', () => {
+    const src = `OPENQASM 2.0; // version
+include "qelib1.inc"; // library
+qreg q[1]; // 1 qubit
+x q[0]; // flip`
+    expect(Circuit.fromQASM(src).probability('1')).toBeCloseTo(1, 10)
+  })
+
+  it('throws for unknown gate', () => {
+    const src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\nbogus q[0];`
+    expect(() => Circuit.fromQASM(src)).toThrow(TypeError)
+  })
+
+  it('ccx (Toffoli) parses correctly', () => {
+    // Toffoli truth table: |110⟩ → |111⟩
+    const src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[3];\nx q[0];\nx q[1];\nccx q[0],q[1],q[2];`
+    expect(Circuit.fromQASM(src).probability('111')).toBeCloseTo(1, 10)
+  })
+})
+
+describe('QASM round-trip: toQASM() → fromQASM() → identical statevector', () => {
+  function roundTrip(c: Circuit): Circuit { return Circuit.fromQASM(c.toQASM()) }
+
+  function svClose(a: Circuit, b: Circuit): boolean {
+    const sv = a.statevector()
+    const n = a.qubits
+    for (const idx of sv.keys()) {
+      const bs = idx.toString(2).padStart(n, '0')
+      const aa = a.amplitude(bs), bb = b.amplitude(bs)
+      if (Math.abs(aa.re - bb.re) > 1e-8 || Math.abs(aa.im - bb.im) > 1e-8) return false
+    }
+    return true
+  }
+
+  it('H gate', () => {
+    const c = new Circuit(1).h(0)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('Bell state: H + CNOT', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('parametric: rx(0.7) + rz(1.3) + ry(0.5)', () => {
+    const c = new Circuit(1).rx(0.7, 0).rz(1.3, 0).ry(0.5, 0)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('u3(π/3, π/4, π/5)', () => {
+    const c = new Circuit(1).u3(Math.PI / 3, Math.PI / 4, Math.PI / 5, 0)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('controlled gates: cy, cz, ch, crx', () => {
+    const c = new Circuit(2).h(0).cy(0, 1).cz(0, 1).ch(0, 1).crx(Math.PI / 3, 0, 1)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('QFT-style circuit: H + cr2 + cr4', () => {
+    const c = new Circuit(3).h(0).cr2(0, 1).cr4(0, 2).h(1).cr2(1, 2).h(2)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('Toffoli gate', () => {
+    const c = new Circuit(3).x(0).x(1).ccx(0, 1, 2)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+
+  it('cs/ct/csdg/ctdg survive round-trip as cu1', () => {
+    const c = new Circuit(2).h(0).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1)
+    expect(svClose(c, roundTrip(c))).toBe(true)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {

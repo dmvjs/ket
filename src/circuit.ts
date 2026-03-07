@@ -18,7 +18,7 @@ type SingleOp     = { kind: 'single';     q: number;                      gate: 
 type CNOTOp       = { kind: 'cnot';       control: number; target: number                                }
 type SWAPOp       = { kind: 'swap';       a: number;       b: number                                    }
 type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: Gate4x4;  meta?: GateMeta }
-type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2 }
+type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2; meta?: GateMeta }
 type ToffoliOp    = { kind: 'toffoli';    c1: number; c2: number; target: number }
 type CSwapOp      = { kind: 'cswap';      control: number; a: number; b: number }
 type MeasureOp = { kind: 'measure'; q: number; creg: string; bit: number }
@@ -125,6 +125,120 @@ export interface IonQCircuit {
   format:  'ionq.circuit.v0'
   qubits:  number
   circuit: readonly IonQGate[]
+}
+
+// ─── OpenQASM 2.0 helpers ─────────────────────────────────────────────────────
+
+/**
+ * Format a radian value as a QASM angle expression.
+ * Recognises rational multiples of π (up to denominator 16) for clean output.
+ */
+function qasmAngle(r: number): string {
+  if (Math.abs(r) < 1e-14) return '0'
+  const f = r / Math.PI
+  for (const d of [1, 2, 3, 4, 6, 8, 12, 16]) {
+    for (let n = -16; n <= 16; n++) {
+      if (n === 0) continue
+      if (Math.abs(f - n / d) < 1e-12) {
+        const sign = n < 0 ? '-' : ''
+        const a = Math.abs(n)
+        if (d === 1) return a === 1 ? `${sign}pi` : `${sign}${a}*pi`
+        return a === 1 ? `${sign}pi/${d}` : `${sign}${a}*pi/${d}`
+      }
+    }
+  }
+  return String(r)
+}
+
+/** Parse a QASM angle expression (supports `pi`, `*`, `/`, `+`, `-`, parentheses). */
+function parseAngle(expr: string): number {
+  const s = expr.replace(/\s/g, '')
+  let i = 0
+  function parseFactor(): number {
+    if (s[i] === '-') { i++; return -parseFactor() }
+    if (s[i] === '+') { i++; return parseFactor() }
+    if (s[i] === '(') { i++; const v = parseExpr(); if (s[i] === ')') i++; return v }
+    if (s.startsWith('pi', i)) { i += 2; return Math.PI }
+    const j = i
+    while (i < s.length && /[0-9.]/.test(s[i]!)) i++
+    return parseFloat(s.slice(j, i))
+  }
+  function parseTerm(): number {
+    let v = parseFactor()
+    while (i < s.length && (s[i] === '*' || s[i] === '/')) {
+      const op = s[i++]!; v = op === '*' ? v * parseFactor() : v / parseFactor()
+    }
+    return v
+  }
+  function parseExpr(): number {
+    let v = parseTerm()
+    while (i < s.length && (s[i] === '+' || s[i] === '-')) {
+      const op = s[i++]!; v = op === '+' ? v + parseTerm() : v - parseTerm()
+    }
+    return v
+  }
+  return parseExpr()
+}
+
+/**
+ * Map a GateMeta to a QASM gate name and parameters.
+ * Some gates have different names in QASM (si→sdg) or fixed params (r2→rz(π/2)).
+ */
+function qasmGateName(meta: GateMeta): { qname: string; qparams: number[] } {
+  switch (meta.name) {
+    case 'si':   return { qname: 'sdg',  qparams: [] }
+    case 'ti':   return { qname: 'tdg',  qparams: [] }
+    case 'v':    return { qname: 'sx',   qparams: [] }
+    case 'vi':   return { qname: 'sxdg', qparams: [] }
+    case 'r2':   return { qname: 'rz',   qparams: [Math.PI / 2] }
+    case 'r4':   return { qname: 'rz',   qparams: [Math.PI / 4] }
+    case 'r8':   return { qname: 'rz',   qparams: [Math.PI / 8] }
+    case 'cr2':  return { qname: 'crz',  qparams: [Math.PI / 2] }
+    case 'cr4':  return { qname: 'crz',  qparams: [Math.PI / 4] }
+    case 'cr8':  return { qname: 'crz',  qparams: [Math.PI / 8] }
+    case 'cs':   return { qname: 'cu1',  qparams: [Math.PI / 2] }
+    case 'ct':   return { qname: 'cu1',  qparams: [Math.PI / 4] }
+    case 'csdg': return { qname: 'cu1',  qparams: [-Math.PI / 2] }
+    case 'ctdg': return { qname: 'cu1',  qparams: [-Math.PI / 4] }
+    default:     return { qname: meta.name, qparams: [...(meta.params ?? [])] }
+  }
+}
+
+/** Dispatch a parsed QASM gate onto a Circuit. */
+function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[]): Circuit {
+  const [a, b, d] = qs
+  const [p0, p1, p2] = params
+  switch (name) {
+    case 'h':     return c.h(a!)
+    case 'x':     return c.x(a!)
+    case 'y':     return c.y(a!)
+    case 'z':     return c.z(a!)
+    case 's':     return c.s(a!)
+    case 'sdg':   return c.si(a!)
+    case 't':     return c.t(a!)
+    case 'tdg':   return c.ti(a!)
+    case 'sx':    return c.v(a!)
+    case 'sxdg':  return c.vi(a!)
+    case 'rx':    return c.rx(p0!, a!)
+    case 'ry':    return c.ry(p0!, a!)
+    case 'rz':    return c.rz(p0!, a!)
+    case 'u1':    return c.u1(p0!, a!)
+    case 'u2':    return c.u2(p0!, p1!, a!)
+    case 'u3':    return c.u3(p0!, p1!, p2!, a!)
+    case 'cx':    return c.cnot(a!, b!)
+    case 'cy':    return c.cy(a!, b!)
+    case 'cz':    return c.cz(a!, b!)
+    case 'ch':    return c.ch(a!, b!)
+    case 'crx':   return c.crx(p0!, a!, b!)
+    case 'cry':   return c.cry(p0!, a!, b!)
+    case 'crz':   return c.crz(p0!, a!, b!)
+    case 'cu1':   return c.cu1(p0!, a!, b!)
+    case 'cu3':   return c.cu3(p0!, p1!, p2!, a!, b!)
+    case 'swap':  return c.swap(a!, b!)
+    case 'ccx':   return c.ccx(a!, b!, d!)
+    case 'cswap': return c.cswap(a!, b!, d!)
+    default: throw new TypeError(`Unknown QASM gate: '${name}'`)
+  }
 }
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
@@ -235,8 +349,8 @@ export class Circuit {
     return new Circuit(this.qubits, [...this.#ops, op], this.#cregs)
   }
 
-  #ctrl(control: number, target: number, gate: Gate2x2): Circuit {
-    return this.#add({ kind: 'controlled', control, target, gate })
+  #ctrl(control: number, target: number, gate: Gate2x2, meta?: GateMeta): Circuit {
+    return this.#add({ kind: 'controlled', control, target, gate, meta })
   }
 
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
@@ -272,13 +386,13 @@ export class Circuit {
   // ── OpenQASM basis gates ─────────────────────────────────────────────────
 
   /** U1(λ) — phase gate; equal to Rz(λ) up to global phase. */
-  u1(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda) }) }
+  u1(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'u1', params: [lambda] } }) }
 
   /** U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H. */
-  u2(phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda) }) }
+  u2(phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda), meta: { name: 'u2', params: [phi, lambda] } }) }
 
   /** U3(θ, φ, λ) — general single-qubit unitary; OpenQASM 2.0 basis gate. */
-  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U3(theta, phi, lambda) }) }
+  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U3(theta, phi, lambda), meta: { name: 'u3', params: [theta, phi, lambda] } }) }
 
   // ── Two-qubit gates ──────────────────────────────────────────────────────
 
@@ -316,41 +430,41 @@ export class Circuit {
   /** Controlled-NOT; alias for cnot. IBM/OpenQASM name. */
   cx(control: number, target: number): Circuit { return this.cnot(control, target) }
 
-  cy(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Y) }
-  cz(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Z) }
-  ch(control: number, target: number): Circuit { return this.#ctrl(control, target, G.H) }
+  cy(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Y, { name: 'cy' }) }
+  cz(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Z, { name: 'cz' }) }
+  ch(control: number, target: number): Circuit { return this.#ctrl(control, target, G.H, { name: 'ch' }) }
 
   // ── Controlled rotation gates ────────────────────────────────────────────
 
-  crx(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rx(theta)) }
-  cry(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ry(theta)) }
-  crz(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rz(theta)) }
+  crx(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rx(theta), { name: 'crx', params: [theta] }) }
+  cry(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ry(theta), { name: 'cry', params: [theta] }) }
+  crz(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rz(theta), { name: 'crz', params: [theta] }) }
 
   /** Controlled-Rz(π/2) — controlled phase half-turn. */
-  cr2(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R2) }
+  cr2(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R2, { name: 'cr2' }) }
 
   /** Controlled-Rz(π/4) — controlled phase quarter-turn. */
-  cr4(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R4) }
+  cr4(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R4, { name: 'cr4' }) }
 
   /** Controlled-Rz(π/8) — controlled phase eighth-turn. */
-  cr8(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R8) }
+  cr8(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R8, { name: 'cr8' }) }
 
   // ── Controlled parameterized unitaries ───────────────────────────────────
 
   /** CU1(λ) — controlled phase gate; CU1(π) = CZ. */
-  cu1(lambda: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.U1(lambda)) }
+  cu1(lambda: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.U1(lambda), { name: 'cu1', params: [lambda] }) }
 
   /** CU3(θ,φ,λ) — controlled general unitary; CU3(π,0,π) = CX. */
   cu3(theta: number, phi: number, lambda: number, control: number, target: number): Circuit {
-    return this.#ctrl(control, target, G.U3(theta, phi, lambda))
+    return this.#ctrl(control, target, G.U3(theta, phi, lambda), { name: 'cu3', params: [theta, phi, lambda] })
   }
 
   // ── Controlled phase gates ────────────────────────────────────────────────
 
-  cs(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.S)  }
-  ct(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.T)  }
-  csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si) }
-  ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti) }
+  cs(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.S,  { name: 'cs'   }) }
+  ct(control: number, target: number):   Circuit { return this.#ctrl(control, target, G.T,  { name: 'ct'   }) }
+  csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si, { name: 'csdg' }) }
+  ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti, { name: 'ctdg' }) }
 
   // ── Native IonQ gates ────────────────────────────────────────────────────
 
@@ -501,13 +615,15 @@ export class Circuit {
    * (controlled variants, U-gates, XY/iSWAP, mid-circuit measurement, etc.).
    */
   toIonQ(): IonQCircuit {
+    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','t','ti','v','vi','rx','ry','rz','r2','r4','r8','gpi','gpi2'])
+    const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
     const circuit: IonQGate[] = []
     for (const op of this.#ops) {
       if (op.kind === 'cnot') {
         circuit.push({ gate: 'cnot', control: op.control, target: op.target })
       } else if (op.kind === 'swap') {
         circuit.push({ gate: 'swap', targets: [op.a, op.b] })
-      } else if (op.kind === 'single' && op.meta) {
+      } else if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) {
         const { name, params } = op.meta
         const g: IonQGate = { gate: name, target: op.q }
         if (params) {
@@ -515,7 +631,7 @@ export class Circuit {
           else                                   g.rotation = params[0]! / Math.PI
         }
         circuit.push(g)
-      } else if (op.kind === 'two' && op.meta) {
+      } else if (op.kind === 'two' && op.meta && IONQ_TWO.has(op.meta.name)) {
         const { name, params } = op.meta
         const g: IonQGate = { gate: name, targets: [op.a, op.b] }
         if (params) {
@@ -524,10 +640,116 @@ export class Circuit {
         }
         circuit.push(g)
       } else {
-        throw new TypeError(`Op '${op.kind}' is not serializable to IonQ JSON`)
+        const n = (op as { meta?: GateMeta }).meta?.name ?? op.kind
+        throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
       }
     }
     return { format: 'ionq.circuit.v0', qubits: this.qubits, circuit }
+  }
+
+  // ── OpenQASM 2.0 import / export ─────────────────────────────────────────
+
+  /**
+   * Emit a valid OpenQASM 2.0 string for this circuit.
+   *
+   * Gate name mapping: si→sdg, ti→tdg, v→sx, vi→sxdg; r2/r4/r8→rz(π/n);
+   * cs/ct/csdg/ctdg→cu1(±π/n); cr2/cr4/cr8→crz(π/n).
+   * Throws `TypeError` for gates with no QASM 2.0 representation (gpi, gpi2, xx, yy, zz, ms, xy, iswap, srswap, if).
+   */
+  toQASM(): string {
+    const lines: string[] = [
+      'OPENQASM 2.0;',
+      'include "qelib1.inc";',
+      '',
+      `qreg q[${this.qubits}];`,
+    ]
+    for (const [name, size] of this.#cregs) lines.push(`creg ${name}[${size}];`)
+    if (this.#cregs.size) lines.push('')
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    lines.push(`cx q[${op.control}],q[${op.target}];`); break
+        case 'swap':    lines.push(`swap q[${op.a}],q[${op.b}];`);         break
+        case 'toffoli': lines.push(`ccx q[${op.c1}],q[${op.c2}],q[${op.target}];`); break
+        case 'cswap':   lines.push(`cswap q[${op.control}],q[${op.a}],q[${op.b}];`); break
+        case 'measure': lines.push(`measure q[${op.q}] -> ${op.creg}[${op.bit}];`); break
+        case 'reset':   lines.push(`reset q[${op.q}];`); break
+        case 'if':      throw new TypeError('if ops cannot be serialized to OpenQASM 2.0')
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          if (op.meta.name === 'gpi' || op.meta.name === 'gpi2')
+            throw new TypeError(`Gate '${op.meta.name}' has no OpenQASM 2.0 representation`)
+          const { qname, qparams } = qasmGateName(op.meta)
+          const ps = qparams.length ? `(${qparams.map(qasmAngle).join(',')})` : ''
+          lines.push(`${qname}${ps} q[${op.q}];`)
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { qname, qparams } = qasmGateName(op.meta)
+          const ps = qparams.length ? `(${qparams.map(qasmAngle).join(',')})` : ''
+          lines.push(`${qname}${ps} q[${op.control}],q[${op.target}];`)
+          break
+        }
+        case 'two': {
+          const n = op.meta?.name ?? 'two'
+          throw new TypeError(`Gate '${n}' has no OpenQASM 2.0 representation`)
+        }
+      }
+    }
+    return lines.join('\n')
+  }
+
+  /**
+   * Parse an OpenQASM 2.0 string into a `Circuit`.
+   *
+   * Supports: qreg/creg, all qelib1.inc gates, measure, reset, single-line comments.
+   * Does not support: gate definitions, barrier, opaque, if statements, multi-qubit qregs.
+   */
+  static fromQASM(source: string): Circuit {
+    // Strip single-line comments, split into statements
+    const stmts = source
+      .replace(/\/\/[^\n]*/g, '')
+      .split(';')
+      .map(s => s.trim())
+      .filter(Boolean)
+
+    let qubits = 0
+    const cregSizes = new Map<string, number>()
+
+    // First pass: collect qreg / creg declarations
+    for (const stmt of stmts) {
+      const qr = stmt.match(/^qreg\s+\w+\[(\d+)\]$/)
+      if (qr) { qubits = parseInt(qr[1]!); continue }
+      const cr = stmt.match(/^creg\s+(\w+)\[(\d+)\]$/)
+      if (cr) cregSizes.set(cr[1]!, parseInt(cr[2]!))
+    }
+
+    let c = new Circuit(qubits)
+    for (const [name, size] of cregSizes) c = c.creg(name, size)
+
+    // Second pass: apply gates
+    for (const stmt of stmts) {
+      if (/^(OPENQASM|include|qreg|creg)\b/.test(stmt)) continue
+
+      // measure q[i] -> creg[j]
+      const meas = stmt.match(/^measure\s+\w+\[(\d+)\]\s*->\s*(\w+)\[(\d+)\]$/)
+      if (meas) { c = c.measure(parseInt(meas[1]!), meas[2]!, parseInt(meas[3]!)); continue }
+
+      // reset q[i]
+      const rst = stmt.match(/^reset\s+\w+\[(\d+)\]$/)
+      if (rst) { c = c.reset(parseInt(rst[1]!)); continue }
+
+      // gatename[(params)] q[i](,q[j])*
+      const gate = stmt.match(/^(\w+)(?:\(([^)]*)\))?\s+([\w\[\],\s]+)$/)
+      if (gate) {
+        const name   = gate[1]!
+        const params = gate[2] ? gate[2].split(',').map(p => parseAngle(p)) : []
+        const qs     = [...gate[3]!.matchAll(/\[(\d+)\]/g)].map(m => parseInt(m[1]!))
+        c = applyQASMGate(c, name, params, qs)
+      }
+    }
+    return c
   }
 
   // ── Execution ────────────────────────────────────────────────────────────

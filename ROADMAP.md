@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (247 tests, ~115ms)**
+**Test suite (283 tests, ~115ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -37,6 +37,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Toffoli and Fredkin truth tables, phase kickback, swap test
 - Native IonQ gates: GPI Ramsey fringe, GPI2 inverse pair, MS Bell states
 - Quantum teleportation: |0⟩, |1⟩, |+⟩, Rx(π/3)|0⟩
+- OpenQASM 2.0: gate name mapping, angle notation, round-trip statevector fidelity
 
 ---
 
@@ -106,7 +107,7 @@ The IonQ native circuit format (`ionq.circuit.v0`) — the format used by qsim a
 `circuit.toIonQ()` — serialize to IonQ JSON.
 This closes the loop: write a circuit in ket, run it locally, submit the exact same JSON to IonQ hardware.
 
-### 3b. OpenQASM 2.0 (import + export)
+### 3b. OpenQASM 2.0 (import + export) ✓
 The lingua franca of quantum circuits. All major platforms accept QASM.
 `Circuit.fromQASM(string)` — parse OpenQASM 2.0.
 `circuit.toQASM()` — emit valid OpenQASM 2.0.
