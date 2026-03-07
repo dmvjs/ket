@@ -81,29 +81,78 @@ function cregValue(shotCregs: Map<string, boolean[]>, name: string): number {
 }
 
 /** Apply ops to `sv`, handling mid-circuit measurement with `rng`. Recursive for IfOp. */
-function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number): StateVector {
+function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number, noise?: NoiseParams): StateVector {
   let sv = svIn
+  const p1 = noise?.p1 ?? 0
+  const p2 = noise?.p2 ?? 0
+  const pM = noise?.pMeas ?? 0
   for (const op of ops) {
-    if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
-    else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
-    else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
-    else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
-    else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
-    else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
+    if      (op.kind === 'single')     { sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()) }
+    else if (op.kind === 'cnot')       { sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
+    else if (op.kind === 'controlled') { sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
+    else if (op.kind === 'swap')       { sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
+    else if (op.kind === 'toffoli')      sv = applyToffoli(sv, op.c1, op.c2, op.target)
+    else if (op.kind === 'cswap')        sv = applyCSwap(sv, op.control, op.a, op.b)
+    else if (op.kind === 'two')        { sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
     else if (op.kind === 'measure') {
       const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+      const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
       sv = next
       const reg = shotCregs.get(op.creg)
-      if (reg) reg[op.bit] = outcome === 1
+      if (reg) reg[op.bit] = reported === 1
     } else if (op.kind === 'reset') {
       const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
       sv = next
       if (outcome === 1) sv = applySingle(sv, op.q, G.X)
     } else {  // if
-      if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng)
+      if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
     }
   }
+  return sv
+}
+
+// ─── Noise simulation ─────────────────────────────────────────────────────────
+
+/** Per-gate error parameters for stochastic noise simulation. */
+export interface NoiseParams {
+  /** Single-qubit depolarizing error probability per gate (0–1). */
+  p1?: number
+  /** Two-qubit depolarizing error probability per gate (0–1). */
+  p2?: number
+  /** SPAM: probability of flipping each measured bit (0–1). */
+  pMeas?: number
+}
+
+/** Published IonQ device noise characteristics (conservative, from public benchmarks). */
+const DEVICE_NOISE: Readonly<Record<string, NoiseParams>> = {
+  'aria-1':  { p1: 0.0003,  p2: 0.005,  pMeas: 0.004  },
+  'forte-1': { p1: 0.0001,  p2: 0.002,  pMeas: 0.002  },
+  'harmony': { p1: 0.001,   p2: 0.015,  pMeas: 0.01   },
+}
+
+// 15 non-identity two-qubit Paulis for depolarizing channel: {I,X,Y,Z}⊗{I,X,Y,Z} \ {II}
+const TWO_PAULI: readonly (readonly [Gate2x2 | null, Gate2x2 | null])[] = [
+  [null, G.X], [null, G.Y], [null, G.Z],
+  [G.X, null], [G.X, G.X], [G.X, G.Y], [G.X, G.Z],
+  [G.Y, null], [G.Y, G.X], [G.Y, G.Y], [G.Y, G.Z],
+  [G.Z, null], [G.Z, G.X], [G.Z, G.Y], [G.Z, G.Z],
+]
+
+/** Apply single-qubit depolarizing channel: random Pauli X/Y/Z with total probability p. */
+function dep1(sv: StateVector, q: number, p: number, rand: number): StateVector {
+  if (rand >= p) return sv
+  const r = rand / p
+  if (r < 1/3) return applySingle(sv, q, G.X)
+  if (r < 2/3) return applySingle(sv, q, G.Y)
+  return applySingle(sv, q, G.Z)
+}
+
+/** Apply two-qubit depolarizing channel: random non-identity 2-qubit Pauli with total probability p. */
+function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): StateVector {
+  if (rand >= p) return sv
+  const [pa, pb] = TWO_PAULI[Math.min(Math.floor(rand / p * 15), 14)]!
+  if (pa) sv = applySingle(sv, a, pa)
+  if (pb) sv = applySingle(sv, b, pb)
   return sv
 }
 
@@ -258,6 +307,8 @@ function makePrng(seed?: number): () => number {
 export interface RunOptions {
   shots?: number
   seed?: number
+  /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
+  noise?: string | NoiseParams
 }
 
 /**
@@ -1120,14 +1171,24 @@ export class Circuit {
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
-  run({ shots = 1024, seed }: RunOptions = {}): Distribution {
-    const rng        = makePrng(seed)
+  run({ shots = 1024, seed, noise }: RunOptions = {}): Distribution {
+    const rng = makePrng(seed)
+
+    // Resolve noise: named device profile → NoiseParams, or use as-is
+    const noiseParams: NoiseParams | undefined =
+      noise == null        ? undefined :
+      typeof noise === 'string' ? (() => {
+        const p = DEVICE_NOISE[noise]
+        if (!p) throw new TypeError(`Unknown device profile '${noise}'. Known: ${Object.keys(DEVICE_NOISE).join(', ')}`)
+        return p
+      })() : noise
+
     const cregCounts = new Map<string, number[]>(
       this.#cregs.entries().map(([name, size]) => [name, new Array<number>(size).fill(0)])
     )
 
-    // ── Fast path: pure circuit — simulate once, sample N times ──────────────
-    if (!this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+    // ── Fast path: pure circuit without noise — simulate once, sample N times ──
+    if (!noiseParams && !this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       const sv     = simulatePure(this.#ops, this.qubits)
       const probs  = probabilities(sv)
       const sorted = probs.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
@@ -1158,18 +1219,26 @@ export class Circuit {
       return new Distribution(this.qubits, shots, counts, cregCounts)
     }
 
-    // ── Per-shot path: mid-circuit measurement — one full simulation per shot ──
+    // ── Per-shot path: noise or mid-circuit ops — one full simulation per shot ──
     const counts = new Map<bigint, number>()
+    const pMeas  = noiseParams?.pMeas ?? 0
 
     for (let i = 0; i < shots; i++) {
       const shotCregs = new Map<string, boolean[]>(
         this.#cregs.entries().map(([name, size]) => [name, new Array<boolean>(size).fill(false)])
       )
 
-      const sv       = applyOps(this.#ops, zero(this.qubits), shotCregs, rng)
-      const finalIdx = sampleSV(sv, rng())
-      counts.set(finalIdx, (counts.get(finalIdx) ?? 0) + 1)
+      const sv = applyOps(this.#ops, zero(this.qubits), shotCregs, rng, noiseParams)
 
+      // Final readout: sample then apply SPAM noise per qubit
+      let finalIdx = sampleSV(sv, rng())
+      if (pMeas) {
+        for (let q = 0; q < this.qubits; q++) {
+          if (rng() < pMeas) finalIdx ^= (1n << BigInt(q))
+        }
+      }
+
+      counts.set(finalIdx, (counts.get(finalIdx) ?? 0) + 1)
       for (const [name, bits] of shotCregs) {
         const acc = cregCounts.get(name)!
         for (const [j, b] of bits.entries()) if (b) acc[j]! += 1

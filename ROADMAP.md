@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (322 tests, ~120ms)**
+**Test suite (338 tests, ~150ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -39,6 +39,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Quantum teleportation: |0⟩, |1⟩, |+⟩, Rx(π/3)|0⟩
 - OpenQASM 2.0: gate name mapping, angle notation, round-trip statevector fidelity
 - Export targets: Qiskit, Cirq, Q#, pyQuil — gate name mapping, angle formatting, throw-on-unsupported
+- Noise models: depolarizing (p1/p2) + SPAM (pMeas); named device profiles; zero-overhead fast path preserved
 
 ---
 
@@ -148,9 +149,12 @@ q1: ────X──
 
 ## Phase 5 — Advanced simulation
 
-### 5a. Noise models
-Depolarizing channel, SPAM readout errors, and T1/T2 decay — matching IonQ's published characterization methodology (already implemented in qsim; can be ported directly).
-`circuit.run({ noise: 'aria-1' | NoiseParams })` — opt-in per run.
+### 5a. Noise models ✓
+Depolarizing channel and SPAM readout errors matching IonQ's published characterization methodology.
+`circuit.run({ noise: 'aria-1' | 'forte-1' | 'harmony' | NoiseParams })` — opt-in per run.
+Named device profiles: `aria-1` (p1=0.03%, p2=0.5%, pMeas=0.4%), `forte-1`, `harmony`.
+Custom `NoiseParams` for any combination of p1 / p2 / pMeas.
+Pure circuits without noise use the fast path (simulate once, sample N times) — zero overhead.
 
 ### 5b. Tensor network simulation
 For circuits with bounded entanglement (Bernstein-Vazirani, QAOA with low depth, product-state preparations), a matrix-product-state simulator can handle 50+ qubits in kilobytes.

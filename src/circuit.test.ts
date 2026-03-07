@@ -2062,6 +2062,112 @@ describe('QASM round-trip: toQASM() → fromQASM() → identical statevector', (
   })
 })
 
+// ─── Noise models (5a) ───────────────────────────────────────────────────────
+
+describe('noise: depolarizing — single-qubit', () => {
+  it('noiseless X gate always gives |1⟩', () => {
+    const r = new Circuit(1).x(0).run({ shots: 200, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('high p1 noise visibly degrades X gate fidelity', () => {
+    // p1=0.5 means 50% chance of a Pauli error — should significantly pollute the distribution
+    const r = new Circuit(1).x(0).run({ shots: 4000, seed: 1, noise: { p1: 0.5 } })
+    // No longer pure |1⟩ — |0⟩ should appear
+    expect(r.probs['0'] ?? 0).toBeGreaterThan(0.1)
+    expect(r.probs['1'] ?? 0).toBeLessThan(0.9)
+  })
+
+  it('small p1 noise still gives mostly correct result', () => {
+    // p1=0.001 is realistic; result should still be >99% correct
+    const r = new Circuit(1).x(0).run({ shots: 10000, seed: 2, noise: { p1: 0.001 } })
+    expect(r.probs['1'] ?? 0).toBeGreaterThan(0.99)
+  })
+
+  it('p1=0 is identical to noiseless', () => {
+    const clean  = new Circuit(1).h(0).run({ shots: 4000, seed: 7 })
+    const noisy  = new Circuit(1).h(0).run({ shots: 4000, seed: 7, noise: { p1: 0 } })
+    expect(Object.entries(noisy.probs).every(([k, v]) => Math.abs(v - (clean.probs[k] ?? 0)) < 0.05)).toBe(true)
+  })
+})
+
+describe('noise: depolarizing — two-qubit', () => {
+  it('high p2 noise degrades Bell state', () => {
+    // Noiseless Bell: only |00⟩ and |11⟩
+    const clean = new Circuit(2).h(0).cnot(0, 1).run({ shots: 2000, seed: 1 })
+    expect('01' in clean.probs).toBe(false)
+    // With p2=0.5: off-diagonal states should appear
+    const noisy = new Circuit(2).h(0).cnot(0, 1).run({ shots: 2000, seed: 1, noise: { p2: 0.5 } })
+    expect((noisy.probs['01'] ?? 0) + (noisy.probs['10'] ?? 0)).toBeGreaterThan(0.05)
+  })
+
+  it('small p2 noise: Bell state still mostly correct', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 10000, seed: 3, noise: { p2: 0.005 } })
+    expect((r.probs['00'] ?? 0) + (r.probs['11'] ?? 0)).toBeGreaterThan(0.95)
+  })
+})
+
+describe('noise: SPAM (measurement readout errors)', () => {
+  it('pMeas=1 always flips the measurement outcome', () => {
+    // X|0⟩ = |1⟩, but pMeas=1 always flips → should get |0⟩
+    const r = new Circuit(1).x(0).run({ shots: 200, seed: 1, noise: { pMeas: 1 } })
+    expect(r.probs['0'] ?? 0).toBeCloseTo(1.0, 5)
+  })
+
+  it('pMeas=0.5 gives roughly 50/50 regardless of state', () => {
+    // Even a pure |1⟩ state → 50/50 after SPAM
+    const r = new Circuit(1).x(0).run({ shots: 4000, seed: 4, noise: { pMeas: 0.5 } })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('small pMeas: correct outcome still dominates', () => {
+    const r = new Circuit(1).x(0).run({ shots: 10000, seed: 5, noise: { pMeas: 0.004 } })
+    expect(r.probs['1'] ?? 0).toBeGreaterThan(0.99)
+  })
+})
+
+describe('noise: named device profiles', () => {
+  it("'aria-1' profile runs without error", () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1000, seed: 1, noise: 'aria-1' })
+    const total = Object.values(r.probs).reduce((s, p) => s + p, 0)
+    expect(Math.abs(total - 1.0)).toBeLessThan(0.001)
+  })
+
+  it("'forte-1' profile runs without error", () => {
+    const r = new Circuit(1).h(0).run({ shots: 1000, seed: 2, noise: 'forte-1' })
+    expect(r.shots).toBe(1000)
+  })
+
+  it("'harmony' profile runs without error", () => {
+    const r = new Circuit(1).x(0).run({ shots: 500, seed: 3, noise: 'harmony' })
+    expect(r.shots).toBe(500)
+  })
+
+  it("'aria-1' Bell state: still mostly |00⟩ and |11⟩ (low noise device)", () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 5000, seed: 10, noise: 'aria-1' })
+    expect((r.probs['00'] ?? 0) + (r.probs['11'] ?? 0)).toBeGreaterThan(0.97)
+  })
+
+  it('throws for unknown device name', () => {
+    expect(() => new Circuit(1).h(0).run({ noise: 'bogus-99' })).toThrow(TypeError)
+  })
+})
+
+describe('noise: custom NoiseParams object', () => {
+  it('custom params object works like named profile', () => {
+    // Custom params matching aria-1
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 2000, seed: 99, noise: { p1: 0.0003, p2: 0.005, pMeas: 0.004 } })
+    expect(r.shots).toBe(2000)
+    expect((r.probs['00'] ?? 0) + (r.probs['11'] ?? 0)).toBeGreaterThan(0.97)
+  })
+
+  it('can specify only p1 (no two-qubit noise)', () => {
+    const r = new Circuit(1).h(0).run({ shots: 2000, seed: 1, noise: { p1: 0.001 } })
+    expect(near(r.probs['0'] ?? 0, 0.5, 0.06)).toBe(true)
+  })
+})
+
 // ─── Export targets (3c) ─────────────────────────────────────────────────────
 
 describe('toQiskit()', () => {
