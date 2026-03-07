@@ -1297,4 +1297,22 @@ export class Circuit {
     )
     return new Distribution(this.qubits, shots, counts, cregCounts)
   }
+
+  /**
+   * Return exact floating-point probabilities from the statevector — no sampling variance.
+   *
+   * Keys are IonQ bitstrings (q0 rightmost). Only non-negligible amplitudes are included.
+   * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
+   */
+  exactProbs(): Readonly<Record<string, number>> {
+    if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError('exactProbs() requires a pure circuit — no measure, reset, or if ops')
+    }
+    const sv = simulatePure(this.#ops, this.qubits)
+    const out: Record<string, number> = {}
+    for (const [idx, p] of probabilities(sv)) {
+      out[idx.toString(2).padStart(this.qubits, '0')] = p
+    }
+    return Object.freeze(out)
+  }
 }

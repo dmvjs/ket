@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (351 tests, ~190ms)**
+**Test suite (359 tests, ~190ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -163,8 +163,8 @@ For circuits with bounded entanglement (Bernstein-Vazirani, QAOA with low depth,
 `src/mps.ts` — standalone MPS engine: `mpsInit`, `mpsApply1`, `mpsApply2` (SWAP network for non-adjacent), `mpsSample`, `qrMGS` (Modified Gram-Schmidt with implicit column pivoting).
 Memory: O(n·χ²·2) vs O(2ⁿ) — GHZ-50 and BV-40 run in milliseconds with χ=2.
 
-### 5c. Shots-free exact probabilities
-For small circuits where the user wants exact floating-point probabilities without sampling variance, expose a `circuit.exactProbs()` that returns the full probability map directly from the statevector.
+### 5c. Shots-free exact probabilities ✓
+`circuit.exactProbs()` — returns `Readonly<Record<string, number>>` directly from the statevector; no sampling, no variance. Keys are IonQ bitstrings (q0 rightmost); only non-negligible amplitudes included. Throws for circuits with mid-circuit measure/reset/if.
 
 ---
 

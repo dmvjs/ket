@@ -2410,6 +2410,57 @@ describe('toPyQuil()', () => {
   })
 })
 
+// ─── exactProbs ───────────────────────────────────────────────────────────────
+
+describe('exactProbs()', () => {
+  it('X gate: exactly {1: 1.0}', () => {
+    const p = new Circuit(1).x(0).exactProbs()
+    expect(p['1']).toBe(1.0)
+    expect(Object.keys(p)).toHaveLength(1)
+  })
+
+  it('H gate: both outcomes exactly 0.5', () => {
+    const p = new Circuit(1).h(0).exactProbs()
+    expect(p['0']).toBeCloseTo(0.5, 15)
+    expect(p['1']).toBeCloseTo(0.5, 15)
+  })
+
+  it('Bell state: 00 and 11 exactly 0.5 each', () => {
+    const p = new Circuit(2).h(0).cnot(0, 1).exactProbs()
+    expect(p['00']).toBeCloseTo(0.5, 15)
+    expect(p['11']).toBeCloseTo(0.5, 15)
+    expect(Object.keys(p)).toHaveLength(2)
+  })
+
+  it('HH = I: only |0⟩ with prob 1', () => {
+    const p = new Circuit(1).h(0).h(0).exactProbs()
+    expect(p['0']).toBeCloseTo(1.0, 12)
+    expect(Object.keys(p)).toHaveLength(1)
+  })
+
+  it('n-qubit entropy: H⊗n gives 2^n equally likely outcomes exactly 1/2^n', () => {
+    const n = 4
+    let c = new Circuit(n)
+    for (let q = 0; q < n; q++) c = c.h(q)
+    const p = c.exactProbs()
+    expect(Object.keys(p)).toHaveLength(2 ** n)
+    for (const prob of Object.values(p)) expect(prob).toBeCloseTo(1 / 2 ** n, 14)
+  })
+
+  it('throws for circuits with mid-circuit measure', () => {
+    expect(() => new Circuit(1).creg('c', 1).measure(0, 'c', 0).exactProbs()).toThrow('measure')
+  })
+
+  it('throws for reset', () => {
+    expect(() => new Circuit(1).creg('c', 1).measure(0, 'c', 0).reset(0).exactProbs()).toThrow()
+  })
+
+  it('no sampling variance: identical calls return identical values', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    expect(c.exactProbs()).toEqual(c.exactProbs())
+  })
+})
+
 // ─── MPS tensor-network backend ───────────────────────────────────────────────
 
 describe('MPS backend — basic gates', () => {
