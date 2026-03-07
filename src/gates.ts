@@ -54,3 +54,36 @@ export const R4: Gate2x2 = Rz(Math.PI / 4)
 
 /** Rz(π/8) — phase rotation by an eighth-turn. */
 export const R8: Gate2x2 = Rz(Math.PI / 8)
+
+// ── OpenQASM basis gates (U1 / U2 / U3) ─────────────────────────────────────
+
+/**
+ * U3(θ, φ, λ) — general single-qubit unitary; the basis gate of OpenQASM 2.0.
+ *
+ *   ┌  cos(θ/2)           −e^(iλ)·sin(θ/2)      ┐
+ *   └  e^(iφ)·sin(θ/2)    e^(i(φ+λ))·cos(θ/2)   ┘
+ *
+ * Key identities:
+ *   U3(π, 0, π)   = X           U3(π/2, 0, π) = H
+ *   U3(θ, 0, 0)   = Ry(θ)       U3(0, 0, λ)   = U1(λ)
+ */
+export const U3 = (theta: number, phi: number, lambda: number): Gate2x2 => {
+  const cos = Math.cos(theta / 2)
+  const sin = Math.sin(theta / 2)
+  return [
+    [c(cos),                                       c(-sin * Math.cos(lambda), -sin * Math.sin(lambda))],
+    [c(sin * Math.cos(phi), sin * Math.sin(phi)),  c(cos * Math.cos(phi + lambda), cos * Math.sin(phi + lambda))],
+  ]
+}
+
+/**
+ * U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H.
+ */
+export const U2 = (phi: number, lambda: number): Gate2x2 => U3(Math.PI / 2, phi, lambda)
+
+/**
+ * U1(λ) = diag(1, e^(iλ)) — phase gate; equal to Rz(λ) up to global phase.
+ * U1(π/2) = S,  U1(π/4) = T,  U1(π) = Z.
+ */
+export const U1 = (lambda: number): Gate2x2 =>
+  [[ONE, ZERO], [ZERO, c(Math.cos(lambda), Math.sin(lambda))]]

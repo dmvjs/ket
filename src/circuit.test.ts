@@ -436,6 +436,99 @@ describe('r8 (Rz(π/8))', () => {
   })
 })
 
+// ─── Parameterized unitaries (u1 / u2 / u3) ──────────────────────────────────
+//
+// u3(θ, φ, λ) is the general single-qubit unitary (OpenQASM 2.0 basis gate).
+// u2 and u1 are derived: u2(φ,λ) = u3(π/2, φ, λ),  u1(λ) = diag(1, e^iλ).
+//
+// Test strategy mirrors the r2/r4/r8 suite:
+//   • Computational-basis identity (phase gates leave |0⟩/|1⟩ populations intact)
+//   • Named-state reconstruction (X, H as exact u3 special cases)
+//   • Composition identities (round-trips and inverse formula)
+//   • Ramsey fringe for angle verification
+
+describe('u1(λ) — phase gate', () => {
+  it('u1(0) = I: |0⟩ unchanged', () => {
+    const r = new Circuit(1).u1(0, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // U1(π) = diag(1, −1) = Z  →  HZH = X  →  deterministic |1⟩
+  it('u1(π) = Z: H·u1(π)·H|0⟩ = |1⟩', () => {
+    const r = new Circuit(1).h(0).u1(Math.PI, 0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // U1(λ)·U1(−λ) = I
+  it('round-trip: H·u1(λ)·u1(−λ)·H|0⟩ = |0⟩', () => {
+    const λ = 0.7
+    const r = new Circuit(1).h(0).u1(λ, 0).u1(-λ, 0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // Ramsey: p(|0⟩) = (1 + cos λ) / 2; λ = π/4 → ≈ 0.854 (same fringe as r4)
+  it('Ramsey fringe: H·u1(π/4)·H|0⟩ → p(|0⟩) ≈ 0.854', () => {
+    const expected = (1 + Math.cos(Math.PI / 4)) / 2
+    const r = new Circuit(1).h(0).u1(Math.PI / 4, 0).h(0).run({ shots: 50000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, expected, 0.01)).toBe(true)
+  })
+})
+
+describe('u2(φ, λ) — equatorial gate', () => {
+  // U2(0, π) = H exactly
+  it('u2(0, π) creates equal superposition from |0⟩', () => {
+    const r = new Circuit(1).u2(0, Math.PI, 0).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('u2(0, π)² = I: self-inverse like H', () => {
+    const r = new Circuit(1).u2(0, Math.PI, 0).u2(0, Math.PI, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('Bell state: u2(0, π) on q0 + CNOT produces |Φ⁺⟩', () => {
+    const r = new Circuit(2).u2(0, Math.PI, 0).cnot(0, 1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+})
+
+describe('u3(θ, φ, λ) — general single-qubit unitary', () => {
+  // U3(π, 0, π) = X exactly
+  it('u3(π, 0, π) = X: |0⟩ → |1⟩', () => {
+    const r = new Circuit(1).u3(Math.PI, 0, Math.PI, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // U3(π/2, 0, π) = H exactly  →  H² = I
+  it('u3(π/2, 0, π)² = I: equals H, which is self-inverse', () => {
+    const r = new Circuit(1).u3(Math.PI / 2, 0, Math.PI, 0).u3(Math.PI / 2, 0, Math.PI, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // U3(θ, 0, 0) = Ry(θ).  Ry(π) ≠ X: H·Ry(π)·H|0⟩ = |1⟩, whereas H·X·H|0⟩ = |0⟩.
+  it('u3(π, 0, 0) = Ry(π): H·u3(π,0,0)·H|0⟩ = |1⟩ (distinguishes from X)', () => {
+    const r = new Circuit(1).h(0).u3(Math.PI, 0, 0, 0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // U3(0, 0, λ) = U1(λ) exactly — Ramsey fringe must match
+  it('u3(0, 0, π/4) ≡ u1(π/4): same Ramsey fringe ≈ 0.854', () => {
+    const expected = (1 + Math.cos(Math.PI / 4)) / 2
+    const r = new Circuit(1).h(0).u3(0, 0, Math.PI / 4, 0).h(0).run({ shots: 50000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, expected, 0.01)).toBe(true)
+  })
+
+  // Unitarity: U3(θ,φ,λ)⁻¹ = U3(−θ, −λ, −φ)
+  it('unitarity: u3(θ,φ,λ)·u3(−θ,−λ,−φ) = I for arbitrary parameters', () => {
+    const [θ, φ, λ] = [1.1, 0.7, 0.3]
+    const r = new Circuit(1).u3(θ, φ, λ, 0).u3(-θ, -λ, -φ, 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+})
+
 // ─── Y gate measurement ───────────────────────────────────────────────────────
 
 describe('Y gate measurement', () => {

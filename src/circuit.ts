@@ -139,6 +139,17 @@ export class Circuit {
   /** Rz(π/8) — phase rotation by an eighth-turn. */
   r8(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R8 }) }
 
+  // ── OpenQASM basis gates ─────────────────────────────────────────────────
+
+  /** U1(λ) — phase gate; equal to Rz(λ) up to global phase. */
+  u1(lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U1(lambda) }) }
+
+  /** U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H. */
+  u2(phi: number, lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U2(phi, lambda) }) }
+
+  /** U3(θ, φ, λ) — general single-qubit unitary; OpenQASM 2.0 basis gate. */
+  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.U3(theta, phi, lambda) }) }
+
   // ── Two-qubit gates ──────────────────────────────────────────────────────
 
   /** Controlled-NOT. IonQ name: cnot. */
