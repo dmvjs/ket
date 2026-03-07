@@ -29,6 +29,14 @@ function accumulate(sv: StateVector, idx: bigint, amp: Complex): void {
 /** 2×2 unitary gate matrix: [[a, b], [c, d]]. */
 export type Gate2x2 = [[Complex, Complex], [Complex, Complex]]
 
+/** 4×4 unitary gate matrix. Row/column order: |00⟩, |01⟩, |10⟩, |11⟩ (qubit a = MSB). */
+export type Gate4x4 = [
+  [Complex, Complex, Complex, Complex],
+  [Complex, Complex, Complex, Complex],
+  [Complex, Complex, Complex, Complex],
+  [Complex, Complex, Complex, Complex],
+]
+
 /**
  * Apply a single-qubit gate to qubit q.
  *
@@ -87,6 +95,36 @@ export function applySWAP(sv: StateVector, a: number, b: number): StateVector {
     } else {
       // Swap the two bits
       next.set(idx ^ amask ^ bmask, amp)
+    }
+  }
+
+  return next
+}
+
+/**
+ * Apply a two-qubit gate to qubits a and b.
+ *
+ * Qubit a is the MSB of the 2-bit local index so the column ordering matches
+ * the standard ket notation: |00⟩, |01⟩, |10⟩, |11⟩ where the first digit is a.
+ */
+export function applyTwo(sv: StateVector, a: number, b: number, gate: Gate4x4): StateVector {
+  const next: StateVector = new Map()
+  const ma = 1n << BigInt(a)
+  const mb = 1n << BigInt(b)
+  const seen = new Set<bigint>()
+
+  for (const idx of sv.keys()) {
+    const ctx = idx & ~(ma | mb)
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    const bases = [ctx, ctx | mb, ctx | ma, ctx | ma | mb]
+    const amps  = bases.map(i => sv.get(i) ?? ZERO)
+
+    for (let r = 0; r < 4; r++) {
+      let out = ZERO
+      for (let c = 0; c < 4; c++) out = add(out, mul(gate[r]![c]!, amps[c]!))
+      accumulate(next, bases[r]!, out)
     }
   }
 

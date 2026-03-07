@@ -529,6 +529,147 @@ describe('u3(θ, φ, λ) — general single-qubit unitary', () => {
   })
 })
 
+// ─── Two-qubit interaction gates ──────────────────────────────────────────────
+//
+// Gate hierarchy: XY(θ) is the root; ISwap = XY(π), SrSwap = XY(π/2).
+// Identity for ZZ: ZZ(θ) = CNOT · (I⊗Rz(θ)) · CNOT.
+// Conjugation:     XX(θ) = H⊗H · ZZ(θ) · H⊗H.
+//
+// Test strategy:
+//   • θ=0 gives identity for all parameterized gates
+//   • Maximally-entangling angle (π/2 for XX/YY/ZZ, π for XY) creates Bell-like state
+//   • Invertibility: gate(θ)·gate(−θ) = I
+//   • Deterministic circuit identities for iSWAP and srSWAP
+
+describe('xx(θ) — Ising-XX interaction', () => {
+  it('xx(0) = I: no effect on |01⟩', () => {
+    const r = new Circuit(2).x(0).xx(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // XX(π/2)|00⟩ = (1/√2)|00⟩ − (i/√2)|11⟩ → Bell-like pair
+  it('xx(π/2)|00⟩ produces |00⟩/|11⟩ Bell-like state', () => {
+    const r = new Circuit(2).xx(Math.PI / 2, 0, 1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('invertibility: xx(θ)·xx(−θ) = I', () => {
+    const θ = 0.8
+    const r = new Circuit(2).h(0).xx(θ, 0, 1).xx(-θ, 0, 1).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+
+  // XX(θ) = H⊗H · ZZ(θ) · H⊗H (conjugation identity)
+  it('xx(π/2) ≡ H⊗H · zz(π/2) · H⊗H: same Bell distribution', () => {
+    const rXX = new Circuit(2).xx(Math.PI / 2, 0, 1).run({ shots: 2048, seed: 42 })
+    const rZZ = new Circuit(2).h(0).h(1).zz(Math.PI / 2, 0, 1).h(0).h(1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(rZZ.probs)).toHaveLength(2)
+    expect(near(rZZ.probs['00'] ?? 0, rXX.probs['00'] ?? 0, 0.05)).toBe(true)
+  })
+})
+
+describe('yy(θ) — Ising-YY interaction', () => {
+  it('yy(0) = I: no effect on |01⟩', () => {
+    const r = new Circuit(2).x(0).yy(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // YY(π/2)|00⟩ = (1/√2)|00⟩ + (i/√2)|11⟩ — entangled, |00⟩/|11⟩ only
+  it('yy(π/2)|00⟩ produces |00⟩/|11⟩ Bell-like state', () => {
+    const r = new Circuit(2).yy(Math.PI / 2, 0, 1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('invertibility: yy(θ)·yy(−θ) = I', () => {
+    const θ = 0.8
+    const r = new Circuit(2).h(0).yy(θ, 0, 1).yy(-θ, 0, 1).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('zz(θ) — Ising-ZZ interaction', () => {
+  it('zz(0) = I: no effect', () => {
+    const r = new Circuit(2).x(0).zz(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  // ZZ(θ) = CNOT·(I⊗Rz(θ))·CNOT — verified via interference
+  it('H⊗H · zz(π/2) · H⊗H = xx(π/2): Bell distribution', () => {
+    const r = new Circuit(2).h(0).h(1).zz(Math.PI / 2, 0, 1).h(0).h(1).run({ shots: 2048, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  // H⊗H · ZZ(π) · H⊗H|00⟩ = |11⟩ — deterministic (proven analytically)
+  it('H⊗H · zz(π) · H⊗H|00⟩ = |11⟩ (deterministic)', () => {
+    const r = new Circuit(2).h(0).h(1).zz(Math.PI, 0, 1).h(0).h(1).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('iswap — iSWAP gate (= XY(π))', () => {
+  it('iswap|01⟩ → |10⟩ (swaps qubits, phase is unobservable)', () => {
+    const r = new Circuit(2).x(0).iswap(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+  })
+
+  it('iswap|10⟩ → |01⟩', () => {
+    const r = new Circuit(2).x(1).iswap(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  it('iswap|00⟩ = |00⟩ and iswap|11⟩ = |11⟩ (no swap when same)', () => {
+    expect(new Circuit(2).iswap(0, 1).run({ shots: 100, seed: 1 }).probs['00']).toBeCloseTo(1.0, 10)
+    expect(new Circuit(2).x(0).x(1).iswap(0, 1).run({ shots: 100, seed: 1 }).probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  // iSWAP⁴ = I in the full gate (iSWAP² = −I on |01⟩/|10⟩ subspace)
+  it('iswap⁴ = I: four applications restore the state', () => {
+    const r = new Circuit(2).x(0).iswap(0, 1).iswap(0, 1).iswap(0, 1).iswap(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('srswap — √iSWAP (= XY(π/2))', () => {
+  it('srswap|01⟩ → 50% |01⟩ / 50% |10⟩ (superposition)', () => {
+    const r = new Circuit(2).x(0).srswap(0, 1).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['10'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('srswap² = iswap: srswap·srswap|01⟩ → |10⟩', () => {
+    const r = new Circuit(2).x(0).srswap(0, 1).srswap(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+  })
+
+  it('srswap|00⟩ = |00⟩ (no mixing outside |01⟩/|10⟩ subspace)', () => {
+    const r = new Circuit(2).srswap(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('xy(θ) — XY interaction (root gate for iswap/srswap)', () => {
+  it('xy(0) = I', () => {
+    const r = new Circuit(2).x(0).xy(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+  })
+
+  it('xy(π) = iswap: xy(π)|01⟩ → |10⟩', () => {
+    const r = new Circuit(2).x(0).xy(Math.PI, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+  })
+
+  it('xy(π/2) = srswap: xy(π/2)² |01⟩ → |10⟩', () => {
+    const r = new Circuit(2).x(0).xy(Math.PI / 2, 0, 1).xy(Math.PI / 2, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+  })
+})
+
 // ─── Y gate measurement ───────────────────────────────────────────────────────
 
 describe('Y gate measurement', () => {

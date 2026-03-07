@@ -6,7 +6,7 @@
  */
 
 import { c, Complex, ONE, ZERO } from './complex.js'
-import { Gate2x2 } from './statevector.js'
+import { Gate2x2, Gate4x4 } from './statevector.js'
 
 const sq2 = 1 / Math.sqrt(2) // 1/√2
 
@@ -87,3 +87,72 @@ export const U2 = (phi: number, lambda: number): Gate2x2 => U3(Math.PI / 2, phi,
  */
 export const U1 = (lambda: number): Gate2x2 =>
   [[ONE, ZERO], [ZERO, c(Math.cos(lambda), Math.sin(lambda))]]
+
+// ── Two-qubit interaction gates ──────────────────────────────────────────────
+// Column/row order: |00⟩, |01⟩, |10⟩, |11⟩ with the first qubit argument as MSB.
+
+/**
+ * XX(θ) = exp(−iθ/2 · X⊗X) — Ising-XX interaction; IonQ native gate.
+ * XX(π/2) is maximally entangling. XX(0) = I.
+ */
+export const Xx = (theta: number): Gate4x4 => {
+  const co = c(Math.cos(theta / 2)), ni = c(0, -Math.sin(theta / 2))
+  return [
+    [co, ZERO, ZERO,   ni],
+    [ZERO,  co,   ni, ZERO],
+    [ZERO,  ni,   co, ZERO],
+    [ni, ZERO, ZERO,   co],
+  ]
+}
+
+/**
+ * YY(θ) = exp(−iθ/2 · Y⊗Y) — Ising-YY interaction; IonQ native gate.
+ */
+export const Yy = (theta: number): Gate4x4 => {
+  const co = c(Math.cos(theta / 2))
+  const ni = c(0, -Math.sin(theta / 2))
+  const pi = c(0,  Math.sin(theta / 2))
+  return [
+    [co, ZERO, ZERO,   pi],
+    [ZERO,  co,   ni, ZERO],
+    [ZERO,  ni,   co, ZERO],
+    [pi, ZERO, ZERO,   co],
+  ]
+}
+
+/**
+ * ZZ(θ) = exp(−iθ/2 · Z⊗Z) — Ising-ZZ interaction; IonQ native gate.
+ * Diagonal: diag(e^(−iθ/2), e^(iθ/2), e^(iθ/2), e^(−iθ/2)).
+ * Identity: ZZ(θ) = CNOT · (I⊗Rz(θ)) · CNOT.
+ */
+export const Zz = (theta: number): Gate4x4 => {
+  const cos = Math.cos(theta / 2), sin = Math.sin(theta / 2)
+  const m = c(cos, -sin), p = c(cos, sin)
+  return [
+    [m, ZERO, ZERO, ZERO],
+    [ZERO,    p, ZERO, ZERO],
+    [ZERO, ZERO,    p, ZERO],
+    [ZERO, ZERO, ZERO,    m],
+  ]
+}
+
+/**
+ * XY(θ) — XY interaction gate.
+ * Acts as exp(iθ/2 · (X⊗X + Y⊗Y)/2) in the |01⟩/|10⟩ subspace.
+ * XY(0) = I,  XY(π) = iSWAP,  XY(π/2) = √iSWAP.
+ */
+export const Xy = (theta: number): Gate4x4 => {
+  const co = c(Math.cos(theta / 2)), is = c(0, Math.sin(theta / 2))
+  return [
+    [ONE, ZERO, ZERO, ZERO],
+    [ZERO,   co,   is, ZERO],
+    [ZERO,   is,   co, ZERO],
+    [ZERO, ZERO, ZERO,  ONE],
+  ]
+}
+
+/** iSWAP = XY(π): swaps qubits and multiplies by i. */
+export const ISwap: Gate4x4 = Xy(Math.PI)
+
+/** √iSWAP = XY(π/2): square root of iSWAP. */
+export const SrSwap: Gate4x4 = Xy(Math.PI / 2)

@@ -7,14 +7,15 @@
 
 import { c } from './complex.js'
 import * as G from './gates.js'
-import { applyCNOT, applySingle, applySWAP, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applySingle, applySWAP, applyTwo, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
 type SingleOp = { kind: 'single'; q: number;  gate: G.Gate2x2 extends infer T ? T : never }
 type CNOTOp   = { kind: 'cnot';   control: number; target: number }
 type SWAPOp   = { kind: 'swap';   a: number; b: number }
-type Op = SingleOp | CNOTOp | SWAPOp
+type TwoOp    = { kind: 'two';    a: number; b: number; gate: Gate4x4 }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
@@ -161,6 +162,26 @@ export class Circuit {
     return this.add({ kind: 'swap', a, b })
   }
 
+  // ── Two-qubit interaction gates ─────────────────────────────────────────
+
+  /** XX(θ) = exp(−iθ/2 · X⊗X) — Ising-XX interaction; IonQ native. */
+  xx(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Xx(theta) }) }
+
+  /** YY(θ) = exp(−iθ/2 · Y⊗Y) — Ising-YY interaction; IonQ native. */
+  yy(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Yy(theta) }) }
+
+  /** ZZ(θ) = exp(−iθ/2 · Z⊗Z) — Ising-ZZ interaction; IonQ native. */
+  zz(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Zz(theta) }) }
+
+  /** XY(θ) interaction gate. XY(π) = iSWAP, XY(π/2) = √iSWAP. */
+  xy(theta: number, a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.Xy(theta) }) }
+
+  /** iSWAP = XY(π): swaps qubits and multiplies each by i. */
+  iswap(a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.ISwap }) }
+
+  /** √iSWAP = XY(π/2): square root of iSWAP. */
+  srswap(a: number, b: number): Circuit { return this.add({ kind: 'two', a, b, gate: G.SrSwap }) }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
@@ -172,8 +193,10 @@ export class Circuit {
         sv = applySingle(sv, op.q, op.gate)
       } else if (op.kind === 'cnot') {
         sv = applyCNOT(sv, op.control, op.target)
-      } else {
+      } else if (op.kind === 'swap') {
         sv = applySWAP(sv, op.a, op.b)
+      } else {
+        sv = applyTwo(sv, op.a, op.b, op.gate)
       }
     }
 
