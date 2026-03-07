@@ -128,6 +128,17 @@ export class Circuit {
   ry(theta: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Ry(theta) }) }
   rz(theta: number, q: number): Circuit { return this.add({ kind: 'single', q, gate: G.Rz(theta) }) }
 
+  // ── Named phase rotation gates ───────────────────────────────────────────
+
+  /** Rz(π/2) — phase rotation by a half-turn; S up to global phase. */
+  r2(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R2 }) }
+
+  /** Rz(π/4) — phase rotation by a quarter-turn; T up to global phase. */
+  r4(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R4 }) }
+
+  /** Rz(π/8) — phase rotation by an eighth-turn. */
+  r8(q: number): Circuit { return this.add({ kind: 'single', q, gate: G.R8 }) }
+
   // ── Two-qubit gates ──────────────────────────────────────────────────────
 
   /** Controlled-NOT. IonQ name: cnot. */

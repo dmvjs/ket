@@ -351,36 +351,88 @@ describe('BigInt state indices (no 32-bit overflow)', () => {
   })
 })
 
-// ─── Phase rotation aliases (r2 = S, r4 = T, r8 = Rz(π/8)) ─────────────────
-// These mirror the named phase gates in the broader gate-set literature.
-// Expressed as rz(angle) — the algebra is what matters, not the name.
+// ─── Phase rotation gates (r2 / r4 / r8) ─────────────────────────────────────
+//
+// r2 = Rz(π/2), r4 = Rz(π/4), r8 = Rz(π/8).
+// Each is equal to S/T up to a global phase (unobservable) but carries its own
+// gate name for IonQ JSON serialisation.
+//
+// Test strategy:
+//   • Computational-basis phases: phase gates never change |0⟩/|1⟩ populations
+//   • Composition identities:  r2·si ≡ I,  r4·ti ≡ I  (global-phase cancellation)
+//   • Squaring ladder:  r2² ≡ Z  →  H·r2·r2·H|0⟩ = |1⟩  (deterministic)
+//   • Ramsey fringe: H·rN·H|0⟩  →  p(|0⟩) = (1+cos θ)/2  (angle verification)
 
-describe('Phase rotation gates via rz', () => {
-  it('r2 (Rz(π/2) = S): X then S leaves qubit measurable as |1⟩', () => {
-    // S only adds a phase to |1⟩, measurement outcome unchanged
-    const r = new Circuit(1).x(0).rz(Math.PI / 2, 0).run({ shots: 100, seed: 1 })
+describe('r2 (Rz(π/2))', () => {
+  it('leaves |0⟩ and |1⟩ populations unchanged (phase is unobservable)', () => {
+    expect(new Circuit(1).r2(0).run({ shots: 100, seed: 1 }).probs['0']).toBeCloseTo(1.0, 10)
+    expect(new Circuit(1).x(0).r2(0).run({ shots: 100, seed: 1 }).probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // r2·si = Rz(π/2)·S† = e^(−iπ/4)·I  →  global phase cancels in measurement
+  it('r2·si ≡ I: H·r2·si·H|0⟩ returns |0⟩', () => {
+    const r = new Circuit(1).h(0).r2(0).si(0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // Rz(π/2)² = Rz(π) ≡ Z  →  H·Z·H = X  →  H·r2·r2·H|0⟩ = X|0⟩ = |1⟩
+  it('r2² ≡ Z: H·r2·r2·H|0⟩ = |1⟩', () => {
+    const r = new Circuit(1).h(0).r2(0).r2(0).h(0).run({ shots: 100, seed: 1 })
     expect(r.probs['1']).toBeCloseTo(1.0, 10)
   })
 
-  it('r4 (Rz(π/4) = T): X then T leaves qubit measurable as |1⟩', () => {
-    const r = new Circuit(1).x(0).rz(Math.PI / 4, 0).run({ shots: 100, seed: 1 })
+  // Rz(2π) ≡ I  →  H·r2^4·H|0⟩ = |0⟩
+  it('r2⁴ ≡ I: H·(r2)⁴·H|0⟩ = |0⟩', () => {
+    const r = new Circuit(1).h(0).r2(0).r2(0).r2(0).r2(0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+})
+
+describe('r4 (Rz(π/4))', () => {
+  it('leaves |0⟩ and |1⟩ populations unchanged', () => {
+    expect(new Circuit(1).r4(0).run({ shots: 100, seed: 1 }).probs['0']).toBeCloseTo(1.0, 10)
+    expect(new Circuit(1).x(0).r4(0).run({ shots: 100, seed: 1 }).probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // r4·ti = Rz(π/4)·T† = e^(−iπ/8)·I
+  it('r4·ti ≡ I: H·r4·ti·H|0⟩ returns |0⟩', () => {
+    const r = new Circuit(1).h(0).r4(0).ti(0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // r4² ≡ r2  →  r4²·si ≡ I  (same cancellation as above)
+  it('r4² ≡ r2: H·r4·r4·si·H|0⟩ = |0⟩', () => {
+    const r = new Circuit(1).h(0).r4(0).r4(0).si(0).h(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  // Ramsey fringe: p(|0⟩) = (1 + cos(π/4)) / 2 ≈ 0.854
+  it('Ramsey fringe: H·r4·H|0⟩ → p(|0⟩) ≈ 0.854 (verifies angle π/4)', () => {
+    const expected = (1 + Math.cos(Math.PI / 4)) / 2  // ≈ 0.8536
+    const r = new Circuit(1).h(0).r4(0).h(0).run({ shots: 50000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, expected, 0.01)).toBe(true)
+  })
+})
+
+describe('r8 (Rz(π/8))', () => {
+  it('leaves |0⟩ and |1⟩ populations unchanged', () => {
+    expect(new Circuit(1).r8(0).run({ shots: 100, seed: 1 }).probs['0']).toBeCloseTo(1.0, 10)
+    expect(new Circuit(1).x(0).r8(0).run({ shots: 100, seed: 1 }).probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  // r8⁸ = Rz(π) ≡ Z  →  H·r8^8·H|0⟩ = |1⟩
+  it('r8⁸ ≡ Z: H·(r8)⁸·H|0⟩ = |1⟩', () => {
+    let c = new Circuit(1).h(0)
+    for (let i = 0; i < 8; i++) c = c.r8(0)
+    const r = c.h(0).run({ shots: 100, seed: 1 })
     expect(r.probs['1']).toBeCloseTo(1.0, 10)
   })
 
-  it('r8 (Rz(π/8)): X then R8 leaves qubit measurable as |1⟩', () => {
-    const r = new Circuit(1).x(0).rz(Math.PI / 8, 0).run({ shots: 100, seed: 1 })
-    expect(r.probs['1']).toBeCloseTo(1.0, 10)
-  })
-
-  it('H then r8: superposition with phase, still produces |0⟩ and |1⟩', () => {
-    const r = new Circuit(1).h(0).rz(Math.PI / 8, 0).run({ shots: 10000, seed: 42 })
-    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
-    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
-  })
-
-  it('four S gates = identity (S⁴ = I)', () => {
-    const r = new Circuit(1).h(0).s(0).s(0).s(0).s(0).h(0).run({ shots: 100, seed: 1 })
-    expect(r.probs['0']).toBeCloseTo(1.0, 8)
+  // Ramsey fringe: p(|0⟩) = (1 + cos(π/8)) / 2 ≈ 0.962
+  it('Ramsey fringe: H·r8·H|0⟩ → p(|0⟩) ≈ 0.962 (verifies angle π/8)', () => {
+    const expected = (1 + Math.cos(Math.PI / 8)) / 2  // ≈ 0.9619
+    const r = new Circuit(1).h(0).r8(0).h(0).run({ shots: 50000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, expected, 0.01)).toBe(true)
   })
 })
 
