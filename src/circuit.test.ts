@@ -1345,6 +1345,310 @@ describe('Quantum teleportation', () => {
   })
 })
 
+// ─── Statevector inspection (2c) ─────────────────────────────────────────────
+
+describe('statevector()', () => {
+  it('|0⟩ has amplitude 1 at index 0', () => {
+    const sv = new Circuit(1).statevector()
+    expect(sv.get(0n)).toEqual({ re: 1, im: 0 })
+    expect(sv.size).toBe(1)
+  })
+
+  it('H|0⟩ has equal amplitudes at 0 and 1', () => {
+    const sv = new Circuit(1).h(0).statevector()
+    const a0 = sv.get(0n)!
+    const a1 = sv.get(1n)!
+    expect(a0.re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(a0.im).toBeCloseTo(0, 10)
+    expect(a1.re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(a1.im).toBeCloseTo(0, 10)
+  })
+
+  it('X|0⟩ = |1⟩: only index 1 is populated', () => {
+    const sv = new Circuit(1).x(0).statevector()
+    expect(sv.has(0n)).toBe(false)
+    expect(sv.get(1n)?.re).toBeCloseTo(1, 10)
+  })
+
+  it('Bell state: equal amplitudes at |00⟩ and |11⟩, nothing else', () => {
+    const sv = new Circuit(2).h(0).cnot(0, 1).statevector()
+    expect(sv.get(0n)!.re).toBeCloseTo(1 / Math.SQRT2, 10)  // |00⟩
+    expect(sv.get(3n)!.re).toBeCloseTo(1 / Math.SQRT2, 10)  // |11⟩ = index 3
+    expect(sv.size).toBe(2)
+  })
+
+  it('throws TypeError for circuits with measure ops', () => {
+    expect(() => new Circuit(1).measure(0, 'c', 0).statevector()).toThrow(TypeError)
+  })
+
+  it('throws TypeError for circuits with reset ops', () => {
+    expect(() => new Circuit(1).reset(0).statevector()).toThrow(TypeError)
+  })
+})
+
+describe('amplitude(bitstring)', () => {
+  it('|0⟩ → amplitude("0") = 1+0i', () => {
+    const a = new Circuit(1).amplitude('0')
+    expect(a.re).toBeCloseTo(1, 10)
+    expect(a.im).toBeCloseTo(0, 10)
+  })
+
+  it('X|0⟩ → amplitude("1") = 1, amplitude("0") = 0', () => {
+    const c = new Circuit(1).x(0)
+    expect(c.amplitude('1').re).toBeCloseTo(1, 10)
+    expect(c.amplitude('0').re).toBeCloseTo(0, 10)
+  })
+
+  it('H|0⟩ → amplitude("0") = amplitude("1") = 1/√2', () => {
+    const c = new Circuit(1).h(0)
+    expect(c.amplitude('0').re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(c.amplitude('1').re).toBeCloseTo(1 / Math.SQRT2, 10)
+  })
+
+  it('S|1⟩ → amplitude("1") is pure imaginary (i)', () => {
+    const c = new Circuit(1).x(0).s(0)
+    const a = c.amplitude('1')
+    expect(a.re).toBeCloseTo(0, 10)
+    expect(a.im).toBeCloseTo(1, 10)
+  })
+
+  it('Bell state: amplitude("00") = amplitude("11") = 1/√2, others zero', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    expect(c.amplitude('00').re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(c.amplitude('11').re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(c.amplitude('01').re).toBeCloseTo(0, 10)
+    expect(c.amplitude('10').re).toBeCloseTo(0, 10)
+  })
+})
+
+describe('probability(bitstring)', () => {
+  it('|0⟩ → probability("0") = 1', () => {
+    expect(new Circuit(1).probability('0')).toBeCloseTo(1, 10)
+  })
+
+  it('X|0⟩ → probability("1") = 1, probability("0") = 0', () => {
+    const c = new Circuit(1).x(0)
+    expect(c.probability('1')).toBeCloseTo(1, 10)
+    expect(c.probability('0')).toBeCloseTo(0, 10)
+  })
+
+  it('H|0⟩ → probability("0") = probability("1") = 0.5', () => {
+    const c = new Circuit(1).h(0)
+    expect(c.probability('0')).toBeCloseTo(0.5, 10)
+    expect(c.probability('1')).toBeCloseTo(0.5, 10)
+  })
+
+  it('probabilities sum to 1 for any pure state', () => {
+    const c = new Circuit(3).h(0).cnot(0, 1).rx(0.7, 2)
+    const sv = c.statevector()
+    let total = 0
+    for (const bs of sv.keys()) total += c.probability(bs.toString(2).padStart(3, '0'))
+    expect(total).toBeCloseTo(1, 10)
+  })
+})
+
+// ─── Classical registers and mid-circuit measurement (2a) ────────────────────
+
+describe('creg — classical register declaration', () => {
+  it('creg returns a new circuit (immutability)', () => {
+    const a = new Circuit(1)
+    const b = a.creg('c', 1)
+    expect(a).not.toBe(b)
+  })
+
+  it('declaring a creg without measuring leaves its bits at 0 in Distribution', () => {
+    const r = new Circuit(1).h(0).creg('c', 2).run({ shots: 100, seed: 1 })
+    expect(r.cregs['c']).toEqual([0, 0])
+  })
+})
+
+describe('measure — deterministic collapse', () => {
+  it('measuring |0⟩ always records 0 in creg', () => {
+    const r = new Circuit(1).measure(0, 'c', 0).run({ shots: 100, seed: 1 })
+    expect(r.cregs['c']![0]).toBeCloseTo(0, 10)
+  })
+
+  it('measuring |1⟩ always records 1 in creg', () => {
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).run({ shots: 100, seed: 1 })
+    expect(r.cregs['c']![0]).toBeCloseTo(1, 10)
+  })
+
+  it('measuring |0⟩ leaves the qubit in |0⟩ (final qubit probs unaffected)', () => {
+    const r = new Circuit(1).measure(0, 'c', 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('measuring |1⟩ leaves the qubit in |1⟩', () => {
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+})
+
+describe('measure — superposition and collapse', () => {
+  it('measuring |+⟩ records 1 in ~50% of shots', () => {
+    const r = new Circuit(1).h(0).measure(0, 'c', 0).run({ shots: 10000, seed: 42 })
+    expect(near(r.cregs['c']![0]!, 0.5)).toBe(true)
+  })
+
+  // If measurement truly collapses the state, h(0).measure.h(0) ≠ h(0).h(0).
+  // h·h = I → deterministic |0⟩.  But h·(collapse)·h → 50/50 regardless of outcome.
+  it('collapse is real: h·measure·h gives 50/50, not |0⟩', () => {
+    const r = new Circuit(1).h(0).measure(0, 'c', 0).h(0).run({ shots: 10000, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('re-measuring the same qubit gives the same outcome: creg distributions match', () => {
+    const r = new Circuit(1)
+      .h(0)
+      .measure(0, 'c',  0)
+      .measure(0, 'c2', 0)
+      .run({ shots: 10000, seed: 42 })
+    // Both measurements reflect the same ~50% probability
+    expect(near(r.cregs['c']![0]!,  0.5)).toBe(true)
+    expect(near(r.cregs['c2']![0]!, 0.5)).toBe(true)
+    // Distributions must match (collapse locks the qubit for the rest of the shot)
+    expect(r.cregs['c']![0]).toBeCloseTo(r.cregs['c2']![0]!, 1)
+  })
+
+  it('entangled Bell pair: measuring q0 determines q1 (only |00⟩ and |11⟩ outcomes)', () => {
+    // Bell state |Φ+⟩ = (|00⟩+|11⟩)/√2 — measuring q0 collapses q1 to match
+    const r = new Circuit(2)
+      .h(0).cnot(0, 1)
+      .measure(0, 'c', 0)
+      .run({ shots: 2000, seed: 7 })
+    // Final qubit probs must be all |00⟩ or all |11⟩ per shot → only those two outcomes
+    expect(Object.keys(r.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
+  })
+})
+
+describe('measure — multi-bit register', () => {
+  it('two qubits into two bits of one register', () => {
+    // x(0) → q0=|1⟩, q1=|0⟩; measure into 2-bit register
+    const r = new Circuit(2)
+      .x(0)
+      .creg('c', 2)
+      .measure(0, 'c', 0)
+      .measure(1, 'c', 1)
+      .run({ shots: 100, seed: 1 })
+    expect(r.cregs['c']![0]).toBeCloseTo(1, 10)  // q0=|1⟩ → bit0 always 1
+    expect(r.cregs['c']![1]).toBeCloseTo(0, 10)  // q1=|0⟩ → bit1 always 0
+  })
+
+  it('auto-registers a creg if not explicitly declared', () => {
+    const r = new Circuit(1).x(0).measure(0, 'auto', 0).run({ shots: 100, seed: 1 })
+    expect(r.cregs['auto']![0]).toBeCloseTo(1, 10)
+  })
+})
+
+describe('reset', () => {
+  it('reset(|0⟩) leaves qubit in |0⟩', () => {
+    const r = new Circuit(1).reset(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('reset(|1⟩) restores qubit to |0⟩', () => {
+    const r = new Circuit(1).x(0).reset(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('reset(|+⟩) always returns |0⟩ regardless of superposition', () => {
+    const r = new Circuit(1).h(0).reset(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('reset after entanglement restores target qubit to |0⟩', () => {
+    // Bell pair on q0/q1; reset q0 → q0 always |0⟩, q1 collapses to definite state
+    const r = new Circuit(2).h(0).cnot(0, 1).reset(0).run({ shots: 100, seed: 1 })
+    // Rightmost character in bitstring is q0 → must be 0 in all outcomes
+    expect(Object.keys(r.probs).every(bs => bs.at(-1) === '0')).toBe(true)
+  })
+})
+
+describe('if — conditional gate (2b)', () => {
+  it('if(creg=0, value=0): gate fires when register is 0 (identity condition)', () => {
+    // creg never written → always 0; if == 0 → always apply X → |1⟩
+    const r = new Circuit(1).measure(0, 'c', 0).if('c', 0, c => c.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('if(creg=1, value=1): gate fires only when measurement gave 1', () => {
+    // x(0) → |1⟩; measure → creg=1; if creg==1 → apply X → back to |0⟩
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).if('c', 1, c => c.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('if(creg=1, value=0): gate does NOT fire when register is 1', () => {
+    // x(0) → |1⟩; measure → creg=1; if creg==0 → skip; qubit stays |1⟩
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).if('c', 0, c => c.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('if corrects 50/50 collapse: measure |+⟩, apply X if 1 → always |0⟩', () => {
+    // measure |+⟩ → creg ~50/50; X correction when 1 → qubit always ends in |0⟩
+    const r = new Circuit(1).h(0).measure(0, 'c', 0).if('c', 1, c => c.x(0)).run({ shots: 1000, seed: 42 })
+    expect(r.probs['0']).toBeCloseTo(1, 5)
+  })
+
+  // ── Quantum teleportation with true mid-circuit measurement ──────────────────
+  //
+  // The textbook protocol:
+  //   1. Bell pair on q1/q2
+  //   2. Alice: CNOT(q0→q1) · H(q0) · measure q0→c0, q1→c1
+  //   3. Bob: if c1==1 → X(q2) ; if c0==1 → Z(q2)
+  // q2 must end in the same state as q0 was prepared in.
+
+  function teleportMeasured(prepQ0: (c: Circuit) => Circuit): Distribution {
+    return prepQ0(new Circuit(3))
+      .h(1).cnot(1, 2)                     // Bell pair q1/q2
+      .cnot(0, 1).h(0)                     // Alice's Bell measurement basis
+      .measure(0, 'c0', 0)
+      .measure(1, 'c1', 0)
+      .if('c1', 1, q => q.x(2))           // Bob: X correction
+      .if('c0', 1, q => q.z(2))           // Bob: Z correction
+      .run({ shots: 1000, seed: 1 })
+  }
+
+  it('teleportation with measurement + if: teleports |0⟩ → q2 always |0⟩', () => {
+    const r = teleportMeasured(c => c)
+    const p0 = Object.entries(r.probs)
+      .filter(([bs]) => bs[0] === '0')
+      .reduce((s, [, p]) => s + p, 0)
+    expect(p0).toBeCloseTo(1, 5)
+  })
+
+  it('teleportation with measurement + if: teleports |1⟩ → q2 always |1⟩', () => {
+    const r = teleportMeasured(c => c.x(0))
+    const p1 = Object.entries(r.probs)
+      .filter(([bs]) => bs[0] === '1')
+      .reduce((s, [, p]) => s + p, 0)
+    expect(p1).toBeCloseTo(1, 5)
+  })
+
+  it('teleportation with measurement + if: teleports |+⟩ → q2 measures 50/50', () => {
+    const r = teleportMeasured(c => c.h(0))
+    const p0 = Object.entries(r.probs).filter(([bs]) => bs[0] === '0').reduce((s, [, p]) => s + p, 0)
+    const p1 = Object.entries(r.probs).filter(([bs]) => bs[0] === '1').reduce((s, [, p]) => s + p, 0)
+    expect(near(p0, 0.5)).toBe(true)
+    expect(near(p1, 0.5)).toBe(true)
+  })
+})
+
+describe('measure + reset integration', () => {
+  it('measure then reset: creg records pre-reset value, qubit ends in |0⟩', () => {
+    // x(0) → |1⟩; measure records 1; reset → |0⟩
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).reset(0).run({ shots: 100, seed: 1 })
+    expect(r.cregs['c']![0]).toBeCloseTo(1, 10)
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('mid-circuit reset enables qubit reuse: reset then re-encode', () => {
+    // q0: x → measure(→1) → reset(→|0⟩) → x again → final |1⟩
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).reset(0).x(0).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {

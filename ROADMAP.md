@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (184 tests, ~70ms)**
+**Test suite (224 tests, ~110ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -79,16 +79,16 @@ Tests: unitarity (U†U = I), known analytic outputs (GPI(0)=X, Ramsey fringe, G
 
 Today's `Distribution` is purely statistical (post-run probabilities). Real quantum programs need mid-circuit measurement.
 
-### 2a. Classical registers
+### 2a. Classical registers ✓
 `Circuit.creg(name, size)` — declare a classical register.
 `Circuit.measure(qubit, creg, bit)` — collapse a qubit, store result classically.
 `Circuit.reset(qubit)` — reset qubit to |0⟩ post-measurement.
 
-### 2b. Conditional gates
-`Circuit.if(creg, value, gate)` — apply a gate only if a classical register holds a value.
+### 2b. Conditional gates ✓
+`Circuit.if(creg, value, build)` — apply a gate (or sequence) only if a classical register holds a value.
 Required for teleportation, error correction, and mid-circuit feedback.
 
-### 2c. Statevector inspection API
+### 2c. Statevector inspection API ✓
 `circuit.statevector()` — return the full sparse amplitude map after execution.
 `circuit.amplitude(bitstring)` — return the complex amplitude for a specific basis state.
 `circuit.probability(bitstring)` — return |amplitude|².

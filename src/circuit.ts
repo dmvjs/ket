@@ -7,6 +7,7 @@
 
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { Complex, ZERO } from './complex.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -17,7 +18,91 @@ type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: G
 type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2 }
 type ToffoliOp    = { kind: 'toffoli';    c1: number; c2: number; target: number }
 type CSwapOp      = { kind: 'cswap';      control: number; a: number; b: number }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp
+type MeasureOp = { kind: 'measure'; q: number; creg: string; bit: number }
+type ResetOp   = { kind: 'reset';   q: number }
+type IfOp      = { kind: 'if';      creg: string; value: number; ops: readonly Op[] }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | MeasureOp | ResetOp | IfOp
+
+// ─── Mid-circuit measurement helpers ─────────────────────────────────────────
+
+/**
+ * Project the statevector onto the given qubit outcome and renormalize.
+ * rand: a uniform random number in [0, 1) used to sample the outcome.
+ */
+function collapseQubit(sv: StateVector, q: number, rand: number): { outcome: 0 | 1; sv: StateVector } {
+  const mask = 1n << BigInt(q)
+  let p1 = 0
+  for (const [idx, amp] of sv) {
+    if ((idx & mask) !== 0n) p1 += amp.re * amp.re + amp.im * amp.im
+  }
+  const outcome: 0 | 1 = rand < p1 ? 1 : 0
+  const invNorm = 1 / Math.sqrt(outcome === 1 ? p1 : 1 - p1)
+  const next: StateVector = new Map()
+  for (const [idx, amp] of sv) {
+    if (outcome === 1 ? (idx & mask) !== 0n : (idx & mask) === 0n) {
+      next.set(idx, { re: amp.re * invNorm, im: amp.im * invNorm })
+    }
+  }
+  return { outcome, sv: next }
+}
+
+/** Sample one basis-state index from a statevector using a uniform random number. */
+function sampleSV(sv: StateVector, rand: number): bigint {
+  const sorted = sv.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
+  let cum = 0
+  for (const [idx, amp] of sorted) {
+    cum += amp.re * amp.re + amp.im * amp.im
+    if (rand <= cum) return idx
+  }
+  return sorted.at(-1)?.[0] ?? 0n
+}
+
+/** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
+function simulatePure(ops: readonly Op[], qubits: number): StateVector {
+  let sv: StateVector = zero(qubits)
+  for (const op of ops) {
+    if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
+    else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
+    else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
+    else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
+    else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
+    else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
+    else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
+  }
+  return sv
+}
+
+/** Read a classical register as a little-endian integer (bit 0 = LSB). */
+function cregValue(shotCregs: Map<string, boolean[]>, name: string): number {
+  return (shotCregs.get(name) ?? []).reduce((acc, b, i) => acc | (b ? 1 << i : 0), 0)
+}
+
+/** Apply ops to `sv`, handling mid-circuit measurement with `rng`. Recursive for IfOp. */
+function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number): StateVector {
+  let sv = svIn
+  for (const op of ops) {
+    if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
+    else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
+    else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
+    else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
+    else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
+    else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
+    else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
+    else if (op.kind === 'measure') {
+      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+      sv = next
+      const reg = shotCregs.get(op.creg)
+      if (reg) reg[op.bit] = outcome === 1
+    } else if (op.kind === 'reset') {
+      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+      sv = next
+      if (outcome === 1) sv = applySingle(sv, op.q, G.X)
+    } else {  // if
+      if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng)
+    }
+  }
+  return sv
+}
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
@@ -46,8 +131,15 @@ export class Distribution {
   readonly shots:  number
   readonly probs:  Readonly<Record<string, number>>
   readonly histogram: Readonly<Record<string, number>>
+  /** Classical register results: `cregs[name][bit]` = fraction of shots where that bit was 1. */
+  readonly cregs: Readonly<Record<string, readonly number[]>>
 
-  constructor(qubits: number, shots: number, counts: Map<bigint, number>) {
+  constructor(
+    qubits: number,
+    shots: number,
+    counts: Map<bigint, number>,
+    cregCounts: Map<string, number[]> = new Map(),
+  ) {
     this.qubits = qubits
     this.shots  = shots
 
@@ -63,6 +155,12 @@ export class Distribution {
 
     this.probs     = Object.freeze(probs)
     this.histogram = Object.freeze(histogram)
+
+    const cregs: Record<string, readonly number[]> = {}
+    for (const [name, bitCounts] of cregCounts) {
+      cregs[name] = Object.freeze(bitCounts.map(c => c / shots))
+    }
+    this.cregs = Object.freeze(cregs)
   }
 
   /** Most probable bitstring. */
@@ -101,15 +199,17 @@ export class Distribution {
 
 export class Circuit {
   readonly qubits: number
-  readonly #ops: readonly Op[]
+  readonly #ops:   readonly Op[]
+  readonly #cregs: ReadonlyMap<string, number>  // name → declared size
 
-  constructor(qubits: number, ops: readonly Op[] = []) {
-    this.qubits = qubits
-    this.#ops   = ops
+  constructor(qubits: number, ops: readonly Op[] = [], cregs: ReadonlyMap<string, number> = new Map()) {
+    this.qubits  = qubits
+    this.#ops    = ops
+    this.#cregs  = cregs
   }
 
   #add(op: Op): Circuit {
-    return new Circuit(this.qubits, [...this.#ops, op])
+    return new Circuit(this.qubits, [...this.#ops, op], this.#cregs)
   }
 
   #ctrl(control: number, target: number, gate: Gate2x2): Circuit {
@@ -254,59 +354,132 @@ export class Circuit {
     return this.#add({ kind: 'cswap', control, a, b })
   }
 
+  // ── Statevector inspection ────────────────────────────────────────────────
+
+  /**
+   * Simulate the circuit and return the full sparse amplitude map.
+   * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   */
+  statevector(): Map<bigint, Complex> {
+    if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
+    }
+    return simulatePure(this.#ops, this.qubits)
+  }
+
+  /**
+   * Return the complex amplitude for the basis state identified by `bitstring`.
+   * Bitstring format: q0 is the rightmost character (IonQ convention), e.g. `'01'` = q0=1, q1=0.
+   */
+  amplitude(bitstring: string): Complex {
+    return this.statevector().get(BigInt('0b' + bitstring)) ?? ZERO
+  }
+
+  /** Return the measurement probability (|amplitude|²) for the given basis state bitstring. */
+  probability(bitstring: string): number {
+    const { re, im } = this.amplitude(bitstring)
+    return re * re + im * im
+  }
+
+  // ── Classical registers and mid-circuit measurement ──────────────────────
+
+  /** Declare a classical register of `size` bits. */
+  creg(name: string, size: number): Circuit {
+    return new Circuit(this.qubits, this.#ops, new Map(this.#cregs).set(name, size))
+  }
+
+  /**
+   * Measure qubit `q` in the computational basis, storing the outcome in
+   * `creg[bit]`. Collapses the statevector for that shot.
+   * Auto-registers the creg if not yet declared.
+   */
+  measure(q: number, creg: string, bit: number): Circuit {
+    const size = Math.max(this.#cregs.get(creg) ?? 0, bit + 1)
+    return new Circuit(
+      this.qubits,
+      [...this.#ops, { kind: 'measure', q, creg, bit }],
+      new Map(this.#cregs).set(creg, size),
+    )
+  }
+
+  /** Reset qubit `q` to |0⟩ by measuring and conditionally flipping. */
+  reset(q: number): Circuit { return this.#add({ kind: 'reset', q }) }
+
+  /**
+   * Conditionally apply a gate (or sequence of gates) only when the classical
+   * register `creg` equals `value`.
+   *
+   * `value` is compared against the register as a little-endian integer:
+   * bit 0 is the LSB.  For a 1-bit register, `value` is simply 0 or 1.
+   *
+   * @example
+   * // Apply X to q2 only if register 'c' == 1
+   * circuit.if('c', 1, c => c.x(2))
+   */
+  if(creg: string, value: number, build: (c: Circuit) => Circuit): Circuit {
+    const inner = build(new Circuit(this.qubits))
+    return this.#add({ kind: 'if', creg, value, ops: inner.#ops })
+  }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
   run({ shots = 1024, seed }: RunOptions = {}): Distribution {
-    let sv: StateVector = zero(this.qubits)
+    const rng        = makePrng(seed)
+    const cregCounts = new Map<string, number[]>(
+      this.#cregs.entries().map(([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
 
-    for (const op of this.#ops) {
-      if (op.kind === 'single') {
-        sv = applySingle(sv, op.q, op.gate)
-      } else if (op.kind === 'cnot') {
-        sv = applyCNOT(sv, op.control, op.target)
-      } else if (op.kind === 'controlled') {
-        sv = applyControlled(sv, op.control, op.target, op.gate)
-      } else if (op.kind === 'swap') {
-        sv = applySWAP(sv, op.a, op.b)
-      } else if (op.kind === 'toffoli') {
-        sv = applyToffoli(sv, op.c1, op.c2, op.target)
-      } else if (op.kind === 'cswap') {
-        sv = applyCSwap(sv, op.control, op.a, op.b)
-      } else {
-        sv = applyTwo(sv, op.a, op.b, op.gate)
+    // ── Fast path: pure circuit — simulate once, sample N times ──────────────
+    if (!this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      const sv     = simulatePure(this.#ops, this.qubits)
+      const probs  = probabilities(sv)
+      const sorted = probs.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
+
+      const cdf: { idx: bigint; cumP: number }[] = []
+      let cum = 0
+      for (const [idx, p] of sorted) {
+        cum += p
+        cdf.push({ idx, cumP: cum })
       }
+      const last = cdf.at(-1)
+      if (last) last.cumP = 1.0
+
+      const counts = new Map<bigint, number>()
+      for (let i = 0; i < shots; i++) {
+        const r  = rng()
+        let lo   = 0
+        let hi   = cdf.length - 1
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1
+          if (cdf[mid]!.cumP < r) lo = mid + 1
+          else hi = mid
+        }
+        const idx = cdf[lo]?.idx ?? 0n
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      }
+
+      return new Distribution(this.qubits, shots, counts, cregCounts)
     }
 
-    // Sample shots from the probability distribution
-    const probs  = probabilities(sv)
-    const sorted = probs.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
-
-    const cdf: { idx: bigint; cumP: number }[] = []
-    let cum = 0
-    for (const [idx, p] of sorted) {
-      cum += p
-      cdf.push({ idx, cumP: cum })
-    }
-    const last = cdf.at(-1)
-    if (last) last.cumP = 1.0 // clamp floating-point drift
-
-    const rng    = makePrng(seed)
+    // ── Per-shot path: mid-circuit measurement — one full simulation per shot ──
     const counts = new Map<bigint, number>()
 
     for (let i = 0; i < shots; i++) {
-      const r  = rng()
-      let lo   = 0
-      let hi   = cdf.length - 1
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1
-        if ((cdf[mid]!.cumP) < r) lo = mid + 1
-        else hi = mid
+      const shotCregs = new Map<string, boolean[]>(
+        this.#cregs.entries().map(([name, size]) => [name, new Array<boolean>(size).fill(false)])
+      )
+
+      const sv       = applyOps(this.#ops, zero(this.qubits), shotCregs, rng)
+      const finalIdx = sampleSV(sv, rng())
+      counts.set(finalIdx, (counts.get(finalIdx) ?? 0) + 1)
+
+      for (const [name, bits] of shotCregs) {
+        const acc = cregCounts.get(name)!
+        for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
       }
-      const idx = cdf[lo]?.idx ?? 0n
-      counts.set(idx, (counts.get(idx) ?? 0) + 1)
     }
 
-    return new Distribution(this.qubits, shots, counts)
+    return new Distribution(this.qubits, shots, counts, cregCounts)
   }
 }
