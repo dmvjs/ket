@@ -201,7 +201,7 @@ export class Circuit {
 
     // Sample shots from the probability distribution
     const probs  = probabilities(sv)
-    const sorted = [...probs.entries()].toSorted(([a], [b]) => (a < b ? -1 : 1))
+    const sorted = probs.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
 
     const cdf: { idx: bigint; cumP: number }[] = []
     let cum = 0

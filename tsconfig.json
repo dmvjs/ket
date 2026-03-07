@@ -6,7 +6,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "lib": ["ES2023"],
+    "lib": ["ES2025"],
     "outDir": "dist",
     "declaration": true,
     "declarationMap": true,
