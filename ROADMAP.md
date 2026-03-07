@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (283 tests, ~115ms)**
+**Test suite (322 tests, ~120ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -38,6 +38,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Native IonQ gates: GPI Ramsey fringe, GPI2 inverse pair, MS Bell states
 - Quantum teleportation: |0⟩, |1⟩, |+⟩, Rx(π/3)|0⟩
 - OpenQASM 2.0: gate name mapping, angle notation, round-trip statevector fidelity
+- Export targets: Qiskit, Cirq, Q#, pyQuil — gate name mapping, angle formatting, throw-on-unsupported
 
 ---
 
@@ -113,16 +114,16 @@ The lingua franca of quantum circuits. All major platforms accept QASM.
 `circuit.toQASM()` — emit valid OpenQASM 2.0.
 Round-trip test: parse → emit → parse → compare unitary matrices.
 
-### 3c. Export targets
+### 3c. Export targets ✓
 Each target is a serializer; the core simulation is unaffected.
-| Target | Use case |
-|---|---|
-| Qiskit (Python) | Run on IBM hardware or Aer locally |
-| Cirq (Python) | Google hardware and noise simulation |
-| Q# | Microsoft Azure Quantum |
-| pyQuil / Quil | Rigetti hardware |
-| AWS Braket | Amazon Braket service |
-| IonQ JSON | IonQ Cloud (via qsim or direct) |
+| Target | Method | Use case |
+|---|---|---|
+| Qiskit (Python) | `circuit.toQiskit()` | IBM Quantum, Aer simulator |
+| Cirq (Python) | `circuit.toCirq()` | Google Quantum AI |
+| Q# | `circuit.toQSharp()` | Microsoft Azure Quantum |
+| pyQuil | `circuit.toPyQuil()` | Rigetti hardware |
+| OpenQASM 2.0 | `circuit.toQASM()` | Universal interchange format |
+| IonQ JSON | `circuit.toIonQ()` | IonQ Cloud (via qsim or direct) |
 
 ---
 

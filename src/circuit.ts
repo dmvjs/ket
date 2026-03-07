@@ -130,10 +130,10 @@ export interface IonQCircuit {
 // ─── OpenQASM 2.0 helpers ─────────────────────────────────────────────────────
 
 /**
- * Format a radian value as a QASM angle expression.
+ * Format a radian value as an angle expression using `piToken` for π.
  * Recognises rational multiples of π (up to denominator 16) for clean output.
  */
-function qasmAngle(r: number): string {
+function fmtAngle(r: number, piToken: string): string {
   if (Math.abs(r) < 1e-14) return '0'
   const f = r / Math.PI
   for (const d of [1, 2, 3, 4, 6, 8, 12, 16]) {
@@ -142,13 +142,16 @@ function qasmAngle(r: number): string {
       if (Math.abs(f - n / d) < 1e-12) {
         const sign = n < 0 ? '-' : ''
         const a = Math.abs(n)
-        if (d === 1) return a === 1 ? `${sign}pi` : `${sign}${a}*pi`
-        return a === 1 ? `${sign}pi/${d}` : `${sign}${a}*pi/${d}`
+        if (d === 1) return a === 1 ? `${sign}${piToken}` : `${sign}${a}*${piToken}`
+        return a === 1 ? `${sign}${piToken}/${d}` : `${sign}${a}*${piToken}/${d}`
       }
     }
   }
   return String(r)
 }
+
+function qasmAngle(r: number): string { return fmtAngle(r, 'pi') }
+function pyAngle(r: number):   string { return fmtAngle(r, 'math.pi') }
 
 /** Parse a QASM angle expression (supports `pi`, `*`, `/`, `+`, `-`, parentheses). */
 function parseAngle(expr: string): number {
@@ -417,13 +420,13 @@ export class Circuit {
   zz(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Zz(theta), meta: { name: 'zz', params: [theta] } }) }
 
   /** XY(θ) interaction gate. XY(π) = iSWAP, XY(π/2) = √iSWAP. */
-  xy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xy(theta) }) }
+  xy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xy(theta), meta: { name: 'xy', params: [theta] } }) }
 
   /** iSWAP = XY(π): swaps qubits and multiplies each by i. */
-  iswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.ISwap }) }
+  iswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.ISwap, meta: { name: 'iswap' } }) }
 
   /** √iSWAP = XY(π/2): square root of iSWAP. */
-  srswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.SrSwap }) }
+  srswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.SrSwap, meta: { name: 'srswap' } }) }
 
   // ── Controlled single-qubit gates ────────────────────────────────────────
 
@@ -750,6 +753,368 @@ export class Circuit {
       }
     }
     return c
+  }
+
+  // ── Export targets ───────────────────────────────────────────────────────
+
+  /**
+   * Emit Python code for Qiskit's `QuantumCircuit` API.
+   * Gate coverage: full standard gate set, rx/ry/rz, u1/u2/u3, controlled family,
+   * rxx/ryy/rzz/iswap. Throws for gpi/gpi2/ms/xy/srswap/if.
+   */
+  toQiskit(): string {
+    const lines: string[] = []
+    const imports = ['from qiskit import QuantumCircuit']
+    const cregLines: string[] = []
+
+    if (this.#cregs.size) imports.push('from qiskit.circuit import ClassicalRegister')
+    imports.push('import math', '')
+
+    lines.push(`qc = QuantumCircuit(${this.qubits})`)
+    for (const [name, size] of this.#cregs) {
+      cregLines.push(`${name} = ClassicalRegister(${size}, '${name}')`)
+      cregLines.push(`qc.add_register(${name})`)
+    }
+    if (cregLines.length) lines.push(...cregLines, '')
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    lines.push(`qc.cx(${op.control}, ${op.target})`);             break
+        case 'swap':    lines.push(`qc.swap(${op.a}, ${op.b})`);                      break
+        case 'toffoli': lines.push(`qc.ccx(${op.c1}, ${op.c2}, ${op.target})`);      break
+        case 'cswap':   lines.push(`qc.cswap(${op.control}, ${op.a}, ${op.b})`);     break
+        case 'measure': lines.push(`qc.measure(${op.q}, ${op.creg}[${op.bit}])`);    break
+        case 'reset':   lines.push(`qc.reset(${op.q})`);                              break
+        case 'if':      throw new TypeError('if ops cannot be serialized to Qiskit')
+        case 'two': {
+          const n = op.meta?.name
+          if (n === 'xx') { lines.push(`qc.rxx(${pyAngle(op.meta!.params![0]!)}, ${op.a}, ${op.b})`); break }
+          if (n === 'yy') { lines.push(`qc.ryy(${pyAngle(op.meta!.params![0]!)}, ${op.a}, ${op.b})`); break }
+          if (n === 'zz') { lines.push(`qc.rzz(${pyAngle(op.meta!.params![0]!)}, ${op.a}, ${op.b})`); break }
+          if (n === 'iswap') { lines.push(`qc.iswap(${op.a}, ${op.b})`); break }
+          throw new TypeError(`Gate '${n ?? 'two'}' has no Qiskit representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          if (n === 'gpi' || n === 'gpi2') throw new TypeError(`Gate '${n}' has no Qiskit representation`)
+          const angle = () => pyAngle(p![0]!)
+          switch (n) {
+            case 'si': lines.push(`qc.sdg(${q})`);                   break
+            case 'ti': lines.push(`qc.tdg(${q})`);                   break
+            case 'v':  lines.push(`qc.sx(${q})`);                    break
+            case 'vi': lines.push(`qc.sxdg(${q})`);                  break
+            case 'r2': lines.push(`qc.rz(math.pi/2, ${q})`);        break
+            case 'r4': lines.push(`qc.rz(math.pi/4, ${q})`);        break
+            case 'r8': lines.push(`qc.rz(math.pi/8, ${q})`);        break
+            case 'rx': lines.push(`qc.rx(${angle()}, ${q})`);        break
+            case 'ry': lines.push(`qc.ry(${angle()}, ${q})`);        break
+            case 'rz': lines.push(`qc.rz(${angle()}, ${q})`);        break
+            case 'u1': lines.push(`qc.u1(${angle()}, ${q})`);        break
+            case 'u2': lines.push(`qc.u2(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${q})`); break
+            case 'u3': lines.push(`qc.u3(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${pyAngle(p![2]!)}, ${q})`); break
+            default:   lines.push(`qc.${n}(${q})`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          const angle = () => pyAngle(p![0]!)
+          switch (n) {
+            case 'cr2':  lines.push(`qc.crz(math.pi/2, ${c}, ${t})`);                          break
+            case 'cr4':  lines.push(`qc.crz(math.pi/4, ${c}, ${t})`);                          break
+            case 'cr8':  lines.push(`qc.crz(math.pi/8, ${c}, ${t})`);                          break
+            case 'cs':   lines.push(`qc.cu1(math.pi/2, ${c}, ${t})`);                          break
+            case 'ct':   lines.push(`qc.cu1(math.pi/4, ${c}, ${t})`);                          break
+            case 'csdg': lines.push(`qc.cu1(-math.pi/2, ${c}, ${t})`);                         break
+            case 'ctdg': lines.push(`qc.cu1(-math.pi/4, ${c}, ${t})`);                         break
+            case 'crx':  lines.push(`qc.crx(${angle()}, ${c}, ${t})`);                         break
+            case 'cry':  lines.push(`qc.cry(${angle()}, ${c}, ${t})`);                         break
+            case 'crz':  lines.push(`qc.crz(${angle()}, ${c}, ${t})`);                         break
+            case 'cu1':  lines.push(`qc.cu1(${angle()}, ${c}, ${t})`);                         break
+            case 'cu3':  lines.push(`qc.cu3(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${pyAngle(p![2]!)}, ${c}, ${t})`); break
+            default:     lines.push(`qc.${n}(${c}, ${t})`)
+          }
+          break
+        }
+      }
+    }
+    return [...imports, ...lines].join('\n')
+  }
+
+  /**
+   * Emit Python code for Google Cirq.
+   * Gate coverage: H/X/Y/Z/S/T, rx/ry/rz, r2/r4/r8, u1/u3,
+   * CNOT/CZ/CY/CH/swap/CCNOT/CSWAP, crx/cry/crz/cu1/cu3.
+   * Throws for gpi/gpi2/ms/xx/yy/zz/xy/iswap/srswap/if.
+   */
+  toCirq(): string {
+    const ops: string[] = []
+
+    const gateOp = (gate: string, qs: number[]) =>
+      `    ${gate}(${qs.map(q => `q[${q}]`).join(', ')}),`
+    const rads = (r: number) => `rads=${pyAngle(r)}`
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    ops.push(gateOp('cirq.CNOT', [op.control, op.target]));  break
+        case 'swap':    ops.push(gateOp('cirq.SWAP', [op.a, op.b]));             break
+        case 'toffoli': ops.push(gateOp('cirq.CCNOT', [op.c1, op.c2, op.target])); break
+        case 'cswap':   ops.push(gateOp('cirq.CSWAP', [op.control, op.a, op.b])); break
+        case 'measure': throw new TypeError('measure ops cannot be serialized to Cirq via toCirc(); use cirq.measure() manually')
+        case 'reset':   throw new TypeError('reset ops cannot be serialized to Cirq via toCirq()')
+        case 'if':      throw new TypeError('if ops cannot be serialized to Cirq')
+        case 'two': {
+          const n = op.meta?.name
+          throw new TypeError(`Gate '${n ?? 'two'}' has no Cirq representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          switch (n) {
+            case 'h':   ops.push(gateOp('cirq.H', [q]));                         break
+            case 'x':   ops.push(gateOp('cirq.X', [q]));                         break
+            case 'y':   ops.push(gateOp('cirq.Y', [q]));                         break
+            case 'z':   ops.push(gateOp('cirq.Z', [q]));                         break
+            case 's':   ops.push(gateOp('cirq.S', [q]));                         break
+            case 'si':  ops.push(`    cirq.ZPowGate(exponent=-0.5)(q[${q}]),`);  break
+            case 't':   ops.push(gateOp('cirq.T', [q]));                         break
+            case 'ti':  ops.push(`    cirq.ZPowGate(exponent=-0.25)(q[${q}]),`); break
+            case 'v':   ops.push(`    cirq.X**0.5(q[${q}]),`);                   break
+            case 'vi':  ops.push(`    (cirq.X**-0.5)(q[${q}]),`);                break
+            case 'r2':  ops.push(`    cirq.rz(${rads(Math.PI / 2)})(q[${q}]),`); break
+            case 'r4':  ops.push(`    cirq.rz(${rads(Math.PI / 4)})(q[${q}]),`); break
+            case 'r8':  ops.push(`    cirq.rz(${rads(Math.PI / 8)})(q[${q}]),`); break
+            case 'rx':  ops.push(`    cirq.rx(${rads(p![0]!)})(q[${q}]),`);      break
+            case 'ry':  ops.push(`    cirq.ry(${rads(p![0]!)})(q[${q}]),`);      break
+            case 'rz':  ops.push(`    cirq.rz(${rads(p![0]!)})(q[${q}]),`);      break
+            case 'u1':  ops.push(`    cirq.ZPowGate(exponent=${pyAngle(p![0]! / Math.PI)})(q[${q}]),`); break
+            case 'u3':  throw new TypeError('U3 has no direct Cirq equivalent; use cirq.MatrixGate(np.array([...])) with the explicit unitary')
+            case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no Cirq representation`)
+            default:    throw new TypeError(`Gate '${n}' has no Cirq representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          switch (n) {
+            case 'cy':   ops.push(`    cirq.Y.controlled()(q[${c}], q[${t}]),`);                       break
+            case 'cz':   ops.push(gateOp('cirq.CZ', [c, t]));                                          break
+            case 'ch':   ops.push(`    cirq.H.controlled()(q[${c}], q[${t}]),`);                       break
+            case 'cr2':  ops.push(`    cirq.rz(${rads(Math.PI/2)}).controlled()(q[${c}], q[${t}]),`);  break
+            case 'cr4':  ops.push(`    cirq.rz(${rads(Math.PI/4)}).controlled()(q[${c}], q[${t}]),`);  break
+            case 'cr8':  ops.push(`    cirq.rz(${rads(Math.PI/8)}).controlled()(q[${c}], q[${t}]),`);  break
+            case 'crx':  ops.push(`    cirq.rx(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
+            case 'cry':  ops.push(`    cirq.ry(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
+            case 'crz':  ops.push(`    cirq.rz(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
+            case 'cu1':  ops.push(`    cirq.ZPowGate(exponent=${pyAngle(p![0]! / Math.PI)}).controlled()(q[${c}], q[${t}]),`); break
+            case 'cs':   ops.push(`    cirq.ZPowGate(exponent=0.5).controlled()(q[${c}], q[${t}]),`);  break
+            case 'ct':   ops.push(`    cirq.ZPowGate(exponent=0.25).controlled()(q[${c}], q[${t}]),`); break
+            case 'csdg': ops.push(`    cirq.ZPowGate(exponent=-0.5).controlled()(q[${c}], q[${t}]),`); break
+            case 'ctdg': ops.push(`    cirq.ZPowGate(exponent=-0.25).controlled()(q[${c}], q[${t}]),`);break
+            default:     throw new TypeError(`Gate '${n}' has no Cirq representation`)
+          }
+          break
+        }
+      }
+    }
+
+    const body = ops.length ? ops.join('\n') : '    # empty circuit'
+    return [
+      'import cirq',
+      'import math',
+      '',
+      `q = cirq.LineQubit.range(${this.qubits})`,
+      'circuit = cirq.Circuit([',
+      body,
+      '])',
+    ].join('\n')
+  }
+
+  /**
+   * Emit a Q# operation for Microsoft Azure Quantum.
+   * Gate coverage: H/X/Y/Z/S/T and adjoints, Rx/Ry/Rz, CNOT/CZ/SWAP/CCNOT,
+   * controlled rotations via Controlled Rx/Ry/Rz. Throws for gpi/gpi2/ms/two-qubit interaction gates/if.
+   */
+  toQSharp(): string {
+    const pi = 'PI()'
+    const a = (r: number) => fmtAngle(r, pi).replace(/(\d+)\*PI/, '$1.0*PI').replace(/PI\(?\)?\/(\d+)/, `PI()/${`$1`.padStart(1)}`)
+    // Q# needs float literals for division: PI()/2.0 not PI()/2
+    const qsharpAngle = (r: number): string => {
+      if (Math.abs(r) < 1e-14) return '0.0'
+      const f = r / Math.PI
+      for (const d of [1, 2, 3, 4, 6, 8, 12, 16]) {
+        for (let n = -16; n <= 16; n++) {
+          if (n === 0) continue
+          if (Math.abs(f - n / d) < 1e-12) {
+            const sign = n < 0 ? '-' : ''
+            const abs = Math.abs(n)
+            if (d === 1) return abs === 1 ? `${sign}PI()` : `${sign}${abs}.0*PI()`
+            return abs === 1 ? `${sign}PI()/${d}.0` : `${sign}${abs}.0*PI()/${d}.0`
+          }
+        }
+      }
+      return r.toFixed(15)
+    }
+
+    const body: string[] = []
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    body.push(`        CNOT(q[${op.control}], q[${op.target}]);`);                                         break
+        case 'swap':    body.push(`        SWAP(q[${op.a}], q[${op.b}]);`);                                                    break
+        case 'toffoli': body.push(`        CCNOT(q[${op.c1}], q[${op.c2}], q[${op.target}]);`);                               break
+        case 'cswap':   body.push(`        Controlled SWAP([q[${op.control}]], (q[${op.a}], q[${op.b}]));`);                   break
+        case 'measure': body.push(`        set ${op.creg}w${op.bit} = M(q[${op.q}]) == One;`);                                 break
+        case 'reset':   body.push(`        Reset(q[${op.q}]);`);                                                               break
+        case 'if':      throw new TypeError('if ops cannot be serialized to Q#')
+        case 'two':     throw new TypeError(`Gate '${op.meta?.name ?? 'two'}' has no Q# representation`)
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          const ang = () => qsharpAngle(p![0]!)
+          switch (n) {
+            case 'h':   body.push(`        H(q[${q}]);`);                                   break
+            case 'x':   body.push(`        X(q[${q}]);`);                                   break
+            case 'y':   body.push(`        Y(q[${q}]);`);                                   break
+            case 'z':   body.push(`        Z(q[${q}]);`);                                   break
+            case 's':   body.push(`        S(q[${q}]);`);                                   break
+            case 'si':  body.push(`        Adjoint S(q[${q}]);`);                           break
+            case 't':   body.push(`        T(q[${q}]);`);                                   break
+            case 'ti':  body.push(`        Adjoint T(q[${q}]);`);                           break
+            case 'v':   body.push(`        Rx(PI()/2.0, q[${q}]);`);                        break  // √X ≡ Rx(π/2) up to global phase
+            case 'vi':  body.push(`        Rx(-PI()/2.0, q[${q}]);`);                       break
+            case 'r2':  body.push(`        Rz(PI()/2.0, q[${q}]);`);                        break
+            case 'r4':  body.push(`        Rz(PI()/4.0, q[${q}]);`);                        break
+            case 'r8':  body.push(`        Rz(PI()/8.0, q[${q}]);`);                        break
+            case 'rx':  body.push(`        Rx(${ang()}, q[${q}]);`);                        break
+            case 'ry':  body.push(`        Ry(${ang()}, q[${q}]);`);                        break
+            case 'rz':  body.push(`        Rz(${ang()}, q[${q}]);`);                        break
+            case 'u1':  body.push(`        Rz(${ang()}, q[${q}]);`);                        break  // U1 = Rz up to global phase
+            case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no Q# representation`)
+            default:    throw new TypeError(`Gate '${n}' has no Q# representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          const ang = () => qsharpAngle(p![0]!)
+          switch (n) {
+            case 'cy':   body.push(`        Controlled Y([q[${c}]], q[${t}]);`);                    break
+            case 'cz':   body.push(`        CZ(q[${c}], q[${t}]);`);                               break
+            case 'ch':   body.push(`        Controlled H([q[${c}]], q[${t}]);`);                    break
+            case 'crx':  body.push(`        Controlled Rx([q[${c}]], (${ang()}, q[${t}]));`);       break
+            case 'cry':  body.push(`        Controlled Ry([q[${c}]], (${ang()}, q[${t}]));`);       break
+            case 'crz':  body.push(`        Controlled Rz([q[${c}]], (${ang()}, q[${t}]));`);       break
+            case 'cr2':  body.push(`        Controlled Rz([q[${c}]], (PI()/2.0, q[${t}]));`);      break
+            case 'cr4':  body.push(`        Controlled Rz([q[${c}]], (PI()/4.0, q[${t}]));`);      break
+            case 'cr8':  body.push(`        Controlled Rz([q[${c}]], (PI()/8.0, q[${t}]));`);      break
+            case 'cs':   body.push(`        Controlled S([q[${c}]], q[${t}]);`);                    break
+            case 'csdg': body.push(`        Controlled Adjoint S([q[${c}]], q[${t}]);`);            break
+            case 'ct':   body.push(`        Controlled T([q[${c}]], q[${t}]);`);                    break
+            case 'ctdg': body.push(`        Controlled Adjoint T([q[${c}]], q[${t}]);`);            break
+            case 'cu1':  body.push(`        Controlled Rz([q[${c}]], (${ang()}, q[${t}]));`);       break
+            default:     throw new TypeError(`Gate '${n}' has no Q# representation`)
+          }
+          break
+        }
+      }
+    }
+
+    const qregs = `        use q = Qubit[${this.qubits}];`
+    const reset = `        ResetAll(q);`
+    return [
+      'namespace KetCircuit {',
+      '    open Microsoft.Quantum.Intrinsic;',
+      '    open Microsoft.Quantum.Canon;',
+      '    open Microsoft.Quantum.Math;',
+      '',
+      '    operation Run() : Unit {',
+      qregs,
+      ...(body.length ? ['', ...body, ''] : []),
+      reset,
+      '    }',
+      '}',
+    ].join('\n')
+  }
+
+  /**
+   * Emit Python code for Rigetti's pyQuil.
+   * Gate coverage: H/X/Y/Z/S/T (Sdg/Tdg via DAGGER), RX/RY/RZ,
+   * CNOT/CZ/SWAP/CCNOT/CSWAP/ISWAP. Throws for controlled-rotation gates, U-gates, gpi/gpi2/ms/if.
+   */
+  toPyQuil(): string {
+    const used = new Set<string>()
+    const body: string[] = []
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    used.add('CNOT');  body.push(`p += CNOT(${op.control}, ${op.target})`);          break
+        case 'swap':    used.add('SWAP');  body.push(`p += SWAP(${op.a}, ${op.b})`);                     break
+        case 'toffoli': used.add('CCNOT'); body.push(`p += CCNOT(${op.c1}, ${op.c2}, ${op.target})`);   break
+        case 'cswap':   used.add('CSWAP'); body.push(`p += CSWAP(${op.control}, ${op.a}, ${op.b})`);    break
+        case 'measure': used.add('MEASURE'); body.push(`p += MEASURE(${op.q}, ro[${op.bit}])`);          break
+        case 'reset':   body.push(`p += RESET(${op.q})`);                                                break
+        case 'if':      throw new TypeError('if ops cannot be serialized to pyQuil')
+        case 'two': {
+          const n = op.meta?.name
+          if (n === 'iswap') { used.add('ISWAP'); body.push(`p += ISWAP(${op.a}, ${op.b})`); break }
+          throw new TypeError(`Gate '${n ?? 'two'}' has no pyQuil representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          const ang = (i = 0) => pyAngle(p![i]!)
+          switch (n) {
+            case 'h':   used.add('H');   body.push(`p += H(${q})`);              break
+            case 'x':   used.add('X');   body.push(`p += X(${q})`);              break
+            case 'y':   used.add('Y');   body.push(`p += Y(${q})`);              break
+            case 'z':   used.add('Z');   body.push(`p += Z(${q})`);              break
+            case 's':   used.add('S');   body.push(`p += S(${q})`);              break
+            case 'si':  used.add('S'); used.add('DAGGER');  body.push(`p += DAGGER(S)(${q})`); break
+            case 't':   used.add('T');   body.push(`p += T(${q})`);              break
+            case 'ti':  used.add('T'); used.add('DAGGER');  body.push(`p += DAGGER(T)(${q})`); break
+            case 'v':   used.add('RX');  body.push(`p += RX(math.pi/2, ${q})`); break  // √X up to global phase
+            case 'vi':  used.add('RX');  body.push(`p += RX(-math.pi/2, ${q})`);break
+            case 'r2':  used.add('RZ');  body.push(`p += RZ(math.pi/2, ${q})`); break
+            case 'r4':  used.add('RZ');  body.push(`p += RZ(math.pi/4, ${q})`); break
+            case 'r8':  used.add('RZ');  body.push(`p += RZ(math.pi/8, ${q})`); break
+            case 'rx':  used.add('RX');  body.push(`p += RX(${ang()}, ${q})`);   break
+            case 'ry':  used.add('RY');  body.push(`p += RY(${ang()}, ${q})`);   break
+            case 'rz':  used.add('RZ');  body.push(`p += RZ(${ang()}, ${q})`);   break
+            case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no pyQuil representation`)
+            default: throw new TypeError(`Gate '${n}' has no pyQuil representation`)
+          }
+          break
+        }
+        case 'controlled':
+          throw new TypeError(`Gate '${op.meta?.name ?? 'controlled'}' has no standard pyQuil representation`)
+      }
+    }
+
+    const gateImports = [...used].filter(g => g !== 'RESET' && g !== 'MEASURE').sort()
+    const extras: string[] = []
+    if (used.has('MEASURE')) extras.push('from pyquil.quilbase import MemoryReference')
+    if (used.has('RESET'))   extras.push('# Reset: use p += RESET() or p.reset() as appropriate')
+
+    return [
+      'from pyquil import Program',
+      gateImports.length ? `from pyquil.gates import ${gateImports.join(', ')}` : '',
+      ...extras,
+      'import math',
+      '',
+      'p = Program()',
+      ...body,
+    ].filter((l, i) => l !== '' || i > 3).join('\n')  // collapse leading blank lines
   }
 
   // ── Execution ────────────────────────────────────────────────────────────

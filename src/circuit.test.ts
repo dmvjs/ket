@@ -2062,6 +2062,248 @@ describe('QASM round-trip: toQASM() → fromQASM() → identical statevector', (
   })
 })
 
+// ─── Export targets (3c) ─────────────────────────────────────────────────────
+
+describe('toQiskit()', () => {
+  it('emits valid header', () => {
+    const q = new Circuit(2).toQiskit()
+    expect(q).toContain('from qiskit import QuantumCircuit')
+    expect(q).toContain('qc = QuantumCircuit(2)')
+  })
+
+  it('H + CNOT', () => {
+    const q = new Circuit(2).h(0).cnot(0, 1).toQiskit()
+    expect(q).toContain('qc.h(0)')
+    expect(q).toContain('qc.cx(0, 1)')
+  })
+
+  it('name aliases: si→sdg, ti→tdg, v→sx, vi→sxdg', () => {
+    const q = new Circuit(1).si(0).ti(0).v(0).vi(0).toQiskit()
+    expect(q).toContain('qc.sdg(0)')
+    expect(q).toContain('qc.tdg(0)')
+    expect(q).toContain('qc.sx(0)')
+    expect(q).toContain('qc.sxdg(0)')
+  })
+
+  it('r2/r4/r8 → qc.rz with π-fraction', () => {
+    const q = new Circuit(1).r2(0).r4(0).r8(0).toQiskit()
+    expect(q).toContain('qc.rz(math.pi/2, 0)')
+    expect(q).toContain('qc.rz(math.pi/4, 0)')
+    expect(q).toContain('qc.rz(math.pi/8, 0)')
+  })
+
+  it('rx/ry/rz with angle', () => {
+    const q = new Circuit(1).rx(Math.PI / 3, 0).toQiskit()
+    expect(q).toContain('qc.rx(math.pi/3, 0)')
+  })
+
+  it('crx/cry/crz controlled rotations', () => {
+    const q = new Circuit(2).crx(Math.PI / 2, 0, 1).crz(Math.PI / 4, 0, 1).toQiskit()
+    expect(q).toContain('qc.crx(math.pi/2, 0, 1)')
+    expect(q).toContain('qc.crz(math.pi/4, 0, 1)')
+  })
+
+  it('cr2/cr4/cr8 → crz with π-fraction', () => {
+    const q = new Circuit(2).cr2(0, 1).cr4(0, 1).toQiskit()
+    expect(q).toContain('qc.crz(math.pi/2, 0, 1)')
+    expect(q).toContain('qc.crz(math.pi/4, 0, 1)')
+  })
+
+  it('cs/ct/csdg/ctdg → cu1', () => {
+    const q = new Circuit(2).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1).toQiskit()
+    expect(q).toContain('qc.cu1(math.pi/2, 0, 1)')
+    expect(q).toContain('qc.cu1(math.pi/4, 0, 1)')
+    expect(q).toContain('qc.cu1(-math.pi/2, 0, 1)')
+    expect(q).toContain('qc.cu1(-math.pi/4, 0, 1)')
+  })
+
+  it('xx/yy/zz → rxx/ryy/rzz', () => {
+    const q = new Circuit(2).xx(Math.PI / 2, 0, 1).yy(Math.PI / 4, 0, 1).zz(Math.PI / 8, 0, 1).toQiskit()
+    expect(q).toContain('qc.rxx(math.pi/2, 0, 1)')
+    expect(q).toContain('qc.ryy(math.pi/4, 0, 1)')
+    expect(q).toContain('qc.rzz(math.pi/8, 0, 1)')
+  })
+
+  it('iswap → qc.iswap', () => {
+    const q = new Circuit(2).iswap(0, 1).toQiskit()
+    expect(q).toContain('qc.iswap(0, 1)')
+  })
+
+  it('ccx → qc.ccx, cswap → qc.cswap', () => {
+    const q = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).toQiskit()
+    expect(q).toContain('qc.ccx(0, 1, 2)')
+    expect(q).toContain('qc.cswap(0, 1, 2)')
+  })
+
+  it('measure and reset', () => {
+    const q = new Circuit(1).creg('c', 1).h(0).measure(0, 'c', 0).reset(0).toQiskit()
+    expect(q).toContain('qc.measure(0, c[0])')
+    expect(q).toContain('qc.reset(0)')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toQiskit()).toThrow(TypeError)
+  })
+
+  it('throws for ms', () => {
+    expect(() => new Circuit(2).ms(0, 0, 0, 1).toQiskit()).toThrow(TypeError)
+  })
+})
+
+describe('toCirq()', () => {
+  it('emits valid header', () => {
+    const c = new Circuit(2).toCirq()
+    expect(c).toContain('import cirq')
+    expect(c).toContain('q = cirq.LineQubit.range(2)')
+    expect(c).toContain('circuit = cirq.Circuit([')
+  })
+
+  it('H + CNOT', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1).toCirq()
+    expect(c).toContain('cirq.H(q[0])')
+    expect(c).toContain('cirq.CNOT(q[0], q[1])')
+  })
+
+  it('si → ZPowGate(-0.5), ti → ZPowGate(-0.25)', () => {
+    const c = new Circuit(1).si(0).ti(0).toCirq()
+    expect(c).toContain('ZPowGate(exponent=-0.5)')
+    expect(c).toContain('ZPowGate(exponent=-0.25)')
+  })
+
+  it('rx/ry/rz with rads=', () => {
+    const c = new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).toCirq()
+    expect(c).toContain('cirq.rx(rads=math.pi/2)')
+    expect(c).toContain('cirq.ry(rads=math.pi/4)')
+  })
+
+  it('cz → cirq.CZ', () => {
+    const c = new Circuit(2).h(0).cz(0, 1).toCirq()
+    expect(c).toContain('cirq.CZ(q[0], q[1])')
+  })
+
+  it('cy/ch via .controlled()', () => {
+    const c = new Circuit(2).cy(0, 1).ch(0, 1).toCirq()
+    expect(c).toContain('cirq.Y.controlled()')
+    expect(c).toContain('cirq.H.controlled()')
+  })
+
+  it('ccx → cirq.CCNOT, cswap → cirq.CSWAP', () => {
+    const c = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).toCirq()
+    expect(c).toContain('cirq.CCNOT(q[0], q[1], q[2])')
+    expect(c).toContain('cirq.CSWAP(q[0], q[1], q[2])')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toCirq()).toThrow(TypeError)
+  })
+
+  it('throws for xx (Cirq convention differs)', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 2, 0, 1).toCirq()).toThrow(TypeError)
+  })
+})
+
+describe('toQSharp()', () => {
+  it('emits valid Q# namespace', () => {
+    const q = new Circuit(2).toQSharp()
+    expect(q).toContain('namespace KetCircuit')
+    expect(q).toContain('open Microsoft.Quantum.Intrinsic')
+    expect(q).toContain('operation Run() : Unit')
+    expect(q).toContain('use q = Qubit[2]')
+    expect(q).toContain('ResetAll(q)')
+  })
+
+  it('H + CNOT', () => {
+    const q = new Circuit(2).h(0).cnot(0, 1).toQSharp()
+    expect(q).toContain('H(q[0])')
+    expect(q).toContain('CNOT(q[0], q[1])')
+  })
+
+  it('si → Adjoint S, ti → Adjoint T', () => {
+    const q = new Circuit(1).si(0).ti(0).toQSharp()
+    expect(q).toContain('Adjoint S(q[0])')
+    expect(q).toContain('Adjoint T(q[0])')
+  })
+
+  it('Rx/Ry/Rz with PI() fractions', () => {
+    const q = new Circuit(1).rx(Math.PI / 2, 0).rz(Math.PI / 4, 0).toQSharp()
+    expect(q).toContain('Rx(PI()/2.0, q[0])')
+    expect(q).toContain('Rz(PI()/4.0, q[0])')
+  })
+
+  it('cs/csdg → Controlled S / Controlled Adjoint S', () => {
+    const q = new Circuit(2).cs(0, 1).csdg(0, 1).ct(0, 1).ctdg(0, 1).toQSharp()
+    expect(q).toContain('Controlled S([q[0]], q[1])')
+    expect(q).toContain('Controlled Adjoint S([q[0]], q[1])')
+    expect(q).toContain('Controlled T([q[0]], q[1])')
+    expect(q).toContain('Controlled Adjoint T([q[0]], q[1])')
+  })
+
+  it('ccx → CCNOT, cswap → Controlled SWAP', () => {
+    const q = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).toQSharp()
+    expect(q).toContain('CCNOT(q[0], q[1], q[2])')
+    expect(q).toContain('Controlled SWAP([q[0]], (q[1], q[2]))')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toQSharp()).toThrow(TypeError)
+  })
+
+  it('throws for xx', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 2, 0, 1).toQSharp()).toThrow(TypeError)
+  })
+})
+
+describe('toPyQuil()', () => {
+  it('emits valid header', () => {
+    const q = new Circuit(2).toPyQuil()
+    expect(q).toContain('from pyquil import Program')
+    expect(q).toContain('p = Program()')
+  })
+
+  it('H + CNOT', () => {
+    const q = new Circuit(2).h(0).cnot(0, 1).toPyQuil()
+    expect(q).toContain('from pyquil.gates import')
+    // gates are sorted alphabetically in the import line
+    expect(q).toContain('CNOT')
+    expect(q).toContain('H')
+    expect(q).toContain('p += H(0)')
+    expect(q).toContain('p += CNOT(0, 1)')
+  })
+
+  it('si → DAGGER(S), ti → DAGGER(T)', () => {
+    const q = new Circuit(1).si(0).ti(0).toPyQuil()
+    expect(q).toContain('DAGGER(S)(0)')
+    expect(q).toContain('DAGGER(T)(0)')
+  })
+
+  it('RX/RY/RZ with math.pi fractions', () => {
+    const q = new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).toPyQuil()
+    expect(q).toContain('p += RX(math.pi/2, 0)')
+    expect(q).toContain('p += RY(math.pi/4, 0)')
+  })
+
+  it('iswap → ISWAP', () => {
+    const q = new Circuit(2).iswap(0, 1).toPyQuil()
+    expect(q).toContain('ISWAP')
+    expect(q).toContain('p += ISWAP(0, 1)')
+  })
+
+  it('ccx → CCNOT, cswap → CSWAP, swap → SWAP', () => {
+    const q = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).swap(0, 1).toPyQuil()
+    expect(q).toContain('p += CCNOT(0, 1, 2)')
+    expect(q).toContain('p += CSWAP(0, 1, 2)')
+    expect(q).toContain('p += SWAP(0, 1)')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toPyQuil()).toThrow(TypeError)
+  })
+
+  it('throws for controlled rotations (no standard pyQuil equivalent)', () => {
+    expect(() => new Circuit(2).crx(Math.PI / 2, 0, 1).toPyQuil()).toThrow(TypeError)
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {
