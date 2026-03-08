@@ -1,5 +1,9 @@
 # ket
 
+[![Test](https://github.com/dmvjs/ket/actions/workflows/test.yml/badge.svg)](https://github.com/dmvjs/ket/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@kirkelliott/ket)](https://www.npmjs.com/package/@kirkelliott/ket)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/export formats, zero dependencies.
 
 ## Why ket
