@@ -11,6 +11,7 @@ TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/ex
 - **Immutable by design** — every gate method returns a new `Circuit`. Safe to compose, branch, and reuse.
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
+- **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, and Trotterized Hamiltonian simulation ship with the core.
@@ -273,9 +274,14 @@ const iqftCircuit = iqft(4)
 const oracle = (c: Circuit) => c.cz(0, 1)  // mark |11⟩
 const search = grover(2, oracle)
 
-// Quantum Phase Estimation
-const tGate = new Circuit(1).t(0)
-const qpe = phaseEstimation(4, tGate)
+// Quantum Phase Estimation — estimates phase of T gate (φ = 1/8)
+// T|1⟩ = e^{iπ/4}|1⟩; controlled-T^{2^k} = CU1(π·2^k/4)
+// precision=3 counting qubits (q0–q2) + 1 target qubit (q3)
+const qpe = phaseEstimation(3,
+  (c, ctrl, pow, tgts) => c.cu1(Math.PI * pow / 4, ctrl, tgts[0]!), 1)
+// Initialise target qubit (q3) to eigenstate |1⟩ via initialState
+const result = qpe.run({ shots: 1000, seed: 42, initialState: '1000' })
+// Phase φ=1/8 → counting register = |001⟩ → dominant bitstring '1001'
 
 // Variational Quantum Eigensolver
 const ansatz = new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1)
@@ -480,10 +486,10 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-829 tests, ~200ms. Run with:
+858 tests, ~300ms. Run with:
 
 ```bash
 npm test
 ```
 
-The suite covers analytic correctness (known amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), algorithm outputs (QFT, Grover, QPE, VQE), BigInt correctness at qubit indices 30/31/40, and full import/export round-trips for all supported formats.
+The suite covers: analytic correctness (known complex amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), math primitive unit tests (`add`, `mul`, `conj`, `norm2`, etc.), qubit index bounds checking, algorithm output correctness (QFT phase amplitudes, Grover, QPE via the `phaseEstimation` API, VQE), BigInt correctness at qubit indices 30/31/40, Clifford word-boundary correctness at n=33, 191 error-path assertions, and full import/export round-trips for all 14 supported formats.
