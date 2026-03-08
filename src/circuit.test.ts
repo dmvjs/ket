@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit } from './circuit.js'
-import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter } from './algorithms.js'
+import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 
@@ -5880,5 +5880,57 @@ describe('trotter()', () => {
 
   it('returns a Circuit instance', () => {
     expect(trotter(1, [{ coeff: 1, ops: 'Z' }], 1.0)).toBeInstanceOf(Circuit)
+  })
+})
+
+// ─── qaoa() / maxCutHamiltonian() ─────────────────────────────────────────────
+
+describe('qaoa() + maxCutHamiltonian()', () => {
+  const EDGES: [number, number][] = [[0,1],[1,2],[2,3],[3,0]]  // 4-cycle
+
+  it('returns a Circuit instance', () => {
+    expect(qaoa(4, EDGES, [Math.PI/4], [Math.PI/8])).toBeInstanceOf(Circuit)
+  })
+
+  it('throws when gamma and beta have different lengths', () => {
+    expect(() => qaoa(4, EDGES, [0.1], [])).toThrow(TypeError)
+    expect(() => qaoa(4, EDGES, [], [0.1])).toThrow(TypeError)
+  })
+
+  it('p=0: uniform superposition over all 2^n states', () => {
+    const probs = qaoa(4, EDGES, [], []).exactProbs()
+    for (const p of Object.values(probs)) expect(p).toBeCloseTo(1/16, 10)
+  })
+
+  it('p=1: optimal bipartitions dominate for the 4-cycle', () => {
+    const probs = qaoa(4, EDGES, [Math.PI/4], [0.15 * Math.PI]).exactProbs()
+    // '1010' and '0101' are the optimal bipartitions (cut = 4)
+    expect(probs['1010'] ?? 0).toBeGreaterThan(0.20)
+    expect(probs['0101'] ?? 0).toBeGreaterThan(0.20)
+  })
+
+  it('expected cut beats random (2.0) for good p=1 angles on the 4-cycle', () => {
+    const H = maxCutHamiltonian(4, EDGES)
+    const energy = vqe(qaoa(4, EDGES, [Math.PI/4], [0.15 * Math.PI]), H)
+    expect(energy).toBeGreaterThan(2.5)  // random = 2, optimal = 4
+  })
+
+  it('maxCutHamiltonian: empty graph returns []', () => {
+    expect(maxCutHamiltonian(3, [])).toEqual([])
+  })
+
+  it('maxCutHamiltonian: term count = edges + 1 constant', () => {
+    expect(maxCutHamiltonian(4, EDGES)).toHaveLength(EDGES.length + 1)
+  })
+
+  it('maxCutHamiltonian: |0000⟩ has energy 0 (no cuts)', () => {
+    // |0000⟩ is a Z eigenstate with all +1 → ⟨ZZ⟩=+1 per edge → cut = (1-1)/2 = 0
+    const energy = vqe(new Circuit(4), maxCutHamiltonian(4, EDGES))
+    expect(energy).toBeCloseTo(0, 10)
+  })
+
+  it('no edges: expected cut = 0 for any circuit', () => {
+    const energy = vqe(qaoa(3, [], [0.5], [0.3]), maxCutHamiltonian(3, []))
+    expect(energy).toBeCloseTo(0, 10)
   })
 })

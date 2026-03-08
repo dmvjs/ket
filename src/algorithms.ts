@@ -218,6 +218,63 @@ export function trotter(
   return c
 }
 
+// ── QAOA Max-Cut ──────────────────────────────────────────────────────────────
+
+/**
+ * Max-Cut cost Hamiltonian as a Pauli-string sum.
+ *
+ * H_C = Σ_{(u,v)∈E} (I − Z_u·Z_v) / 2
+ *
+ * `vqe(qaoa(n, edges, gamma, beta), maxCutHamiltonian(n, edges))`
+ * returns the expected number of cut edges (exact, no sampling).
+ */
+export function maxCutHamiltonian(n: number, edges: readonly [number, number][]): PauliTerm[] {
+  if (edges.length === 0) return []
+  const terms: PauliTerm[] = [{ coeff: edges.length / 2, ops: 'I'.repeat(n) }]
+  for (const [u, v] of edges) {
+    const arr = Array<string>(n).fill('I')
+    arr[n - 1 - u] = 'Z'
+    arr[n - 1 - v] = 'Z'
+    terms.push({ coeff: -0.5, ops: arr.join('') })
+  }
+  return terms
+}
+
+/**
+ * QAOA circuit for Max-Cut (Farhi et al. 2014).
+ *
+ * Circuit: H^⊗n · [U_C(γ_l) · U_B(β_l)]_{l=0..p−1}
+ *
+ *   U_C(γ) = ∏_{(u,v)∈E} exp(iγ Z_u Z_v / 2)   cost unitary
+ *   U_B(β) = ∏_q exp(−iβ X_q)                   mixer unitary
+ *
+ * Optimise γ and β with `vqe` + a classical optimiser, or sweep analytically
+ * for small p. Larger p → better approximation ratio; p=1 already beats
+ * the Goemans–Williamson 0.878 SDP bound for some graph families.
+ *
+ * @param n      Number of nodes (qubits).
+ * @param edges  Graph edges — [u, v] pairs, 0-indexed.
+ * @param gamma  Cost angles, one per layer.
+ * @param beta   Mixer angles, one per layer (must equal gamma.length).
+ */
+export function qaoa(
+  n: number,
+  edges: readonly [number, number][],
+  gamma: readonly number[],
+  beta: readonly number[],
+): Circuit {
+  if (gamma.length !== beta.length) {
+    throw new TypeError(`gamma and beta must have equal length (got ${gamma.length} vs ${beta.length})`)
+  }
+  let c = new Circuit(n)
+  for (let q = 0; q < n; q++) c = c.h(q)
+  for (let l = 0; l < gamma.length; l++) {
+    for (const [u, v] of edges) c = c.cnot(u, v).rz(-gamma[l]!, v).cnot(u, v)
+    for (let q = 0; q < n; q++) c = c.rx(2 * beta[l]!, q)
+  }
+  return c
+}
+
 // ── Variational Quantum Eigensolver ───────────────────────────────────────────
 
 /**

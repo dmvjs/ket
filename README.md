@@ -263,7 +263,7 @@ circuit.dm({ noise: 'aria-1' })
 ## Algorithms
 
 ```typescript
-import { Circuit, qft, iqft, grover, phaseEstimation, vqe, trotter } from '@kirkelliott/ket'
+import { Circuit, qft, iqft, grover, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from '@kirkelliott/ket'
 
 // Quantum Fourier Transform
 const qftCircuit = qft(4)
@@ -282,15 +282,25 @@ const ansatz = new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1)
 const hamiltonian = [{ coeff: 0.5, ops: 'ZI' }, { coeff: 0.5, ops: 'IZ' }]
 const energy = vqe(ansatz, hamiltonian)  // ⟨ψ|H|ψ⟩
 
-// Trotterized Hamiltonian simulation
-// e^{-iHt} ≈ (∏_j e^{-iH_j·t/r})^r
+// Trotterized Hamiltonian simulation — e^{-iHt} ≈ (∏_j e^{-iH_j·t/r})^r
 const H = [{ coeff: 1.0, ops: 'ZZ' }, { coeff: 0.5, ops: 'XX' }]
 const evolution = trotter(2, H, Math.PI / 4, 4, 2)  // 4 steps, order 2
-// evolution is a Circuit approximating e^{-iHt}|ψ⟩
-evolution.exactProbs()  // measure the evolved state
+
+// QAOA Max-Cut — 4-cycle graph, p=1
+const edges: [number, number][] = [[0,1],[1,2],[2,3],[3,0]]
+const circuit = qaoa(4, edges, [Math.PI / 4], [0.15 * Math.PI])
+vqe(circuit, maxCutHamiltonian(4, edges))  // → ~2.95  (random = 2.0, optimal = 4.0)
+circuit.exactProbs()
+// Top states: '1010': 0.265, '0101': 0.265  ← the two optimal bipartitions
 ```
 
-`trotter(n, hamiltonian, t, steps?, order?)` implements the Lie–Trotter product formula (`order=1`) and the symmetric Trotter–Suzuki decomposition (`order=2`). The Hamiltonian is a list of `PauliTerm` objects — same convention as `vqe`: `ops[0]` acts on qubit n−1 (MSB), `ops[n−1]` on qubit 0 (LSB). Each term is exponentiated as a CNOT-ladder circuit with basis rotations (H for X, Rx(±π/2) for Y) and an Rz phase. Error scales as O(t²/r) for order 1 and O(t³/r²) for order 2.
+`trotter(n, hamiltonian, t, steps?, order?)` implements the Lie–Trotter product formula (`order=1`) and the symmetric Trotter–Suzuki decomposition (`order=2`). Error scales as O(t²/r) for order 1 and O(t³/r²) for order 2.
+
+`qaoa(n, edges, gamma, beta)` builds the QAOA circuit (Farhi et al. 2014) for the Max-Cut problem. Each layer applies a cost unitary (ZZ rotation per edge) and a mixer unitary (Rx per qubit). `maxCutHamiltonian(n, edges)` returns the corresponding Pauli-string Hamiltonian for `vqe` to evaluate the expected cut value exactly.
+
+QAOA p=1 circuit for a 4-cycle:
+
+![QAOA circuit](examples/svg/qaoa.svg)
 
 ## Visualization
 
@@ -470,7 +480,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-820 tests, ~200ms. Run with:
+829 tests, ~200ms. Run with:
 
 ```bash
 npm test
