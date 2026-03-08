@@ -777,7 +777,28 @@ export class Circuit {
   }
 
   #add(op: Op): Circuit {
+    this.#checkOp(op)
     return new Circuit(this.qubits, [...this.#ops, op], this.#cregs, this.#gates)
+  }
+
+  #checkOp(op: Op): void {
+    const q = (i: number) => {
+      if (i < 0 || i >= this.qubits)
+        throw new RangeError(`qubit index ${i} is out of range for a ${this.qubits}-qubit circuit`)
+    }
+    switch (op.kind) {
+      case 'single':     q(op.q); break
+      case 'cnot':       q(op.control); q(op.target); break
+      case 'swap':       q(op.a); q(op.b); break
+      case 'two':        q(op.a); q(op.b); break
+      case 'controlled': q(op.control); q(op.target); break
+      case 'toffoli':    q(op.c1); q(op.c2); q(op.target); break
+      case 'cswap':      q(op.control); q(op.a); q(op.b); break
+      case 'csrswap':    q(op.control); q(op.a); q(op.b); break
+      case 'measure':    q(op.q); break
+      case 'reset':      q(op.q); break
+      case 'barrier':    op.qubits.forEach(q); break
+    }
   }
 
   #ctrl(control: number, target: number, gate: Gate2x2, meta?: GateMeta): Circuit {
