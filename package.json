@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dmvjs/ket.git"
+    "url": "git+https://github.com/dmvjs/ket.git"
   },
   "homepage": "https://github.com/dmvjs/ket#readme",
   "bugs": {
