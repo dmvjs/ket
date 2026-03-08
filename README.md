@@ -34,10 +34,18 @@ Requires Node.js ≥ 22 for server-side use.
 
 ## Quick start
 
+```bash
+npm install @kirkelliott/ket
+```
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+```
+
 ### Bell state — draw and run
 
 ```typescript
-import { Circuit } from 'ket'
+import { Circuit } from '@kirkelliott/ket'
 
 const bell = new Circuit(2).h(0).cnot(0, 1)
 
@@ -64,7 +72,7 @@ const result = bell
 ### Noise and density matrix
 
 ```typescript
-import { Circuit } from 'ket'
+import { Circuit } from '@kirkelliott/ket'
 
 const circuit = new Circuit(2).h(0).cnot(0, 1)
 
@@ -189,7 +197,7 @@ The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density 
 ## Algorithms
 
 ```typescript
-import { Circuit, qft, iqft, grover, phaseEstimation, vqe } from 'ket'
+import { Circuit, qft, iqft, grover, phaseEstimation, vqe } from '@kirkelliott/ket'
 
 // Quantum Fourier Transform
 const qftCircuit = qft(4)
@@ -249,7 +257,7 @@ circuit.blochAngles(0)          // { theta, phi } via partial trace
 ## Classical control and named gates
 
 ```typescript
-import { Circuit } from 'ket'
+import { Circuit } from '@kirkelliott/ket'
 
 // Classical registers, measurement, and reset
 const c = new Circuit(2)
@@ -323,6 +331,14 @@ Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 7 run
 | — | — | — | run `workflow_dispatch` → Benchmark to populate |
 
 <!-- benchmark:end -->
+
+## How it works
+
+The statevector backend stores quantum state as a `Map<bigint, Complex>` — only basis states with non-zero amplitude are kept. A random 20-qubit circuit typically occupies far fewer than the theoretical 2²⁰ = 1M entries. Gate application iterates only over entries present in the map rather than allocating a full transformation matrix, so memory and time scale with actual entanglement rather than worst-case qubit count. BigInt keys eliminate the 32-bit overflow that silently corrupts state at qubit index 31 in integer-based simulators.
+
+The MPS backend represents state as a chain of tensors with a configurable bond dimension χ. Memory is O(n·χ²) instead of O(2ⁿ), which makes circuits with limited entanglement — like GHZ, QFT, and most hardware-native gate sequences — practical at 50–100+ qubits. The tradeoff is approximation error for highly entangled states; χ=2 is exact for GHZ, while general circuits need larger χ.
+
+The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse map, applying exact per-gate depolarizing channels without Monte Carlo sampling. Noiseless circuits take the fast path — zero overhead compared to the statevector backend.
 
 ## Testing
 
