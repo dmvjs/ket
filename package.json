@@ -2,11 +2,23 @@
   "name": "ket",
   "version": "0.1.0",
   "type": "module",
-  "description": "Quantum circuit simulation with IonQ-native gate names. BigInt statevector, no 32-bit limits.",
+  "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, three backends, 13 import/export formats, zero dependencies.",
+  "author": "dmvjs",
+  "license": "MIT",
+  "keywords": ["quantum", "quantum-computing", "quantum-circuit", "qasm", "qiskit", "ionq", "simulation", "typescript"],
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/ket.js",
+      "default": "./dist/ket.js"
+    }
   },
+  "types": "dist/index.d.ts",
+  "unpkg": "dist/ket.js",
+  "module": "dist/ket.js",
+  "files": ["dist"],
   "scripts": {
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js",
     "test": "vitest run",
     "dev": "vitest"
   },

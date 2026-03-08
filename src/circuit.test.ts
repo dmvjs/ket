@@ -4214,11 +4214,11 @@ describe('blochAngles()', () => {
     expect(phi).toBeCloseTo(0, 8)
   })
 
-  it('Rx(π/2)|0⟩: equator θ=π/2, φ=+π/2 (Bloch vector along +Y)', () => {
-    // Rx(π/2)|0⟩ = (1/√2)(|0⟩ - i|1⟩); ρ₀₁ = -i/2 → ry = +1 → φ = π/2
+  it('Rx(π/2)|0⟩: equator θ=π/2, φ=−π/2 (Bloch vector along −Y)', () => {
+    // Rx(π/2)|0⟩ = (1/√2)(|0⟩ − i|1⟩); ρ[0][1] = i/2, ry = −2·Im(ρ[0][1]) = −1 → φ = −π/2
     const { theta, phi } = new Circuit(1).rx(Math.PI / 2, 0).blochAngles(0)
     expect(theta).toBeCloseTo(Math.PI / 2, 8)
-    expect(phi).toBeCloseTo(Math.PI / 2, 8)
+    expect(phi).toBeCloseTo(-Math.PI / 2, 8)
   })
 
   it('Ry(π/3)|0⟩: θ=π/3', () => {
@@ -4462,5 +4462,439 @@ describe('toLatex()', () => {
     expect(tex).toContain('\\gate{H}')
     expect(tex).toContain('\\ctrl{1}')
     expect(tex).toContain('\\targ{}')
+  })
+})
+
+// ─── Density matrix ───────────────────────────────────────────────────────────
+
+describe('dm() — pure state', () => {
+  it('|0⟩ has purity 1', () => {
+    const dm = new Circuit(1).dm()
+    expect(dm.purity()).toBeCloseTo(1, 10)
+  })
+
+  it('|1⟩ has purity 1', () => {
+    const dm = new Circuit(1).x(0).dm()
+    expect(dm.purity()).toBeCloseTo(1, 10)
+  })
+
+  it('|+⟩ has purity 1', () => {
+    const dm = new Circuit(1).h(0).dm()
+    expect(dm.purity()).toBeCloseTo(1, 10)
+  })
+
+  it('Bell state has purity 1', () => {
+    const dm = new Circuit(2).h(0).cnot(0, 1).dm()
+    expect(dm.purity()).toBeCloseTo(1, 10)
+  })
+
+  it('|0⟩ probabilities match statevector', () => {
+    const c  = new Circuit(1)
+    const dm = c.dm()
+    const sv = c.statevector()
+    expect(dm.probabilities()['0']).toBeCloseTo(1, 10)
+    expect(dm.probabilities()['1']).toBeUndefined()
+  })
+
+  it('|1⟩ probabilities correct', () => {
+    const dm = new Circuit(1).x(0).dm()
+    expect(dm.probabilities()['0']).toBeUndefined()
+    expect(dm.probabilities()['1']).toBeCloseTo(1, 10)
+  })
+
+  it('|+⟩ has 50/50 probabilities', () => {
+    const dm = new Circuit(1).h(0).dm()
+    expect(dm.probabilities()['0']).toBeCloseTo(0.5, 10)
+    expect(dm.probabilities()['1']).toBeCloseTo(0.5, 10)
+  })
+
+  it('Bell state probabilities match', () => {
+    const dm   = new Circuit(2).h(0).cnot(0, 1).dm()
+    const prob = dm.probabilities()
+    expect(prob['00']).toBeCloseTo(0.5, 10)
+    expect(prob['11']).toBeCloseTo(0.5, 10)
+    expect(prob['01']).toBeUndefined()
+    expect(prob['10']).toBeUndefined()
+  })
+
+  it('probabilities match exactProbs() for a 3-qubit circuit', () => {
+    const c     = new Circuit(3).h(0).h(1).h(2)
+    const exact = c.exactProbs()
+    const prob  = c.dm().probabilities()
+    for (const [bs, p] of Object.entries(exact)) {
+      expect(prob[bs]).toBeCloseTo(p, 10)
+    }
+  })
+
+  it('|0⟩ entropy is 0 bits', () => {
+    expect(new Circuit(1).dm().entropy()).toBeCloseTo(0, 10)
+  })
+
+  it('|+⟩ entropy is 0 bits (pure state)', () => {
+    expect(new Circuit(1).h(0).dm().entropy()).toBeCloseTo(0, 10)
+  })
+
+  it('Bell state entropy is 0 bits (pure bipartite state)', () => {
+    expect(new Circuit(2).h(0).cnot(0, 1).dm().entropy()).toBeCloseTo(0, 10)
+  })
+
+  it('blochAngles |0⟩ → θ=0', () => {
+    const { theta } = new Circuit(1).dm().blochAngles(0)
+    expect(theta).toBeCloseTo(0, 10)
+  })
+
+  it('blochAngles |1⟩ → θ=π', () => {
+    const { theta } = new Circuit(1).x(0).dm().blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI, 10)
+  })
+
+  it('blochAngles |+⟩ → θ=π/2, φ=0', () => {
+    const { theta, phi } = new Circuit(1).h(0).dm().blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI / 2, 10)
+    expect(phi).toBeCloseTo(0, 10)
+  })
+
+  it('blochAngles matches circuit.blochAngles() for |+⟩', () => {
+    const c   = new Circuit(1).h(0)
+    const sv  = c.blochAngles(0)
+    const dm  = c.dm().blochAngles(0)
+    expect(dm.theta).toBeCloseTo(sv.theta, 8)
+    expect(dm.phi).toBeCloseTo(sv.phi, 8)
+  })
+
+  it('blochAngles matches circuit.blochAngles() for Rx(π/3)|0⟩', () => {
+    const c  = new Circuit(1).rx(Math.PI / 3, 0)
+    const sv = c.blochAngles(0)
+    const dm = c.dm().blochAngles(0)
+    expect(dm.theta).toBeCloseTo(sv.theta, 8)
+    expect(dm.phi).toBeCloseTo(sv.phi, 8)
+  })
+
+  it('dm().get() returns correct amplitude for |0⟩ state', () => {
+    const dm = new Circuit(1).dm()
+    expect(dm.get(0n, 0n).re).toBeCloseTo(1, 10)
+    expect(dm.get(1n, 1n).re).toBeCloseTo(0, 10)
+    expect(dm.get(0n, 1n).re).toBeCloseTo(0, 10)
+  })
+
+  it('rejects circuits with measure ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).dm()
+    ).toThrow(TypeError)
+  })
+
+  it('throws for unknown device profile', () => {
+    expect(() =>
+      new Circuit(1).h(0).dm({ noise: 'nonexistent-device' })
+    ).toThrow(TypeError)
+  })
+})
+
+describe('dm() — noisy circuit', () => {
+  it('depolarizing noise reduces purity below 1', () => {
+    const pure  = new Circuit(1).h(0).dm()
+    const noisy = new Circuit(1).h(0).dm({ noise: { p1: 0.1 } })
+    expect(pure.purity()).toBeCloseTo(1, 8)
+    expect(noisy.purity()).toBeLessThan(1)
+  })
+
+  it('higher noise → lower purity (monotone)', () => {
+    const p1 = new Circuit(1).h(0).dm({ noise: { p1: 0.01 } }).purity()
+    const p2 = new Circuit(1).h(0).dm({ noise: { p1: 0.10 } }).purity()
+    const p3 = new Circuit(1).h(0).dm({ noise: { p1: 0.30 } }).purity()
+    expect(p1).toBeGreaterThan(p2)
+    expect(p2).toBeGreaterThan(p3)
+  })
+
+  it('p1=0 gives same result as noiseless', () => {
+    const a = new Circuit(1).h(0).dm({ noise: { p1: 0 } }).purity()
+    const b = new Circuit(1).h(0).dm().purity()
+    expect(a).toBeCloseTo(b, 10)
+  })
+
+  it('single-qubit depolarizing damps off-diagonal to (1−4p/3)', () => {
+    // After H, ρ = [[0.5, 0.5],[0.5, 0.5]]
+    // After depolarize1(p=0.1), ρ[0][1] → (1−4·0.1/3)·0.5 = (1−2/15)·0.5
+    const p   = 0.1
+    const dm  = new Circuit(1).h(0).dm({ noise: { p1: p } })
+    const od  = dm.get(0n, 1n).re
+    const expected = (1 - 4 * p / 3) * 0.5
+    expect(od).toBeCloseTo(expected, 8)
+  })
+
+  it('two-qubit depolarizing noise reduces purity after CNOT', () => {
+    const pure  = new Circuit(2).h(0).cnot(0, 1).dm()
+    const noisy = new Circuit(2).h(0).cnot(0, 1).dm({ noise: { p2: 0.05 } })
+    expect(pure.purity()).toBeCloseTo(1, 8)
+    expect(noisy.purity()).toBeLessThan(1)
+  })
+
+  it('named device profile aria-1 produces non-trivial noise', () => {
+    const pure  = new Circuit(2).h(0).cnot(0, 1).dm()
+    const noisy = new Circuit(2).h(0).cnot(0, 1).dm({ noise: 'aria-1' })
+    expect(noisy.purity()).toBeLessThan(pure.purity())
+  })
+
+  it('named device profile forte-1 produces less noise than harmony', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const forte   = c.dm({ noise: 'forte-1' }).purity()
+    const harmony = c.dm({ noise: 'harmony' }).purity()
+    expect(forte).toBeGreaterThan(harmony)
+  })
+
+  it('noisy entropy is greater than 0 and less than 1 for partially depolarized state', () => {
+    // H then depolarize(p1=0.2): off-diagonal → (1−4·0.2/3)·0.5 ≈ 0.367; eigenvalues ≈ 0.867/0.133; S ≈ 0.6 bits
+    const S = new Circuit(1).h(0).dm({ noise: { p1: 0.2 } }).entropy()
+    expect(S).toBeGreaterThan(0)
+    expect(S).toBeLessThan(1)
+  })
+
+  it('maximally mixed state has entropy = 1 bit', () => {
+    // H then depolarize(p1=0.75): off-diagonal → (1−4·0.75/3)·0.5 = 0; diagonal stays 0.5 each → maximally mixed
+    const dm = new Circuit(1).h(0).dm({ noise: { p1: 0.75 } })
+    expect(dm.entropy()).toBeCloseTo(1, 6)
+  })
+
+  it('probabilities still sum to 1 under noise', () => {
+    const prob = new Circuit(2).h(0).cnot(0, 1).dm({ noise: { p1: 0.05, p2: 0.05 } }).probabilities()
+    const total = Object.values(prob).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 8)
+  })
+})
+
+// ─── Gate aliases ─────────────────────────────────────────────────────────────
+
+describe('sdg / tdg aliases', () => {
+  it('sdg is identical to si', () => {
+    const a = new Circuit(1).s(0).sdg(0).exactProbs()
+    const b = new Circuit(1).exactProbs()
+    expect(a['0']).toBeCloseTo(b['0']!, 10)
+  })
+  it('tdg is identical to ti', () => {
+    const a = new Circuit(1).t(0).tdg(0).exactProbs()
+    const b = new Circuit(1).exactProbs()
+    expect(a['0']).toBeCloseTo(b['0']!, 10)
+  })
+  it('sdg round-trips through JSON with name preserved', () => {
+    const c = new Circuit(1).sdg(0)
+    const r = Circuit.fromJSON(c.toJSON())
+    expect(JSON.stringify(c.exactProbs())).toBe(JSON.stringify(r.exactProbs()))
+  })
+})
+
+describe('srn / srndg aliases', () => {
+  it('srn·srn = X', () => {
+    const probs = new Circuit(1).srn(0).srn(0).exactProbs()
+    expect(probs['1']).toBeCloseTo(1, 10)
+  })
+  it('srndg is inverse of srn', () => {
+    const probs = new Circuit(1).srn(0).srndg(0).exactProbs()
+    expect(probs['0']).toBeCloseTo(1, 10)
+  })
+  it('srn round-trips through JSON', () => {
+    const c = new Circuit(1).srn(0)
+    const r = Circuit.fromJSON(c.toJSON())
+    expect(JSON.stringify(c.exactProbs())).toBe(JSON.stringify(r.exactProbs()))
+  })
+})
+
+describe('p gate (Qiskit 1.0+ phase gate)', () => {
+  it('p(π) = Z (same probabilities as z)', () => {
+    // H·P(π)·H|0⟩ = H·Z·H|0⟩ = X|0⟩ = |1⟩
+    const pz = new Circuit(1).h(0).p(Math.PI, 0).h(0).exactProbs()
+    expect(pz['1'] ?? 0).toBeCloseTo(1, 10)
+    expect(pz['0'] ?? 0).toBeCloseTo(0, 10)
+  })
+  it('p(π/2) = S up to global phase (same probabilities)', () => {
+    const ps = new Circuit(1).h(0).p(Math.PI / 2, 0).exactProbs()
+    const s  = new Circuit(1).h(0).s(0).exactProbs()
+    for (const k of Object.keys(ps)) {
+      expect(ps[k]!).toBeCloseTo(s[k] ?? 0, 10)
+    }
+  })
+  it('p round-trips through JSON', () => {
+    const c = new Circuit(1).p(Math.PI / 3, 0)
+    const r = Circuit.fromJSON(c.toJSON())
+    expect(JSON.stringify(c.exactProbs())).toBe(JSON.stringify(r.exactProbs()))
+  })
+})
+
+describe('csrn (controlled-√NOT)', () => {
+  it('control=|0⟩ → target unchanged', () => {
+    const probs = new Circuit(2).csrn(0, 1).exactProbs()
+    expect(probs['00']).toBeCloseTo(1, 10)
+  })
+  it('control=|1⟩ → target gets √X', () => {
+    // x(0) sets q0=1 → bitstring '01' (IonQ: q0 rightmost); csrn(0,1) applies √X to q1
+    // √X|0⟩ = ½(1+i)|0⟩ + ½(1−i)|1⟩ — each with prob 0.5
+    const probs = new Circuit(2).x(0).csrn(0, 1).exactProbs()
+    expect(probs['01'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['11'] ?? 0).toBeCloseTo(0.5, 10)
+  })
+  it('two csrn = cx (controlled-X)', () => {
+    // C-√X · C-√X = CX
+    const cx    = new Circuit(2).x(0).cx(0, 1).exactProbs()
+    const csrn2 = new Circuit(2).x(0).csrn(0, 1).csrn(0, 1).exactProbs()
+    for (const k of Object.keys(cx)) {
+      expect(csrn2[k] ?? 0).toBeCloseTo(cx[k]!, 10)
+    }
+  })
+  it('round-trips through JSON', () => {
+    const c = new Circuit(2).x(0).csrn(0, 1)
+    const r = Circuit.fromJSON(c.toJSON())
+    expect(JSON.stringify(c.exactProbs())).toBe(JSON.stringify(r.exactProbs()))
+  })
+})
+
+describe('barrier', () => {
+  it('has no effect on the statevector', () => {
+    const a = new Circuit(2).h(0).cnot(0, 1).exactProbs()
+    const b = new Circuit(2).h(0).barrier(0, 1).cnot(0, 1).exactProbs()
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+  it('no-arg barrier barriers all qubits', () => {
+    const a = new Circuit(3).h(0).cnot(0, 1).exactProbs()
+    const b = new Circuit(3).h(0).barrier().cnot(0, 1).exactProbs()
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+  it('emits barrier in QASM output', () => {
+    const qasm = new Circuit(2).h(0).barrier(0, 1).cnot(0, 1).toQASM()
+    expect(qasm).toContain('barrier q[0],q[1];')
+  })
+  it('round-trips through JSON', () => {
+    const c = new Circuit(2).h(0).barrier(0, 1).cnot(0, 1)
+    const r = Circuit.fromJSON(c.toJSON())
+    expect(JSON.stringify(c.exactProbs())).toBe(JSON.stringify(r.exactProbs()))
+  })
+})
+
+// ─── OpenQASM 3.0 import ──────────────────────────────────────────────────────
+
+describe('fromQASM — QASM 3.0 syntax', () => {
+  // Typical Qiskit 3.x QASM 3.0 Bell state export
+  const bellQASM3 = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+bit[2] meas;
+h q[0];
+cx q[0], q[1];
+barrier q[0], q[1];
+meas[0] = measure q[0];
+meas[1] = measure q[1];
+`
+
+  it('parses qubit[N] declaration', () => {
+    const c = Circuit.fromQASM(bellQASM3)
+    expect(c.qubits).toBe(2)
+  })
+
+  it('parses bit[N] classical register', () => {
+    const c = Circuit.fromQASM(bellQASM3)
+    const r = c.run({ shots: 100, seed: 1 })
+    // Distribution.cregs holds per-bit probabilities for classical registers
+    expect(r.cregs['meas']).toBeDefined()
+  })
+
+  it('parses assignment-form measure (c[j] = measure q[i])', () => {
+    const c = Circuit.fromQASM(bellQASM3)
+    const r = c.run({ shots: 500, seed: 42 })
+    // Bell state collapses to |00⟩ or |11⟩ only
+    expect(Object.keys(r.probs).every(k => k === '00' || k === '11')).toBe(true)
+  })
+
+  it('parses barrier (recorded as op, no simulation effect)', () => {
+    // Use the quantum-only part (no measures) to call exactProbs
+    const src = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+h q[0];
+barrier q[0], q[1];
+cx q[0], q[1];
+`
+    const withBarrier    = Circuit.fromQASM(src).exactProbs()
+    const withoutBarrier = new Circuit(2).h(0).cnot(0, 1).exactProbs()
+    expect(JSON.stringify(withBarrier)).toBe(JSON.stringify(withoutBarrier))
+  })
+
+  it('produces same probabilities as equivalent 2.0 circuit', () => {
+    const qasm2 = `
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+`
+    const qasm3 = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+h q[0];
+cx q[0], q[1];
+`
+    const p2 = Circuit.fromQASM(qasm2).exactProbs()
+    const p3 = Circuit.fromQASM(qasm3).exactProbs()
+    expect(JSON.stringify(p2)).toBe(JSON.stringify(p3))
+  })
+
+  it('parses p gate (Qiskit phase gate)', () => {
+    const src = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[1] q;
+x q[0];
+p(pi) q[0];
+`
+    // x|0⟩ = |1⟩, p(π)|1⟩ = -|1⟩ → prob('1') = 1
+    const probs = Circuit.fromQASM(src).exactProbs()
+    expect(probs['1'] ?? 0).toBeCloseTo(1, 10)
+  })
+
+  it('parses sx gate (√X)', () => {
+    const src = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[1] q;
+sx q[0];
+sx q[0];
+`
+    // sx·sx = X, so |0⟩ → |1⟩
+    const probs = Circuit.fromQASM(src).exactProbs()
+    expect(probs['1'] ?? 0).toBeCloseTo(1, 10)
+  })
+
+  it('parses sdg gate', () => {
+    const src = `
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[1] q;
+s q[0];
+sdg q[0];
+`
+    // s·sdg = I
+    const probs = Circuit.fromQASM(src).exactProbs()
+    expect(probs['0'] ?? 0).toBeCloseTo(1, 10)
+  })
+
+  it('strips block comments', () => {
+    const src = `
+OPENQASM 3.0;
+/* This is a block comment */
+qubit[1] q;
+/* another comment */ h q[0]; /* trailing */
+`
+    const probs = Circuit.fromQASM(src).exactProbs()
+    expect(probs['0'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['1'] ?? 0).toBeCloseTo(0.5, 10)
+  })
+
+  it('parses single qubit[1] q declaration', () => {
+    const src = `
+OPENQASM 3.0;
+qubit[1] q;
+h q[0];
+`
+    expect(Circuit.fromQASM(src).qubits).toBe(1)
   })
 })

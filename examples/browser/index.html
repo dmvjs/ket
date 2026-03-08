@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ket — quantum circuit simulator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d0d0f;
+      color: #e8e8e8;
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+
+    .page { max-width: 780px; margin: 0 auto; }
+
+    h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 0.25rem; }
+    h1 span { color: #6ee7f7; }
+    .tagline { color: #888; margin-bottom: 2.5rem; font-size: 0.95rem; }
+
+    h2 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #6ee7f7;
+      margin: 2.5rem 0 0.75rem;
+    }
+
+    .card {
+      background: #161618;
+      border: 1px solid #2a2a2e;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    pre {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      color: #d4d4d4;
+      line-height: 1.5;
+    }
+
+    .label { color: #888; font-size: 0.78rem; margin-bottom: 0.4rem; }
+
+    table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+    th { text-align: left; color: #888; font-weight: 500; padding: 0.25rem 0.75rem 0.25rem 0; border-bottom: 1px solid #2a2a2e; }
+    td { padding: 0.3rem 0.75rem 0.3rem 0; border-bottom: 1px solid #1e1e20; }
+    td:last-child { text-align: right; color: #6ee7f7; font-family: monospace; }
+
+    .bar { display: inline-block; height: 10px; background: #6ee7f7; border-radius: 2px; vertical-align: middle; }
+
+    svg { max-width: 100%; height: auto; display: block; }
+
+    .loading { color: #555; font-size: 0.85rem; }
+
+    footer { margin-top: 3rem; color: #444; font-size: 0.8rem; text-align: center; }
+    footer a { color: #6ee7f7; text-decoration: none; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <h1><span>ket</span></h1>
+  <p class="tagline">Quantum circuit simulator — running in your browser, no server required.</p>
+
+  <h2>Bell State</h2>
+  <div class="card">
+    <p class="label">Circuit diagram</p>
+    <pre id="bell-draw" class="loading">loading…</pre>
+  </div>
+  <div class="card">
+    <p class="label">SVG export</p>
+    <div id="bell-svg" class="loading" style="font-size:0.85rem;color:#555">loading…</div>
+  </div>
+  <div class="card">
+    <p class="label">Measurement probabilities</p>
+    <table id="bell-probs"><tr><th>State</th><th>Probability</th><th></th></tr></table>
+  </div>
+
+  <h2>Grover Search — 2 qubits, oracle marks |11⟩</h2>
+  <div class="card">
+    <p class="label">Amplified probabilities</p>
+    <table id="grover-probs"><tr><th>State</th><th>Probability</th><th></th></tr></table>
+  </div>
+
+  <h2>Quantum Fourier Transform — 4 qubits</h2>
+  <div class="card">
+    <p class="label">Circuit diagram</p>
+    <pre id="qft-draw" class="loading">loading…</pre>
+  </div>
+
+  <h2>Noise — Bell state under aria-1 device profile</h2>
+  <div class="card">
+    <table id="noise-table">
+      <tr><th>Metric</th><th>Noiseless</th><th>aria-1</th></tr>
+    </table>
+  </div>
+
+  <h2>Export — OpenQASM 2.0</h2>
+  <div class="card">
+    <pre id="qasm-out" class="loading">loading…</pre>
+  </div>
+
+  <footer>
+    <a href="https://github.com/dmvjs/ket">github.com/dmvjs/ket</a>
+    &nbsp;·&nbsp;
+    Zero dependencies &nbsp;·&nbsp; ESM &nbsp;·&nbsp; TypeScript
+  </footer>
+</div>
+
+<script type="module">
+  import { Circuit, qft, grover } from 'https://unpkg.com/ket/dist/ket.js'
+
+  // ── Bell state ──────────────────────────────────────────────────────────────
+  const bell = new Circuit(2).h(0).cnot(0, 1)
+
+  document.getElementById('bell-draw').textContent = bell.draw()
+  document.getElementById('bell-draw').classList.remove('loading')
+
+  document.getElementById('bell-svg').innerHTML = bell.toSVG()
+  document.getElementById('bell-svg').classList.remove('loading')
+
+  const bellProbs = bell.exactProbs()
+  const bellTable = document.getElementById('bell-probs')
+  for (const [bs, p] of Object.entries(bellProbs).sort()) {
+    const row = bellTable.insertRow()
+    row.insertCell().textContent = `|${bs}⟩`
+    row.insertCell().textContent = `${(p * 100).toFixed(1)}%`
+    const barCell = row.insertCell()
+    const bar = document.createElement('span')
+    bar.className = 'bar'
+    bar.style.width = `${p * 120}px`
+    barCell.appendChild(bar)
+  }
+
+  // ── Grover ──────────────────────────────────────────────────────────────────
+  const search = grover(2, c => c.cz(0, 1))
+  const groverProbs = search.exactProbs()
+  const groverTable = document.getElementById('grover-probs')
+  for (const [bs, p] of Object.entries(groverProbs).sort()) {
+    const row = groverTable.insertRow()
+    row.insertCell().textContent = `|${bs}⟩`
+    row.insertCell().textContent = `${(p * 100).toFixed(1)}%`
+    const barCell = row.insertCell()
+    const bar = document.createElement('span')
+    bar.className = 'bar'
+    bar.style.width = `${p * 120}px`
+    barCell.appendChild(bar)
+  }
+
+  // ── QFT ─────────────────────────────────────────────────────────────────────
+  document.getElementById('qft-draw').textContent = qft(4).draw()
+  document.getElementById('qft-draw').classList.remove('loading')
+
+  // ── Noise ───────────────────────────────────────────────────────────────────
+  const pure  = bell.dm()
+  const noisy = bell.dm({ noise: 'aria-1' })
+  const noiseTable = document.getElementById('noise-table')
+  for (const [label, p, n] of [
+    ['Purity',  pure.purity(),  noisy.purity()],
+    ['Entropy', pure.entropy(), noisy.entropy()],
+  ]) {
+    const row = noiseTable.insertRow()
+    row.insertCell().textContent = label
+    row.insertCell().textContent = p.toFixed(6)
+    row.insertCell().textContent = n.toFixed(6)
+  }
+
+  // ── QASM export ─────────────────────────────────────────────────────────────
+  document.getElementById('qasm-out').textContent = bell.toQASM()
+  document.getElementById('qasm-out').classList.remove('loading')
+</script>
+</body>
+</html>

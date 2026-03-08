@@ -9,6 +9,7 @@ import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
 import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
+import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -28,7 +29,9 @@ type ResetOp      = { kind: 'reset';      q: number }
 type IfOp         = { kind: 'if';         creg: string; value: number; ops: readonly Op[] }
 /** A user-defined named gate applied to a specific set of parent-circuit qubits. */
 type SubcircuitOp = { kind: 'subcircuit'; name: string; qubits: readonly number[]; def: readonly Op[] }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp
+/** Scheduling/grouping hint — no effect on the statevector; emitted as `barrier` in QASM. */
+type BarrierOp    = { kind: 'barrier';    qubits: readonly number[] }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp
 
 // ─── Mid-circuit measurement helpers ─────────────────────────────────────────
 
@@ -55,7 +58,7 @@ function collapseQubit(sv: StateVector, q: number, rand: number): { outcome: 0 |
 
 /** Sample one basis-state index from a statevector using a uniform random number. */
 function sampleSV(sv: StateVector, rand: number): bigint {
-  const sorted = sv.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
+  const sorted = Array.from(sv.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
   let cum = 0
   for (const [idx, amp] of sorted) {
     cum += amp.re * amp.re + amp.im * amp.im
@@ -147,7 +150,7 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
       const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
       sv = next
       if (outcome === 1) sv = applySingle(sv, op.q, G.X)
-    } else {  // if
+    } else if (op.kind === 'if') {
       if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
     }
   }
@@ -306,7 +309,7 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
   const [p0, p1, p2] = params
   switch (name) {
     case 'id':      return c.id(a!)
-    case 'barrier': return c           // scheduling hint — no simulation effect
+    case 'barrier': return qs.length ? c.barrier(...qs) : c.barrier()
     case 'h':     return c.h(a!)
     case 'x':     return c.x(a!)
     case 'y':     return c.y(a!)
@@ -317,6 +320,9 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
     case 'tdg':   return c.ti(a!)
     case 'sx':    return c.v(a!)
     case 'sxdg':  return c.vi(a!)
+    case 'srn':   return c.srn(a!)
+    case 'srndg': return c.srndg(a!)
+    case 'p':     return c.p(p0!, a!)
     case 'rx':    return c.rx(p0!, a!)
     case 'ry':    return c.ry(p0!, a!)
     case 'rz':    return c.rz(p0!, a!)
@@ -336,6 +342,7 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
     case 'swap':  return c.swap(a!, b!)
     case 'ccx':   return c.ccx(a!, b!, d!)
     case 'cswap': return c.cswap(a!, b!, d!)
+    case 'csrn':  return c.csrn(a!, b!)
     default: throw new TypeError(`Unknown QASM gate: '${name}'`)
   }
 }
@@ -359,12 +366,15 @@ function gate2x2FromMeta(name: string, params: readonly number[]): Gate2x2 {
   const p = params
   switch (name) {
     case 'h':    return G.H;  case 'x':   return G.X;  case 'y': return G.Y;  case 'z': return G.Z
-    case 's':    return G.S;  case 'si':  return G.Si; case 't': return G.T;  case 'ti': return G.Ti
-    case 'v':    return G.V;  case 'vi':  return G.Vi; case 'id': return G.Id
+    case 's':    return G.S;  case 'si':  return G.Si; case 'sdg': return G.Si
+    case 't':    return G.T;  case 'ti':  return G.Ti; case 'tdg': return G.Ti
+    case 'v':    return G.V;  case 'vi':  return G.Vi; case 'srn': return G.V; case 'srndg': return G.Vi
+    case 'sx':   return G.V;  case 'sxdg': return G.Vi
+    case 'id':   return G.Id
     case 'rx':   return G.Rx(p[0]!);   case 'ry': return G.Ry(p[0]!); case 'rz': return G.Rz(p[0]!)
     case 'vz':   return G.Rz(p[0]!)   // VirtualZ ≡ Rz
     case 'r2':   return G.R2;          case 'r4': return G.R4;         case 'r8': return G.R8
-    case 'u1':   return G.U1(p[0]!)
+    case 'u1':   return G.U1(p[0]!);  case 'p': return G.U1(p[0]!)   // P gate = U1 (Qiskit 1.0+)
     case 'u2':   return G.U2(p[0]!, p[1]!)
     case 'u3':   return G.U3(p[0]!, p[1]!, p[2]!)
     case 'gpi':  return G.Gpi(p[0]!);  case 'gpi2': return G.Gpi2(p[0]!)
@@ -398,6 +408,7 @@ function ctrlGate2x2FromMeta(name: string, params: readonly number[]): Gate2x2 {
     case 'cu3':  return G.U3(p[0]!, p[1]!, p[2]!)
     case 'cs':   return G.S;  case 'ct':   return G.T;  case 'csdg': return G.Si; case 'ctdg': return G.Ti
     case 'cr2':  return G.R2; case 'cr4':  return G.R4; case 'cr8':  return G.R8
+    case 'csrn': return G.V   // Controlled-√NOT
     default: throw new TypeError(`fromJSON: unknown controlled gate '${name}'`)
   }
 }
@@ -437,6 +448,8 @@ function opsFromJSON(raw: readonly unknown[]): Op[] {
         return { kind: 'if', creg: o['creg'] as string, value: o['value'] as number, ops: opsFromJSON(o['ops'] as unknown[]) } satisfies IfOp
       case 'subcircuit':
         return { kind: 'subcircuit', name: o['name'] as string, qubits: o['qubits'] as number[], def: opsFromJSON(o['def'] as unknown[]) } satisfies SubcircuitOp
+      case 'barrier':
+        return { kind: 'barrier', qubits: o['qubits'] as number[] } satisfies BarrierOp
       default:
         throw new TypeError(`fromJSON: unknown op kind '${kind}'`)
     }
@@ -459,6 +472,7 @@ function opsToJSON(ops: readonly Op[]): unknown[] {
       case 'reset':      return { kind: 'reset', q: op.q }
       case 'if':         return { kind: 'if', creg: op.creg, value: op.value, ops: opsToJSON(op.ops) }
       case 'subcircuit': return { kind: 'subcircuit', name: op.name, qubits: [...op.qubits], def: opsToJSON(op.def) }
+      case 'barrier':    return { kind: 'barrier', qubits: [...op.qubits] }
     }
   })
 }
@@ -544,6 +558,7 @@ function opQubits(op: Op): number[] {
     case 'csrswap':    return [op.control, op.a, op.b]
     case 'measure':    return [op.q]
     case 'reset':      return [op.q]
+    case 'barrier':    return [...op.qubits]
     case 'subcircuit': return [...op.qubits]
     default:           return []
   }
@@ -599,6 +614,7 @@ function opLabel(op: Op, q: number): string {
     case 'csrswap':    return op.control === q ? '●' : '√SW'
     case 'measure':    return 'M'
     case 'reset':      return '|0⟩'
+    case 'barrier':    return '░'
     case 'subcircuit': return op.name
     default:           return '?'
   }
@@ -729,7 +745,7 @@ export class Circuit {
   }
 
   #ctrl(control: number, target: number, gate: Gate2x2, meta?: GateMeta): Circuit {
-    return this.#add({ kind: 'controlled', control, target, gate, meta })
+    return this.#add({ kind: 'controlled', control, target, gate, ...(meta !== undefined && { meta }) })
   }
 
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
@@ -741,12 +757,20 @@ export class Circuit {
   x(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.X,  meta: { name: 'x'  } }) }
   y(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Y,  meta: { name: 'y'  } }) }
   z(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Z,  meta: { name: 'z'  } }) }
-  s(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.S,  meta: { name: 's'  } }) }
-  si(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'si' } }) }
-  t(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.T,  meta: { name: 't'  } }) }
-  ti(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'ti' } }) }
-  v(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'v'  } }) }
-  vi(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'vi' } }) }
+  s(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.S,  meta: { name: 's'     } }) }
+  si(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'si'    } }) }
+  /** S† — alias `sdg` (quantum-circuit / Qiskit convention). */
+  sdg(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'sdg'   } }) }
+  t(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.T,  meta: { name: 't'     } }) }
+  ti(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'ti'    } }) }
+  /** T† — alias `tdg` (quantum-circuit / Qiskit convention). */
+  tdg(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'tdg'   } }) }
+  v(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'v'     } }) }
+  vi(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'vi'    } }) }
+  /** √NOT — alias `srn` (quantum-circuit convention); same as `v`. */
+  srn(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'srn'   } }) }
+  /** (√NOT)† — alias `srndg` (quantum-circuit convention); same as `vi`. */
+  srndg(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'srndg' } }) }
 
   // ── Rotation gates ───────────────────────────────────────────────────────
 
@@ -776,6 +800,9 @@ export class Circuit {
 
   /** U1(λ) — phase gate; equal to Rz(λ) up to global phase. */
   u1(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'u1', params: [lambda] } }) }
+
+  /** P(λ) — phase gate alias for U1(λ); Qiskit 1.0+ name. P(π) = Z, P(π/2) = S, P(π/4) = T. */
+  p(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'p', params: [lambda] } }) }
 
   /** U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H. */
   u2(phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda), meta: { name: 'u2', params: [phi, lambda] } }) }
@@ -860,6 +887,9 @@ export class Circuit {
   csdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Si, { name: 'csdg' }) }
   ctdg(control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ti, { name: 'ctdg' }) }
 
+  /** Controlled-√NOT (C-V); applies V = √X to target when control is |1⟩. */
+  csrn(control: number, target: number): Circuit { return this.#ctrl(control, target, G.V,  { name: 'csrn' }) }
+
   // ── Native IonQ gates ────────────────────────────────────────────────────
 
   /** GPI(φ) — IonQ hardware-native single-qubit gate. GPI(0) = X, GPI(π/2) = Y. */
@@ -888,6 +918,18 @@ export class Circuit {
   /** C-√iSWAP: apply √iSWAP to qubits a and b if control is |1⟩. Completes the three-qubit gate set. */
   csrswap(control: number, a: number, b: number): Circuit {
     return this.#add({ kind: 'csrswap', control, a, b })
+  }
+
+  // ── Scheduling hints ─────────────────────────────────────────────────────
+
+  /**
+   * Barrier — scheduling/grouping hint with no effect on the statevector.
+   * In QASM export it emits `barrier q[a],q[b],...;`. Pass the qubit indices to barrier.
+   * Calling with no arguments barriers all qubits.
+   */
+  barrier(...qubits: number[]): Circuit {
+    const qs = qubits.length ? qubits : Array.from({ length: this.qubits }, (_, i) => i)
+    return this.#add({ kind: 'barrier', qubits: qs })
   }
 
   // ── Statevector inspection ────────────────────────────────────────────────
@@ -928,7 +970,7 @@ export class Circuit {
     for (const [idx, amp] of sv) {
       const p = amp.re * amp.re + amp.im * amp.im
       for (let q = 0; q < this.qubits; q++) {
-        if ((idx >> BigInt(q)) & 1n) out[q] += p
+        if ((idx >> BigInt(q)) & 1n) out[q]! += p
       }
     }
     return out
@@ -1200,6 +1242,7 @@ export class Circuit {
         case 'csrswap': throw new TypeError("Gate 'csrswap' has no OpenQASM 2.0 representation")
         case 'measure': lines.push(`measure q[${op.q}] -> ${op.creg}[${op.bit}];`); break
         case 'reset':   lines.push(`reset q[${op.q}];`); break
+        case 'barrier': lines.push(`barrier ${op.qubits.map(q => `q[${q}]`).join(',')};`); break
         case 'if':      throw new TypeError('if ops cannot be serialized to OpenQASM 2.0')
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
@@ -1227,14 +1270,21 @@ export class Circuit {
   }
 
   /**
-   * Parse an OpenQASM 2.0 string into a `Circuit`.
+   * Parse an OpenQASM 2.0 or 3.0 string into a `Circuit`. Auto-detects the version.
    *
-   * Supports: qreg/creg, all qelib1.inc gates, measure, reset, single-line comments.
-   * Does not support: gate definitions, barrier, opaque, if statements, multi-qubit qregs.
+   * **2.0 syntax supported:** `qreg`/`creg`, `measure q[i] -> c[j]`, `//` comments,
+   * all qelib1.inc gates (h, x, cx, rz, u1, u2, u3, ccx, cswap, …).
+   *
+   * **3.0 syntax supported:** qubit[N]/bit[N] declarations, "c[j] = measure q[i]"
+   * assignment form, block comments, stdgates.inc, p/sx/sdg/tdg gate names.
+   *
+   * Not supported: gate definitions (`gate foo …`), gate modifiers (`ctrl @`, `inv @`),
+   * `if`/`else` blocks, `gphase`, multi-register qubit indexing.
    */
   static fromQASM(source: string): Circuit {
-    // Strip single-line comments, split into statements
+    // Strip block comments then single-line comments; split into statements
     const stmts = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/[^\n]*/g, '')
       .split(';')
       .map(s => s.trim())
@@ -1243,24 +1293,40 @@ export class Circuit {
     let qubits = 0
     const cregSizes = new Map<string, number>()
 
-    // First pass: collect qreg / creg declarations
+    // First pass: collect register declarations (both 2.0 and 3.0 syntax)
     for (const stmt of stmts) {
-      const qr = stmt.match(/^qreg\s+\w+\[(\d+)\]$/)
-      if (qr) { qubits = parseInt(qr[1]!); continue }
-      const cr = stmt.match(/^creg\s+(\w+)\[(\d+)\]$/)
-      if (cr) cregSizes.set(cr[1]!, parseInt(cr[2]!))
+      // QASM 2.0: qreg q[N]
+      const qr2 = stmt.match(/^qreg\s+\w+\[(\d+)\]$/)
+      if (qr2) { qubits += parseInt(qr2[1]!); continue }
+
+      // QASM 3.0: qubit[N] q  |  qubit q  (single qubit)
+      const qr3 = stmt.match(/^qubit(?:\[(\d+)\])?\s+\w+$/)
+      if (qr3) { qubits += parseInt(qr3[1] ?? '1'); continue }
+
+      // QASM 2.0: creg name[N]
+      const cr2 = stmt.match(/^creg\s+(\w+)\[(\d+)\]$/)
+      if (cr2) { cregSizes.set(cr2[1]!, parseInt(cr2[2]!)); continue }
+
+      // QASM 3.0: bit[N] name  |  bit name
+      const cr3 = stmt.match(/^bit(?:\[(\d+)\])?\s+(\w+)$/)
+      if (cr3) { cregSizes.set(cr3[2]!, parseInt(cr3[1] ?? '1')); continue }
     }
 
     let c = new Circuit(qubits)
     for (const [name, size] of cregSizes) c = c.creg(name, size)
 
-    // Second pass: apply gates
+    // Second pass: apply gates and operations
     for (const stmt of stmts) {
-      if (/^(OPENQASM|include|qreg|creg)\b/.test(stmt)) continue
+      // Skip header / declaration lines
+      if (/^(OPENQASM|include|qreg|creg|qubit|bit)\b/.test(stmt)) continue
 
-      // measure q[i] -> creg[j]
-      const meas = stmt.match(/^measure\s+\w+\[(\d+)\]\s*->\s*(\w+)\[(\d+)\]$/)
-      if (meas) { c = c.measure(parseInt(meas[1]!), meas[2]!, parseInt(meas[3]!)); continue }
+      // QASM 2.0: measure q[i] -> c[j]
+      const meas2 = stmt.match(/^measure\s+\w+\[(\d+)\]\s*->\s*(\w+)\[(\d+)\]$/)
+      if (meas2) { c = c.measure(parseInt(meas2[1]!), meas2[2]!, parseInt(meas2[3]!)); continue }
+
+      // QASM 3.0: c[j] = measure q[i]
+      const meas3 = stmt.match(/^(\w+)\[(\d+)\]\s*=\s*measure\s+\w+\[(\d+)\]$/)
+      if (meas3) { c = c.measure(parseInt(meas3[3]!), meas3[1]!, parseInt(meas3[2]!)); continue }
 
       // reset q[i]
       const rst = stmt.match(/^reset\s+\w+\[(\d+)\]$/)
@@ -2324,14 +2390,14 @@ export class Circuit {
       })() : noise
 
     const cregCounts = new Map<string, number[]>(
-      this.#cregs.entries().map(([name, size]) => [name, new Array<number>(size).fill(0)])
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
 
     // ── Fast path: pure circuit without noise — simulate once, sample N times ──
     if (!noiseParams && !this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       const sv     = simulatePure(this.#ops, this.qubits)
       const probs  = probabilities(sv)
-      const sorted = probs.entries().toArray().toSorted(([a], [b]) => (a < b ? -1 : 1))
+      const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
 
       const cdf: { idx: bigint; cumP: number }[] = []
       let cum = 0
@@ -2365,7 +2431,7 @@ export class Circuit {
 
     for (let i = 0; i < shots; i++) {
       const shotCregs = new Map<string, boolean[]>(
-        this.#cregs.entries().map(([name, size]) => [name, new Array<boolean>(size).fill(false)])
+        Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
       )
 
       const sv = applyOps(this.#ops, zero(this.qubits), shotCregs, rng, noiseParams)
@@ -2426,7 +2492,7 @@ export class Circuit {
     }
 
     const cregCounts = new Map<string, number[]>(
-      this.#cregs.entries().map(([name, size]) => [name, new Array<number>(size).fill(0)])
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
     return new Distribution(this.qubits, shots, counts, cregCounts)
   }
@@ -2561,7 +2627,7 @@ export class Circuit {
     const colW = Array.from({ length: numCols }, (_, c) => {
       let w = 1
       for (let q = 0; q < n; q++) {
-        const lbl = label[q]![c]
+        const lbl = label[q]![c]!
         if (lbl !== null && lbl !== '') w = Math.max(w, lbl.length)
       }
       return w
@@ -2574,7 +2640,7 @@ export class Circuit {
     for (let q = 0; q < n; q++) {
       let line = `q${q}: `.padStart(prefixW)
       for (let c = 0; c < numCols; c++) {
-        const lbl = label[q]![c]
+        const lbl = label[q]![c]!
         const w   = colW[c]!
         if (lbl === '' || lbl === null) {
           // wire
@@ -2758,9 +2824,9 @@ export class Circuit {
       rho00   += amp0.re * amp0.re + amp0.im * amp0.im
       if (amp1) {
         rho11   += amp1.re * amp1.re + amp1.im * amp1.im
-        // ρ₀₁ = Σ ψ(idx0)* · ψ(idx0|mask)
+        // ρ₀₁ = Σ ψ(idx0) · ψ(idx0|mask)*  →  Re = amp0·Re(conj(amp1)),  Im = Im(amp0·conj(amp1))
         rho01re += amp0.re * amp1.re + amp0.im * amp1.im
-        rho01im += amp0.re * amp1.im - amp0.im * amp1.re
+        rho01im += amp0.im * amp1.re - amp0.re * amp1.im
       }
     }
     // Also accumulate rho11 for basis states where qubit q=1 but no q=0 counterpart is in sv
@@ -2783,5 +2849,37 @@ export class Circuit {
     const theta = Math.acos(Math.max(-1, Math.min(1, rz)))
     const phi   = Math.atan2(ry, rx)
     return { theta, phi }
+  }
+
+  /**
+   * Simulate the circuit as an exact density matrix and return it.
+   *
+   * Unlike `run()` (which samples) and `statevector()` (which is pure-state only),
+   * `dm()` computes the full ρ = |ψ⟩⟨ψ| evolution and applies optional per-gate
+   * depolarizing noise channels exactly — no sampling, no variance.
+   *
+   * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   * Complexity: O(4ⁿ) — practical up to ~12 qubits.
+   *
+   * @param options.noise  Device name (`'aria-1'` / `'forte-1'` / `'harmony'`) or
+   *                       `{ p1?, p2? }` noise parameters.
+   */
+  dm(options?: { noise?: DmNoiseParams | string }): DensityMatrix {
+    if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError('dm() requires a pure circuit — remove measure/reset/if ops')
+    }
+
+    const { noise } = options ?? {}
+    const noiseParams: DmNoiseParams | undefined =
+      noise == null           ? undefined :
+      typeof noise === 'string' ? (() => {
+        const p = DM_DEVICE_NOISE[noise]
+        if (!p) throw new TypeError(`Unknown device profile '${noise}'. Known: ${Object.keys(DM_DEVICE_NOISE).join(', ')}`)
+        return p
+      })() : noise
+
+    // DmOp is a structural subset of Op; safety guaranteed by the classical-op guard above.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return runDM(flattenOps(this.#ops) as any, this.qubits, noiseParams)
   }
 }
