@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (555 tests, ~200ms)**
+**Test suite (583 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -50,6 +50,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - `cu2(φ,λ)`: completes cu1/cu2/cu3 family; QASM round-trip, Qiskit export with params
 - `stateAsString()`: human-readable amplitude listing; handles real/imaginary/complex, omits near-zero terms
 - `defineGate(name, sub)` / `gate(name, ...qubits)` / `decompose()`: named sub-circuit gates with qubit remapping; nested composition; auto-flattened for simulation; serialization via decompose()
+- `toJSON()` / `Circuit.fromJSON(json)`: lossless versioned JSON round-trip; gate matrices reconstructed from meta on load; supports all op types including measure/reset/if/subcircuit; accepts string or parsed object
 
 ---
 

@@ -3836,6 +3836,228 @@ describe('vqe — Variational Quantum Eigensolver', () => {
   })
 })
 
+// ─── toJSON() / fromJSON() ────────────────────────────────────────────────────
+
+/** Round-trip a circuit through JSON and verify statevector fidelity. */
+function roundTrip(c: Circuit): Circuit { return Circuit.fromJSON(c.toJSON()) }
+function svFidelity(a: Circuit, b: Circuit): number {
+  const sa = a.statevector(), sb = b.statevector()
+  let re = 0, im = 0
+  for (const [idx, amp] of sa) {
+    const other = sb.get(idx)
+    if (other) { re += amp.re * other.re + amp.im * other.im; im += amp.re * other.im - amp.im * other.re }
+  }
+  return re * re + im * im
+}
+
+describe('toJSON() / fromJSON()', () => {
+  it('schema version is 1', () => {
+    expect(new Circuit(1).h(0).toJSON().ket).toBe(1)
+  })
+
+  it('preserves qubit count', () => {
+    expect(roundTrip(new Circuit(3)).qubits).toBe(3)
+  })
+
+  it('empty circuit round-trips', () => {
+    const c = roundTrip(new Circuit(2))
+    expect(c.qubits).toBe(2)
+    expect(svFidelity(new Circuit(2), c)).toBeCloseTo(1, 10)
+  })
+
+  it('single-qubit gates — all named gates', () => {
+    for (const build of [
+      (c: Circuit) => c.h(0), (c: Circuit) => c.x(0), (c: Circuit) => c.y(0),
+      (c: Circuit) => c.z(0), (c: Circuit) => c.s(0), (c: Circuit) => c.si(0),
+      (c: Circuit) => c.t(0), (c: Circuit) => c.ti(0), (c: Circuit) => c.v(0),
+      (c: Circuit) => c.vi(0), (c: Circuit) => c.id(0),
+    ]) {
+      const orig = build(new Circuit(1))
+      expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('parameterized single-qubit gates preserve angle exactly', () => {
+    const theta = Math.PI / 7
+    for (const build of [
+      (c: Circuit) => c.rx(theta, 0),
+      (c: Circuit) => c.ry(theta, 0),
+      (c: Circuit) => c.rz(theta, 0),
+      (c: Circuit) => c.u1(theta, 0),
+      (c: Circuit) => c.u2(theta, theta, 0),
+      (c: Circuit) => c.u3(theta, theta, theta, 0),
+      (c: Circuit) => c.gpi(theta, 0),
+      (c: Circuit) => c.gpi2(theta, 0),
+    ]) {
+      const orig = build(new Circuit(1))
+      expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('vz round-trips as rz semantics', () => {
+    const orig = new Circuit(1).vz(Math.PI / 5, 0)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('r2 / r4 / r8 round-trip', () => {
+    const orig = new Circuit(1).r2(0).r4(0).r8(0)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('CNOT round-trips', () => {
+    const orig = new Circuit(2).h(0).cnot(0, 1)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('SWAP round-trips', () => {
+    const orig = new Circuit(2).x(0).swap(0, 1)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('two-qubit interaction gates — all types', () => {
+    const theta = Math.PI / 4
+    for (const build of [
+      (c: Circuit) => c.xx(theta, 0, 1),
+      (c: Circuit) => c.yy(theta, 0, 1),
+      (c: Circuit) => c.zz(theta, 0, 1),
+      (c: Circuit) => c.xy(theta, 0, 1),
+      (c: Circuit) => c.iswap(0, 1),
+      (c: Circuit) => c.srswap(0, 1),
+      (c: Circuit) => c.ms(theta, theta, 0, 1),
+    ]) {
+      const orig = build(new Circuit(2))
+      expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('controlled single-qubit gates — full family', () => {
+    const theta = Math.PI / 5
+    for (const build of [
+      (c: Circuit) => c.cx(0, 1), (c: Circuit) => c.cy(0, 1), (c: Circuit) => c.cz(0, 1),
+      (c: Circuit) => c.ch(0, 1), (c: Circuit) => c.crx(theta, 0, 1), (c: Circuit) => c.cry(theta, 0, 1),
+      (c: Circuit) => c.crz(theta, 0, 1), (c: Circuit) => c.cu1(theta, 0, 1),
+      (c: Circuit) => c.cu2(theta, theta, 0, 1), (c: Circuit) => c.cu3(theta, theta, theta, 0, 1),
+      (c: Circuit) => c.cs(0, 1), (c: Circuit) => c.ct(0, 1),
+      (c: Circuit) => c.csdg(0, 1), (c: Circuit) => c.ctdg(0, 1),
+      (c: Circuit) => c.cr2(0, 1), (c: Circuit) => c.cr4(0, 1), (c: Circuit) => c.cr8(0, 1),
+    ]) {
+      const orig = build(new Circuit(2).h(0))
+      expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('Toffoli (ccx) round-trips', () => {
+    const orig = new Circuit(3).x(0).x(1).ccx(0, 1, 2)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('Fredkin (cswap) round-trips', () => {
+    const orig = new Circuit(3).x(0).x(1).cswap(0, 1, 2)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('csrswap round-trips', () => {
+    const orig = new Circuit(3).x(0).csrswap(0, 1, 2)
+    expect(svFidelity(orig, roundTrip(orig))).toBeCloseTo(1, 10)
+  })
+
+  it('classical registers preserved', () => {
+    const json = new Circuit(2).creg('c', 2).toJSON()
+    expect(json.cregs['c']).toBe(2)
+    const loaded = Circuit.fromJSON(json)
+    // Can call measure without error (creg is registered)
+    expect(() => loaded.measure(0, 'c', 0)).not.toThrow()
+  })
+
+  it('measure / reset / if ops round-trip', () => {
+    const orig = new Circuit(2)
+      .creg('c', 1)
+      .h(0)
+      .measure(0, 'c', 0)
+      .if('c', 1, c => c.x(1))
+      .reset(0)
+    const loaded = Circuit.fromJSON(orig.toJSON())
+    // Both circuits produce same shot distribution with fixed seed
+    const r1 = orig.run({ shots: 200, seed: 99 })
+    const r2 = loaded.run({ shots: 200, seed: 99 })
+    expect(r1.probs).toEqual(r2.probs)
+  })
+
+  it('named sub-circuit gates preserved and functional', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const orig = new Circuit(4).defineGate('bell', bell).gate('bell', 0, 1).gate('bell', 2, 3)
+    const loaded = Circuit.fromJSON(orig.toJSON())
+    expect(svFidelity(orig, loaded)).toBeCloseTo(1, 10)
+    // named gate is in the loaded registry
+    expect(loaded.toJSON().gates['bell']).toBeDefined()
+  })
+
+  it('deeply nested gate definitions round-trip', () => {
+    const inner = new Circuit(1).h(0).z(0)
+    const outer = new Circuit(2).defineGate('inner', inner).gate('inner', 0).gate('inner', 1)
+    expect(svFidelity(outer, roundTrip(outer))).toBeCloseTo(1, 10)
+  })
+
+  it('fromJSON accepts a JSON string', () => {
+    const orig = new Circuit(1).h(0)
+    const loaded = Circuit.fromJSON(JSON.stringify(orig.toJSON()))
+    expect(svFidelity(orig, loaded)).toBeCloseTo(1, 10)
+  })
+
+  it('round-tripped circuit supports draw()', () => {
+    const loaded = roundTrip(new Circuit(2).h(0).cnot(0, 1))
+    expect(() => loaded.draw()).not.toThrow()
+    expect(loaded.draw()).toContain('H')
+  })
+
+  it('round-tripped circuit supports toSVG()', () => {
+    const loaded = roundTrip(new Circuit(2).h(0).cnot(0, 1))
+    expect(loaded.toSVG()).toMatch(/^<svg /)
+  })
+
+  it('round-tripped circuit supports toQASM()', () => {
+    const loaded = roundTrip(new Circuit(2).h(0).cnot(0, 1))
+    expect(loaded.toQASM()).toContain('OPENQASM')
+  })
+
+  it('round-tripped circuit supports run()', () => {
+    const orig = new Circuit(2).h(0).cnot(0, 1)
+    const loaded = roundTrip(orig)
+    const r1 = orig.run({ shots: 1000, seed: 7 })
+    const r2 = loaded.run({ shots: 1000, seed: 7 })
+    expect(r1.probs).toEqual(r2.probs)
+  })
+
+  it('throws on unsupported schema version', () => {
+    expect(() => Circuit.fromJSON({ ket: 2 as 1, qubits: 1, cregs: {}, gates: {}, ops: [] })).toThrow(TypeError)
+  })
+
+  it('throws on unknown op kind', () => {
+    const json = new Circuit(1).h(0).toJSON()
+    const bad = { ...json, ops: [{ kind: 'teleport', q: 0 }] }
+    expect(() => Circuit.fromJSON(bad as unknown as typeof json)).toThrow(TypeError)
+  })
+
+  it('throws on unknown gate name', () => {
+    const json = new Circuit(1).h(0).toJSON()
+    const bad = { ...json, ops: [{ kind: 'single', q: 0, meta: { name: 'banana' } }] }
+    expect(() => Circuit.fromJSON(bad as unknown as typeof json)).toThrow(TypeError)
+  })
+
+  it('JSON output has no gate matrices — only meta', () => {
+    const j = new Circuit(1).rx(Math.PI / 3, 0).toJSON()
+    const op = j.ops[0] as Record<string, unknown>
+    expect(op['gate']).toBeUndefined()
+    expect((op['meta'] as Record<string, unknown>)['name']).toBe('rx')
+  })
+
+  it('GHZ-5 statevector fidelity after round-trip', () => {
+    let c = new Circuit(5).h(0)
+    for (let i = 0; i < 4; i++) c = c.cnot(i, i + 1)
+    expect(svFidelity(c, roundTrip(c))).toBeCloseTo(1, 10)
+  })
+})
+
 // ─── draw() ───────────────────────────────────────────────────────────────────
 
 describe('draw()', () => {

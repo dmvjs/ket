@@ -340,6 +340,129 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
   }
 }
 
+// ─── JSON serialization helpers ───────────────────────────────────────────────
+
+/** The versioned JSON schema produced by `circuit.toJSON()` and consumed by `Circuit.fromJSON()`. */
+export interface CircuitJSON {
+  /** Format version — always 1 in this release. */
+  readonly ket: 1
+  readonly qubits: number
+  /** Classical register sizes: `{ c: 2 }` means register "c" has 2 bits. */
+  readonly cregs: Readonly<Record<string, number>>
+  /** Named gate definitions registered via `defineGate()`. */
+  readonly gates: Readonly<Record<string, { readonly qubits: number; readonly ops: readonly unknown[] }>>
+  readonly ops: readonly unknown[]
+}
+
+/** Reconstruct the Gate2x2 matrix for a single-qubit op from its serialized meta. */
+function gate2x2FromMeta(name: string, params: readonly number[]): Gate2x2 {
+  const p = params
+  switch (name) {
+    case 'h':    return G.H;  case 'x':   return G.X;  case 'y': return G.Y;  case 'z': return G.Z
+    case 's':    return G.S;  case 'si':  return G.Si; case 't': return G.T;  case 'ti': return G.Ti
+    case 'v':    return G.V;  case 'vi':  return G.Vi; case 'id': return G.Id
+    case 'rx':   return G.Rx(p[0]!);   case 'ry': return G.Ry(p[0]!); case 'rz': return G.Rz(p[0]!)
+    case 'vz':   return G.Rz(p[0]!)   // VirtualZ ≡ Rz
+    case 'r2':   return G.R2;          case 'r4': return G.R4;         case 'r8': return G.R8
+    case 'u1':   return G.U1(p[0]!)
+    case 'u2':   return G.U2(p[0]!, p[1]!)
+    case 'u3':   return G.U3(p[0]!, p[1]!, p[2]!)
+    case 'gpi':  return G.Gpi(p[0]!);  case 'gpi2': return G.Gpi2(p[0]!)
+    default: throw new TypeError(`fromJSON: unknown single-qubit gate '${name}'`)
+  }
+}
+
+/** Reconstruct the Gate4x4 matrix for a two-qubit op from its serialized meta. */
+function gate4x4FromMeta(name: string, params: readonly number[]): Gate4x4 {
+  const p = params
+  switch (name) {
+    case 'xx':     return G.Xx(p[0]!)
+    case 'yy':     return G.Yy(p[0]!)
+    case 'zz':     return G.Zz(p[0]!)
+    case 'xy':     return G.Xy(p[0]!)
+    case 'iswap':  return G.ISwap
+    case 'srswap': return G.SrSwap
+    case 'ms':     return G.Ms(p[0]!, p[1]!)
+    default: throw new TypeError(`fromJSON: unknown two-qubit gate '${name}'`)
+  }
+}
+
+/** Reconstruct the Gate2x2 for the target qubit of a controlled op. */
+function ctrlGate2x2FromMeta(name: string, params: readonly number[]): Gate2x2 {
+  const p = params
+  switch (name) {
+    case 'cx':   return G.X;  case 'cy':   return G.Y;  case 'cz':   return G.Z;  case 'ch':   return G.H
+    case 'crx':  return G.Rx(p[0]!);  case 'cry': return G.Ry(p[0]!);  case 'crz': return G.Rz(p[0]!)
+    case 'cu1':  return G.U1(p[0]!)
+    case 'cu2':  return G.U2(p[0]!, p[1]!)
+    case 'cu3':  return G.U3(p[0]!, p[1]!, p[2]!)
+    case 'cs':   return G.S;  case 'ct':   return G.T;  case 'csdg': return G.Si; case 'ctdg': return G.Ti
+    case 'cr2':  return G.R2; case 'cr4':  return G.R4; case 'cr8':  return G.R8
+    default: throw new TypeError(`fromJSON: unknown controlled gate '${name}'`)
+  }
+}
+
+/** Deserialize a raw JSON op array into typed Op objects. */
+function opsFromJSON(raw: readonly unknown[]): Op[] {
+  return (raw as Record<string, unknown>[]).map(o => {
+    const kind = o['kind'] as string
+    switch (kind) {
+      case 'single': {
+        const meta = o['meta'] as GateMeta
+        return { kind: 'single', q: o['q'] as number, gate: gate2x2FromMeta(meta.name, meta.params ?? []), meta } satisfies SingleOp
+      }
+      case 'cnot':
+        return { kind: 'cnot', control: o['control'] as number, target: o['target'] as number } satisfies CNOTOp
+      case 'swap':
+        return { kind: 'swap', a: o['a'] as number, b: o['b'] as number } satisfies SWAPOp
+      case 'two': {
+        const meta = o['meta'] as GateMeta
+        return { kind: 'two', a: o['a'] as number, b: o['b'] as number, gate: gate4x4FromMeta(meta.name, meta.params ?? []), meta } satisfies TwoOp
+      }
+      case 'controlled': {
+        const meta = o['meta'] as GateMeta
+        return { kind: 'controlled', control: o['control'] as number, target: o['target'] as number, gate: ctrlGate2x2FromMeta(meta.name, meta.params ?? []), meta } satisfies ControlledOp
+      }
+      case 'toffoli':
+        return { kind: 'toffoli', c1: o['c1'] as number, c2: o['c2'] as number, target: o['target'] as number } satisfies ToffoliOp
+      case 'cswap':
+        return { kind: 'cswap', control: o['control'] as number, a: o['a'] as number, b: o['b'] as number } satisfies CSwapOp
+      case 'csrswap':
+        return { kind: 'csrswap', control: o['control'] as number, a: o['a'] as number, b: o['b'] as number } satisfies CsrSwapOp
+      case 'measure':
+        return { kind: 'measure', q: o['q'] as number, creg: o['creg'] as string, bit: o['bit'] as number } satisfies MeasureOp
+      case 'reset':
+        return { kind: 'reset', q: o['q'] as number } satisfies ResetOp
+      case 'if':
+        return { kind: 'if', creg: o['creg'] as string, value: o['value'] as number, ops: opsFromJSON(o['ops'] as unknown[]) } satisfies IfOp
+      case 'subcircuit':
+        return { kind: 'subcircuit', name: o['name'] as string, qubits: o['qubits'] as number[], def: opsFromJSON(o['def'] as unknown[]) } satisfies SubcircuitOp
+      default:
+        throw new TypeError(`fromJSON: unknown op kind '${kind}'`)
+    }
+  })
+}
+
+/** Serialize ops to a plain JSON-safe array (no gate matrices — reconstructed on load). */
+function opsToJSON(ops: readonly Op[]): unknown[] {
+  return ops.map(op => {
+    switch (op.kind) {
+      case 'single':     return { kind: 'single', q: op.q, meta: op.meta }
+      case 'cnot':       return { kind: 'cnot', control: op.control, target: op.target }
+      case 'swap':       return { kind: 'swap', a: op.a, b: op.b }
+      case 'two':        return { kind: 'two', a: op.a, b: op.b, meta: op.meta }
+      case 'controlled': return { kind: 'controlled', control: op.control, target: op.target, meta: op.meta }
+      case 'toffoli':    return { kind: 'toffoli', c1: op.c1, c2: op.c2, target: op.target }
+      case 'cswap':      return { kind: 'cswap', control: op.control, a: op.a, b: op.b }
+      case 'csrswap':    return { kind: 'csrswap', control: op.control, a: op.a, b: op.b }
+      case 'measure':    return { kind: 'measure', q: op.q, creg: op.creg, bit: op.bit }
+      case 'reset':      return { kind: 'reset', q: op.q }
+      case 'if':         return { kind: 'if', creg: op.creg, value: op.value, ops: opsToJSON(op.ops) }
+      case 'subcircuit': return { kind: 'subcircuit', name: op.name, qubits: [...op.qubits], def: opsToJSON(op.def) }
+    }
+  })
+}
+
 // ─── Visualization helpers ────────────────────────────────────────────────────
 
 /** Format a radian angle using Unicode π for draw() / toSVG() labels. */
@@ -2036,6 +2159,56 @@ export class Circuit {
       out[idx.toString(2).padStart(this.qubits, '0')] = p
     }
     return Object.freeze(out)
+  }
+
+  // ── JSON save / load ─────────────────────────────────────────────────────
+
+  /**
+   * Serialize the circuit to a lossless JSON object.
+   *
+   * Gate matrices are **not** stored — they are reconstructed from their
+   * names and parameters on load, so the output is compact and stable
+   * across library versions.
+   *
+   * @example
+   * const json = circuit.toJSON()
+   * fs.writeFileSync('circuit.json', JSON.stringify(json, null, 2))
+   */
+  toJSON(): CircuitJSON {
+    const cregs: Record<string, number> = {}
+    for (const [name, size] of this.#cregs) cregs[name] = size
+
+    const gates: Record<string, { qubits: number; ops: unknown[] }> = {}
+    for (const [name, sub] of this.#gates) {
+      gates[name] = { qubits: sub.qubits, ops: opsToJSON(sub.#ops) }
+    }
+
+    return { ket: 1, qubits: this.qubits, cregs, gates, ops: opsToJSON(this.#ops) }
+  }
+
+  /**
+   * Deserialize a circuit from a `CircuitJSON` object or a JSON string.
+   *
+   * The loaded circuit is fully functional — all gate methods, simulation,
+   * serialization, and visualization APIs work identically to a hand-built circuit.
+   *
+   * @throws TypeError for unrecognised op kinds, unknown gate names, or wrong schema version.
+   *
+   * @example
+   * const circuit = Circuit.fromJSON(fs.readFileSync('circuit.json', 'utf8'))
+   */
+  static fromJSON(json: CircuitJSON | string): Circuit {
+    const j: CircuitJSON = typeof json === 'string' ? JSON.parse(json) : json
+    if (j.ket !== 1) throw new TypeError(`fromJSON: unsupported schema version ${j.ket}`)
+
+    const cregs = new Map<string, number>(Object.entries(j.cregs))
+
+    const gates = new Map<string, Circuit>()
+    for (const [name, def] of Object.entries(j.gates)) {
+      gates.set(name, new Circuit(def.qubits, opsFromJSON(def.ops), new Map(), new Map()))
+    }
+
+    return new Circuit(j.qubits, opsFromJSON(j.ops), cregs, gates)
   }
 
   // ── Visualization ────────────────────────────────────────────────────────
