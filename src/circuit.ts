@@ -340,6 +340,84 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
   }
 }
 
+// ─── Visualization helpers ────────────────────────────────────────────────────
+
+/** Format a radian angle using Unicode π for draw() / toSVG() labels. */
+function drawAngle(r: number): string { return fmtAngle(r, 'π') }
+
+/** All qubit indices touched by an op (the full span is handled by the caller). */
+function opQubits(op: Op): number[] {
+  switch (op.kind) {
+    case 'single':     return [op.q]
+    case 'cnot':       return [op.control, op.target]
+    case 'swap':       return [op.a, op.b]
+    case 'two':        return [op.a, op.b]
+    case 'controlled': return [op.control, op.target]
+    case 'toffoli':    return [op.c1, op.c2, op.target]
+    case 'cswap':      return [op.control, op.a, op.b]
+    case 'csrswap':    return [op.control, op.a, op.b]
+    case 'measure':    return [op.q]
+    case 'reset':      return [op.q]
+    case 'subcircuit': return [...op.qubits]
+    default:           return []
+  }
+}
+
+/** Label displayed for qubit `q`'s role in `op`. */
+function opLabel(op: Op, q: number): string {
+  const a = (p: readonly number[], i: number) => drawAngle(p[i] ?? 0)
+  switch (op.kind) {
+    case 'single': {
+      const name = op.meta?.name; const p = op.meta?.params ?? []
+      switch (name) {
+        case 'h': return 'H'; case 'x': return 'X'; case 'y': return 'Y'; case 'z': return 'Z'
+        case 's': return 'S'; case 'si': return 'S†'; case 't': return 'T'; case 'ti': return 'T†'
+        case 'v': return 'V'; case 'vi': return 'V†'; case 'id': return 'I'
+        case 'rx': return `Rx(${a(p,0)})`; case 'ry': return `Ry(${a(p,0)})`
+        case 'rz': case 'vz': return `Rz(${a(p,0)})`
+        case 'r2': return 'R₂'; case 'r4': return 'R₄'; case 'r8': return 'R₈'
+        case 'u1': return `U1(${a(p,0)})`
+        case 'u2': return `U2(${a(p,0)},${a(p,1)})`
+        case 'u3': return `U3(${a(p,0)},${a(p,1)},${a(p,2)})`
+        case 'gpi': return `GPI(${a(p,0)})`; case 'gpi2': return `GPI2(${a(p,0)})`
+        default: return name ? name.toUpperCase() : 'U'
+      }
+    }
+    case 'cnot':       return op.control === q ? '●' : '⊕'
+    case 'swap':       return '╳'
+    case 'two': {
+      const name = op.meta?.name; const p = op.meta?.params ?? []
+      switch (name) {
+        case 'xx': return `XX(${a(p,0)})`; case 'yy': return `YY(${a(p,0)})`
+        case 'zz': return `ZZ(${a(p,0)})`; case 'xy': return `XY(${a(p,0)})`
+        case 'iswap': return 'iSWAP'; case 'srswap': return '√iSWAP'
+        case 'ms': return `MS(${a(p,0)},${a(p,1)})`
+        default: return name ? name.toUpperCase() : 'U'
+      }
+    }
+    case 'controlled': {
+      if (op.control === q) return '●'
+      const name = op.meta?.name; const p = op.meta?.params ?? []
+      switch (name) {
+        case 'cx': return 'X'; case 'cy': return 'Y'; case 'cz': return 'Z'; case 'ch': return 'H'
+        case 'crx': return `Rx(${a(p,0)})`; case 'cry': return `Ry(${a(p,0)})`; case 'crz': return `Rz(${a(p,0)})`
+        case 'cu1': return `U1(${a(p,0)})`; case 'cu2': return `U2(${a(p,0)},${a(p,1)})`
+        case 'cu3': return `U3(${a(p,0)},${a(p,1)},${a(p,2)})`
+        case 'cs': return 'S'; case 'ct': return 'T'; case 'csdg': return 'S†'; case 'ctdg': return 'T†'
+        case 'cr2': return 'R₂'; case 'cr4': return 'R₄'; case 'cr8': return 'R₈'
+        default: return name ? name.slice(1).toUpperCase() : 'U'
+      }
+    }
+    case 'toffoli':    return op.target === q ? '⊕' : '●'
+    case 'cswap':      return op.control === q ? '●' : '╳'
+    case 'csrswap':    return op.control === q ? '●' : '√SW'
+    case 'measure':    return 'M'
+    case 'reset':      return '|0⟩'
+    case 'subcircuit': return op.name
+    default:           return '?'
+  }
+}
+
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
 /** Seeded xorshift32 PRNG — same algorithm used by qsim for reproducibility. */
@@ -1958,5 +2036,291 @@ export class Circuit {
       out[idx.toString(2).padStart(this.qubits, '0')] = p
     }
     return Object.freeze(out)
+  }
+
+  // ── Visualization ────────────────────────────────────────────────────────
+
+  /**
+   * Render a minimal ASCII circuit diagram.
+   *
+   * @example
+   * new Circuit(2).h(0).cnot(0, 1).draw()
+   * // q0: ─H──●─
+   * //          │
+   * // q1: ─────⊕─
+   */
+  draw(): string {
+    const n = this.qubits
+    if (n === 0) return ''
+
+    const ops = flattenOps(this.#ops).filter(op => op.kind !== 'if')
+
+    // ── Assign ops to columns (greedy, preserve order) ─────────────────────
+    // colOf[q] = next free column for qubit q
+    const colOf = new Array<number>(n).fill(0)
+    type PlacedOp = { op: Op; col: number }
+    const placed: PlacedOp[] = []
+
+    for (const op of ops) {
+      const qs = opQubits(op)
+      if (qs.length === 0) continue
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+      // Block the full qubit span so vertical wires don't overlap other gates
+      let col = 0
+      for (let q = minQ; q <= maxQ; q++) col = Math.max(col, colOf[q]!)
+      for (let q = minQ; q <= maxQ; q++) colOf[q] = col + 1
+      placed.push({ op, col })
+    }
+
+    const numCols = Math.max(0, ...colOf)
+    if (numCols === 0) {
+      // Empty circuit: just wires
+      const pw = `q${n - 1}: `.length
+      return Array.from({ length: n }, (_, q) => `q${q}: `.padStart(pw) + '─').join('\n')
+    }
+
+    // ── Build label grid: label[q][c] ──────────────────────────────────────
+    // '' means wire (─), null means "pass-through" (qubit in span but not active)
+    const label: (string | null)[][] = Array.from({ length: n }, () =>
+      new Array<string | null>(numCols).fill('')
+    )
+    // hasVert[c][gap] = true if a vertical wire crosses the gap between q=gap and q=gap+1
+    const hasVert: boolean[][] = Array.from({ length: numCols }, () =>
+      new Array<boolean>(n - 1).fill(false)
+    )
+
+    for (const { op, col } of placed) {
+      const qs = opQubits(op)
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+      for (let gap = minQ; gap < maxQ; gap++) hasVert[col]![gap] = true
+      for (const q of qs) label[q]![col] = opLabel(op, q)
+    }
+
+    // ── Compute per-column body width ──────────────────────────────────────
+    const colW = Array.from({ length: numCols }, (_, c) => {
+      let w = 1
+      for (let q = 0; q < n; q++) {
+        const lbl = label[q]![c]
+        if (lbl !== null && lbl !== '') w = Math.max(w, lbl.length)
+      }
+      return w
+    })
+
+    // ── Render ─────────────────────────────────────────────────────────────
+    const prefixW = `q${n - 1}: `.length
+    const lines: string[] = []
+
+    for (let q = 0; q < n; q++) {
+      let line = `q${q}: `.padStart(prefixW)
+      for (let c = 0; c < numCols; c++) {
+        const lbl = label[q]![c]
+        const w   = colW[c]!
+        if (lbl === '' || lbl === null) {
+          // wire
+          line += '─'.repeat(w + 2)
+        } else {
+          // gate box: ─[label centered in w with ─ padding]─
+          const pad  = w - lbl.length
+          const padL = Math.floor(pad / 2)
+          const padR = pad - padL
+          line += '─' + '─'.repeat(padL) + lbl + '─'.repeat(padR) + '─'
+        }
+      }
+      line += '─'  // trailing wire
+      lines.push(line)
+
+      // Spacer row between q and q+1
+      if (q < n - 1) {
+        let spacer = ' '.repeat(prefixW)
+        for (let c = 0; c < numCols; c++) {
+          const w = colW[c]!
+          if (hasVert[c]![q]) {
+            const center = Math.floor((w + 2) / 2)
+            spacer += ' '.repeat(center) + '│' + ' '.repeat(w + 2 - center - 1)
+          } else {
+            spacer += ' '.repeat(w + 2)
+          }
+        }
+        lines.push(spacer)
+      }
+    }
+
+    return lines.join('\n')
+  }
+
+  /**
+   * Export the circuit as a self-contained SVG string.
+   *
+   * The diagram uses the same column layout as `draw()`.  No external fonts or
+   * stylesheets are required — the SVG embeds a monospace `font-family` stack.
+   *
+   * @example
+   * fs.writeFileSync('bell.svg', new Circuit(2).h(0).cnot(0, 1).toSVG())
+   */
+  toSVG(): string {
+    const n = this.qubits
+    const ROW_H  = 40   // px between qubit rows
+    const COL_W  = 52   // base px per column (may be wider for long labels)
+    const CHAR_W = 7.5  // rough px per monospace character at font-size 13
+    const BOX_H  = 22   // gate box height
+    const R      = 5    // box corner radius
+    const ML     = 52   // left margin (qubit labels)
+    const MR     = 24   // right margin
+    const MT     = 24   // top margin
+    const MB     = 16   // bottom margin
+
+    const ops = flattenOps(this.#ops).filter(op => op.kind !== 'if')
+
+    // Column assignment (same algorithm as draw())
+    const colOf = new Array<number>(n).fill(0)
+    type PlacedOp = { op: Op; col: number }
+    const placed: PlacedOp[] = []
+    for (const op of ops) {
+      const qs = opQubits(op)
+      if (qs.length === 0) continue
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+      let col = 0
+      for (let q = minQ; q <= maxQ; q++) col = Math.max(col, colOf[q]!)
+      for (let q = minQ; q <= maxQ; q++) colOf[q] = col + 1
+      placed.push({ op, col })
+    }
+    const numCols = Math.max(0, ...colOf)
+
+    // Per-column body widths (in px), based on label length
+    const colPx = Array.from({ length: numCols }, (_, c) => {
+      let maxLabel = 1
+      for (const { op, col } of placed) {
+        if (col !== c) continue
+        for (const q of opQubits(op)) {
+          const lbl = opLabel(op, q)
+          if (lbl !== '●' && lbl !== '⊕' && lbl !== '╳') maxLabel = Math.max(maxLabel, lbl.length)
+        }
+      }
+      return Math.max(COL_W, Math.ceil(maxLabel * CHAR_W) + 20)
+    })
+
+    // Column center x positions
+    const colX: number[] = []
+    let cx = ML
+    for (let c = 0; c < numCols; c++) {
+      colX.push(cx + colPx[c]! / 2)
+      cx += colPx[c]!
+    }
+    const totalW = ML + (numCols > 0 ? cx - ML : 0) + MR
+    const totalH = MT + (n - 1) * ROW_H + MB + ROW_H
+
+    const qy = (q: number) => MT + q * ROW_H + ROW_H / 2
+
+    const svgParts: string[] = []
+
+    // Background
+    svgParts.push(`<rect width="${totalW}" height="${totalH}" fill="#ffffff"/>`)
+
+    // Horizontal wires
+    for (let q = 0; q < n; q++) {
+      const y = qy(q)
+      svgParts.push(`<line x1="${ML - 8}" y1="${y}" x2="${totalW - MR}" y2="${y}" stroke="#334155" stroke-width="1.5"/>`)
+    }
+
+    // Qubit labels
+    for (let q = 0; q < n; q++) {
+      svgParts.push(`<text x="${ML - 12}" y="${qy(q) + 4}" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q${q}:</text>`)
+    }
+
+    // Gates
+    for (const { op, col } of placed) {
+      const x = colX[col]!
+      const qs = opQubits(op)
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+
+      // Vertical connector line between min and max qubit
+      if (minQ !== maxQ) {
+        svgParts.push(`<line x1="${x}" y1="${qy(minQ)}" x2="${x}" y2="${qy(maxQ)}" stroke="#334155" stroke-width="1.5"/>`)
+      }
+
+      for (const q of qs) {
+        const lbl = opLabel(op, q)
+        const y   = qy(q)
+
+        if (lbl === '●') {
+          // Control dot
+          svgParts.push(`<circle cx="${x}" cy="${y}" r="5" fill="#334155"/>`)
+        } else if (lbl === '⊕') {
+          // CNOT target: circle with cross
+          svgParts.push(`<circle cx="${x}" cy="${y}" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>`)
+          svgParts.push(`<line x1="${x}" y1="${y - 10}" x2="${x}" y2="${y + 10}" stroke="#334155" stroke-width="1.5"/>`)
+          svgParts.push(`<line x1="${x - 10}" y1="${y}" x2="${x + 10}" y2="${y}" stroke="#334155" stroke-width="1.5"/>`)
+        } else if (lbl === '╳') {
+          // SWAP target: X mark
+          const d = 7
+          svgParts.push(`<line x1="${x - d}" y1="${y - d}" x2="${x + d}" y2="${y + d}" stroke="#334155" stroke-width="2"/>`)
+          svgParts.push(`<line x1="${x + d}" y1="${y - d}" x2="${x - d}" y2="${y + d}" stroke="#334155" stroke-width="2"/>`)
+        } else {
+          // Gate box
+          const labelPx = Math.max(20, Math.ceil(lbl.length * CHAR_W) + 14)
+          const bx = x - labelPx / 2, by = y - BOX_H / 2
+          svgParts.push(`<rect x="${bx}" y="${by}" width="${labelPx}" height="${BOX_H}" rx="${R}" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>`)
+          svgParts.push(`<text x="${x}" y="${y + 4}" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">${lbl}</text>`)
+        }
+      }
+    }
+
+    const w = totalW, h = totalH
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">\n${svgParts.join('\n')}\n</svg>`
+  }
+
+  /**
+   * Return the Bloch sphere angles (θ, φ) for qubit `q`.
+   *
+   * Computes the reduced single-qubit density matrix by tracing out all other
+   * qubits, then extracts the Bloch vector (rx, ry, rz) and converts to
+   * standard spherical coordinates:
+   *   - θ ∈ [0, π]  — polar angle from |0⟩ (north pole)
+   *   - φ ∈ (-π, π] — azimuthal angle in the equatorial plane
+   *
+   * For pure product states the result is exact.  For entangled qubits the
+   * Bloch vector has |r| < 1 (mixed state) and the angles are still well
+   * defined as long as the qubit is not maximally mixed (|r| > 0).
+   *
+   * @throws TypeError when called on circuits with measure/reset/if ops.
+   */
+  blochAngles(q: number): { theta: number; phi: number } {
+    const sv  = this.statevector()
+    const mask = 1n << BigInt(q)
+
+    // Reduced density matrix elements
+    let rho00 = 0, rho11 = 0, rho01re = 0, rho01im = 0
+
+    for (const [idx0, amp0] of sv) {
+      if ((idx0 & mask) !== 0n) continue    // only iterate over |0⟩ basis for qubit q
+      const amp1 = sv.get(idx0 | mask)
+      rho00   += amp0.re * amp0.re + amp0.im * amp0.im
+      if (amp1) {
+        rho11   += amp1.re * amp1.re + amp1.im * amp1.im
+        // ρ₀₁ = Σ ψ(idx0)* · ψ(idx0|mask)
+        rho01re += amp0.re * amp1.re + amp0.im * amp1.im
+        rho01im += amp0.re * amp1.im - amp0.im * amp1.re
+      }
+    }
+    // Also accumulate rho11 for basis states where qubit q=1 but no q=0 counterpart is in sv
+    for (const [idx1, amp1] of sv) {
+      if ((idx1 & mask) === 0n) continue
+      rho11 += amp1.re * amp1.re + amp1.im * amp1.im
+    }
+    // Correct double-counting: rho11 was added in both loops above
+    // Fix: recompute rho11 cleanly
+    rho11 = 0
+    for (const [idx, amp] of sv) {
+      if ((idx & mask) !== 0n) rho11 += amp.re * amp.re + amp.im * amp.im
+    }
+
+    // Bloch vector: rz = ρ₀₀ - ρ₁₁, rx = 2·Re(ρ₀₁), ry = -2·Im(ρ₀₁)
+    const rz = rho00 - rho11
+    const rx = 2 * rho01re
+    const ry = -2 * rho01im
+
+    const theta = Math.acos(Math.max(-1, Math.min(1, rz)))
+    const phi   = Math.atan2(ry, rx)
+    return { theta, phi }
   }
 }

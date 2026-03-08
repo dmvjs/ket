@@ -3835,3 +3835,183 @@ describe('vqe — Variational Quantum Eigensolver', () => {
     expect(vqe(new Circuit(1), h)).toBeCloseTo(2, 10)
   })
 })
+
+// ─── draw() ───────────────────────────────────────────────────────────────────
+
+describe('draw()', () => {
+  it('single qubit, single gate', () => {
+    const d = new Circuit(1).h(0).draw()
+    expect(d).toContain('q0:')
+    expect(d).toContain('H')
+  })
+
+  it('returns wires-only for empty circuit', () => {
+    const d = new Circuit(2).draw()
+    expect(d).toContain('q0:')
+    expect(d).toContain('q1:')
+    expect(d).not.toContain('H')
+  })
+
+  it('CNOT: control dot and target symbol', () => {
+    const d = new Circuit(2).cnot(0, 1).draw()
+    expect(d).toContain('●')
+    expect(d).toContain('⊕')
+    expect(d).toContain('│')
+  })
+
+  it('CNOT reversed: q1 controls q0', () => {
+    const d = new Circuit(2).cnot(1, 0).draw()
+    expect(d).toContain('●')
+    expect(d).toContain('⊕')
+  })
+
+  it('SWAP gate uses ╳ symbol', () => {
+    const d = new Circuit(2).swap(0, 1).draw()
+    const count = (d.match(/╳/g) ?? []).length
+    expect(count).toBe(2)
+    expect(d).toContain('│')
+  })
+
+  it('Toffoli: two control dots and ⊕ target', () => {
+    const d = new Circuit(3).ccx(0, 1, 2).draw()
+    const ctrl = (d.match(/●/g) ?? []).length
+    expect(ctrl).toBe(2)
+    expect(d).toContain('⊕')
+  })
+
+  it('parameterized gate Rx includes angle', () => {
+    const d = new Circuit(1).rx(Math.PI / 2, 0).draw()
+    expect(d).toContain('Rx(')
+    expect(d).toMatch(/π/)
+  })
+
+  it('controlled-H: control dot and H label', () => {
+    const d = new Circuit(2).ch(0, 1).draw()
+    expect(d).toContain('●')
+    expect(d).toContain('H')
+  })
+
+  it('column alignment: gates on different qubits share column', () => {
+    // H on q0 and H on q1 simultaneously
+    const d = new Circuit(2).h(0).h(1).draw()
+    const lines = d.split('\n')
+    // Both H gates should be in the same horizontal position
+    expect(lines[0]!.indexOf('H')).toBe(lines[2]!.indexOf('H'))
+  })
+
+  it('sequential gates on same qubit go in different columns', () => {
+    const d = new Circuit(1).h(0).x(0).draw()
+    expect(d).toContain('H')
+    expect(d).toContain('X')
+    // Both should appear on q0's line in order
+    const line = d.split('\n')[0]!
+    expect(line.indexOf('H')).toBeLessThan(line.indexOf('X'))
+  })
+
+  it('measure and reset labels', () => {
+    const d = new Circuit(1).h(0).measure(0, 'c', 0).reset(0).draw()
+    expect(d).toContain('H')
+    expect(d).toContain('M')
+    expect(d).toContain('|0⟩')
+  })
+
+  it('0-qubit circuit returns empty string', () => {
+    expect(new Circuit(0).draw()).toBe('')
+  })
+
+  it('interaction gate XX shows on both qubits', () => {
+    const d = new Circuit(2).xx(Math.PI / 4, 0, 1).draw()
+    const lines = d.split('\n')
+    expect(lines[0]).toContain('XX(')
+    expect(lines[2]).toContain('XX(')
+  })
+
+  it('named sub-circuit gate shows gate name', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const d = new Circuit(4).defineGate('Bell', bell).gate('Bell', 0, 1).draw()
+    expect(d).toContain('H')
+    expect(d).toContain('●')
+    expect(d).toContain('⊕')
+  })
+})
+
+// ─── toSVG() ──────────────────────────────────────────────────────────────────
+
+describe('toSVG()', () => {
+  it('returns valid SVG wrapper', () => {
+    const svg = new Circuit(1).h(0).toSVG()
+    expect(svg).toMatch(/^<svg /)
+    expect(svg).toMatch(/<\/svg>$/)
+    expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"')
+  })
+
+  it('contains gate label text', () => {
+    const svg = new Circuit(1).h(0).toSVG()
+    expect(svg).toContain('>H<')
+  })
+
+  it('CNOT: has circle+cross for ⊕ and filled circle for ●', () => {
+    const svg = new Circuit(2).cnot(0, 1).toSVG()
+    expect(svg).toContain('<circle')
+    expect(svg).toContain('<line')
+  })
+
+  it('SWAP: contains X marks (line elements)', () => {
+    const svg = new Circuit(2).swap(0, 1).toSVG()
+    expect(svg).toContain('<line')
+  })
+
+  it('empty circuit: wires only, no gate boxes', () => {
+    const svg = new Circuit(2).toSVG()
+    expect(svg).not.toContain('<rect x=')
+  })
+
+  it('multi-qubit SVG has correct number of qubit labels', () => {
+    const svg = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2).toSVG()
+    const labelCount = (svg.match(/q\d+:/g) ?? []).length
+    expect(labelCount).toBe(3)
+  })
+})
+
+// ─── blochAngles() ────────────────────────────────────────────────────────────
+
+describe('blochAngles()', () => {
+  it('|0⟩: north pole θ=0', () => {
+    const { theta, phi } = new Circuit(1).blochAngles(0)
+    expect(theta).toBeCloseTo(0, 10)
+  })
+
+  it('|1⟩: south pole θ=π', () => {
+    const { theta } = new Circuit(1).x(0).blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI, 10)
+  })
+
+  it('|+⟩ = H|0⟩: equator θ=π/2, φ=0', () => {
+    const { theta, phi } = new Circuit(1).h(0).blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI / 2, 8)
+    expect(phi).toBeCloseTo(0, 8)
+  })
+
+  it('Rx(π/2)|0⟩: equator θ=π/2, φ=+π/2 (Bloch vector along +Y)', () => {
+    // Rx(π/2)|0⟩ = (1/√2)(|0⟩ - i|1⟩); ρ₀₁ = -i/2 → ry = +1 → φ = π/2
+    const { theta, phi } = new Circuit(1).rx(Math.PI / 2, 0).blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI / 2, 8)
+    expect(phi).toBeCloseTo(Math.PI / 2, 8)
+  })
+
+  it('Ry(π/3)|0⟩: θ=π/3', () => {
+    const { theta } = new Circuit(1).ry(Math.PI / 3, 0).blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI / 3, 8)
+  })
+
+  it('Bell state qubit: maximally mixed — θ=π/2 (Bloch vector on equator at 0)', () => {
+    // Bell state |Φ+⟩: each qubit is maximally mixed, |r|=0 → θ undefined,
+    // but rz=0 so θ=π/2 and rx=ry=0 so phi=0
+    const { theta } = new Circuit(2).h(0).cnot(0, 1).blochAngles(0)
+    expect(theta).toBeCloseTo(Math.PI / 2, 8)
+  })
+
+  it('throws on circuit with measure ops', () => {
+    expect(() => new Circuit(1).measure(0, 'c', 0).blochAngles(0)).toThrow(TypeError)
+  })
+})

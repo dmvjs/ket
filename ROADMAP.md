@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (528 tests, ~200ms)**
+**Test suite (555 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -38,6 +38,9 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Native IonQ gates: GPI Ramsey fringe, GPI2 inverse pair, MS Bell states
 - Quantum teleportation: |0⟩, |1⟩, |+⟩, Rx(π/3)|0⟩
 - OpenQASM 2.0: gate name mapping, angle notation, round-trip statevector fidelity
+- ASCII `draw()`: column layout, all gate symbols, parameterized labels, multi-qubit connectors
+- `toSVG()`: self-contained SVG, gate boxes, control dots, CNOT/SWAP marks, qubit labels
+- `blochAngles(q)`: |0⟩/|1⟩ poles, equatorial states, mixed entangled qubits
 - Export targets: Qiskit, Cirq, Q#, pyQuil — gate name mapping, angle formatting, throw-on-unsupported
 - Noise models: depolarizing (p1/p2) + SPAM (pMeas); named device profiles; zero-overhead fast path preserved
 - MPS backend: GHZ-50, BV-40, product-state-50, non-adjacent gates, statevector cross-check
@@ -105,22 +108,35 @@ A living document charting the path from a correct, minimal core to a complete, 
 
 ---
 
-## Phase 4 — Visualization
+## Phase 4 — Visualization ✓
 
-### 4a. ASCII circuit diagram
+### 4a. ASCII circuit diagram ✓
 `circuit.draw()` — a text-mode circuit diagram for terminal and notebooks.
 
 ```
-q0: ─H──●──
+q0: ─H──●─
          │
-q1: ────X──
+q1: ─────⊕─
 ```
 
-### 4b. SVG export
-`circuit.toSVG()` — a scalable vector diagram suitable for documentation and web embedding.
+- Greedy column-packing: gates on non-conflicting qubits share a column
+- Full qubit span blocked per op so vertical wires never overlap adjacent gate boxes
+- Gate symbols: `H` `X` `Y` `Z` `S†` `T†` `●` `⊕` `╳` `M` `|0⟩` `Rx(π/4)` `XX(π/2)` …
+- Named sub-circuit gates show their registered name
 
-### 4c. Bloch sphere coordinates
-`circuit.blochAngles(qubit)` — return (θ, φ) for a single-qubit state, for visualization on the Bloch sphere.
+### 4b. SVG export ✓
+`circuit.toSVG()` — a self-contained SVG string (no external fonts or stylesheets).
+
+- Same column layout as `draw()`
+- Rounded gate boxes, filled control dots, circle-cross CNOT target, × SWAP marks
+- Embeds a monospace font stack; safe to write directly to `.svg` files or inline in HTML
+
+### 4c. Bloch sphere coordinates ✓
+`circuit.blochAngles(qubit)` — returns `{ theta, phi }` (θ ∈ [0,π], φ ∈ (-π,π]).
+
+- Computes the reduced single-qubit density matrix via partial trace
+- Extracts Bloch vector (rx, ry, rz) and converts to spherical coordinates
+- Valid for pure product states (exact) and entangled qubits (mixed-state Bloch vector)
 
 ---
 
