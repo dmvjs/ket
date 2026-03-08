@@ -15,7 +15,7 @@
 - Three-qubit: Toffoli (CCX), Fredkin (CSWAP), controlled-√SWAP
 - Native IonQ gates: GPI, GPI2, MS
 - Scheduling: barrier (no-op in simulation, emitted in QASM)
-- Aliases match quantum-circuit and Qiskit naming conventions throughout
+- Aliases match Qiskit, Cirq, and ecosystem naming conventions throughout
 
 **Import / Export**
 - OpenQASM 2.0 + 3.0: import + export (2.0); `fromQASM` auto-detects version
@@ -23,7 +23,7 @@
 - Quil 2.0: import + export
 - Native JSON: lossless versioned round-trip (import + export)
 - Export-only: Qiskit, Cirq, Q#, pyQuil, Amazon Braket, CudaQ, TensorFlow Quantum, Quirk JSON, LaTeX (quantikz)
-- Qiskit/Cirq import: not supported (neither is quantum-circuit; future moat)
+- Qiskit/Cirq import: not supported (no JS quantum library supports this today; significant future differentiator)
 
 **Classical control**
 - Classical registers, measurement, reset
@@ -51,7 +51,7 @@
 ## Coming next
 
 1. **npm publication** — publish as `ket` under semantic versioning from 0.1.0
-2. **Qiskit / Cirq import** — parse Python SDK output formats directly; both ket and quantum-circuit are export-only today, so this is an open moat
+2. **Qiskit / Cirq import** — parse Python SDK output formats directly; no JS quantum library supports this today
 3. **First-class IonQ hardware DX** — device-aware circuit validation against hardware gate sets; calibration data integration for realistic noise parameters
 
 ---

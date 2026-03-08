@@ -759,17 +759,17 @@ export class Circuit {
   z(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Z,  meta: { name: 'z'  } }) }
   s(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.S,  meta: { name: 's'     } }) }
   si(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'si'    } }) }
-  /** S† — alias `sdg` (quantum-circuit / Qiskit convention). */
+  /** S† — alias `sdg` (Qiskit / OpenQASM convention). */
   sdg(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Si, meta: { name: 'sdg'   } }) }
   t(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.T,  meta: { name: 't'     } }) }
   ti(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'ti'    } }) }
-  /** T† — alias `tdg` (quantum-circuit / Qiskit convention). */
+  /** T† — alias `tdg` (Qiskit / OpenQASM convention). */
   tdg(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Ti, meta: { name: 'tdg'   } }) }
   v(q: number):    Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'v'     } }) }
   vi(q: number):   Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'vi'    } }) }
-  /** √NOT — alias `srn` (quantum-circuit convention); same as `v`. */
+  /** √NOT — alias `srn`; same as `v`. */
   srn(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.V,  meta: { name: 'srn'   } }) }
-  /** (√NOT)† — alias `srndg` (quantum-circuit convention); same as `vi`. */
+  /** (√NOT)† — alias `srndg`; same as `vi`. */
   srndg(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Vi, meta: { name: 'srndg' } }) }
 
   // ── Rotation gates ───────────────────────────────────────────────────────

@@ -329,7 +329,7 @@ describe('Distribution', () => {
 
 describe('BigInt state indices (no 32-bit overflow)', () => {
   it('qubit 30: GHZ on qubits 0 and 30 without corruption', () => {
-    // quantum-circuit fails here with 1<<30 XOR issues — we use BigInt
+    // 1<<30 XOR silently corrupts in 32-bit simulators; BigInt avoids this
     const r = new Circuit(31).h(0).cnot(0, 30).run({ shots: 256, seed: 42 })
     expect(Object.keys(r.probs)).toHaveLength(2)
     const zeros = '0'.repeat(31)
@@ -1028,7 +1028,7 @@ describe('Quantum Fourier Transform (2-qubit)', () => {
 //
 // Tests gate composition across all gate families in a single circuit.
 // Any unitary sequence U applied then reversed (U · U⁻¹) must restore |0…0⟩.
-// Mirrors quantum-circuit's Issue_97 test (h, s, t, cx, srn sequence).
+// Gate sequence: h, s, t, cx, srn — applied then reversed must restore |0…0⟩.
 
 describe('Multi-gate integration', () => {
   // Forward: h · s · t · cnot · v  — Inverse: vi · cnot · ti · si · h

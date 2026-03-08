@@ -4,8 +4,8 @@
  * State index bit layout: qubit 0 is bit 0 (LSB), matching IonQ's bitstring
  * convention where q0 is the rightmost character.
  *
- * Using BigInt eliminates the 32-bit overflow that breaks quantum-circuit above
- * qubit 30 (e.g. `1 << 31` silently wraps in JavaScript).
+ * Using BigInt eliminates the 32-bit overflow that silently wraps at qubit 30
+ * when using `1 << 31` in JavaScript.
  */
 
 import { add, Complex, isNegligible, mul, ZERO } from './complex.js'
