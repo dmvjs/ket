@@ -3,6 +3,7 @@ export { qft, iqft, grover, groverAncilla, phaseEstimation, vqe } from './algori
 export type { PauliTerm } from './algorithms.js'
 export type { RunOptions, NoiseParams, MpsRunOptions, IonQGate, IonQCircuit, IonQDeviceInfo, CircuitJSON } from './circuit.js'
 export { IONQ_DEVICES } from './circuit.js'
+export { CliffordSim } from './clifford.js'
 export { DensityMatrix } from './density.js'
 export type { DmNoiseParams } from './density.js'
 export { c, ZERO, ONE, I, add, mul, scale, conj, norm2 } from './complex.js'

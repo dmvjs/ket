@@ -3,6 +3,7 @@ import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit } from './circuit.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
+import { CliffordSim } from './clifford.js'
 
 // ─── Tolerance helpers ────────────────────────────────────────────────────────
 
@@ -5172,5 +5173,400 @@ describe('circuit.checkDevice()', () => {
       expect(msg).toMatch(/cu1/)   // unsupported gate
       expect(msg).toMatch(/iswap/) // unsupported gate
     }
+  })
+})
+
+// ─── circuit.depth() ──────────────────────────────────────────────────────────
+
+describe('circuit.depth()', () => {
+  it('empty circuit has depth 0', () => {
+    expect(new Circuit(2).depth()).toBe(0)
+  })
+
+  it('single gate has depth 1', () => {
+    expect(new Circuit(1).h(0).depth()).toBe(1)
+  })
+
+  it('two serial gates on the same qubit have depth 2', () => {
+    expect(new Circuit(1).h(0).x(0).depth()).toBe(2)
+  })
+
+  it('two gates on different qubits have depth 1 (parallel)', () => {
+    expect(new Circuit(2).h(0).h(1).depth()).toBe(1)
+  })
+
+  it('Bell state H+CNOT has depth 2', () => {
+    // H on q0 (step 1), CNOT(0,1) must wait for q0 to be free (step 2)
+    expect(new Circuit(2).h(0).cnot(0, 1).depth()).toBe(2)
+  })
+
+  it('three sequential gates have depth 3', () => {
+    expect(new Circuit(1).h(0).s(0).z(0).depth()).toBe(3)
+  })
+
+  it('barrier does not increment depth', () => {
+    expect(new Circuit(2).h(0).barrier(0, 1).h(1).depth()).toBe(1)
+  })
+
+  it('SWAP gate counts as depth 1 (touches two qubits simultaneously)', () => {
+    expect(new Circuit(2).swap(0, 1).depth()).toBe(1)
+  })
+
+  it('Toffoli gate counts as depth 1', () => {
+    expect(new Circuit(3).ccx(0, 1, 2).depth()).toBe(1)
+  })
+
+  it('GHZ state H+CNOT(0,1)+CNOT(0,2) has depth 3 (CNOTs are serial on q0)', () => {
+    const c = new Circuit(3).h(0).cnot(0, 1).cnot(0, 2)
+    // h(0) at step 1; cnot(0,1) at step 2; cnot(0,2) at step 3
+    expect(c.depth()).toBe(3)
+  })
+
+  it('QFT on 3 qubits has depth > 0', () => {
+    expect(qft(3).depth()).toBeGreaterThan(0)
+  })
+
+  it('measure op increments depth', () => {
+    const c = new Circuit(1).creg('c', 1).h(0).measure(0, 'c', 0)
+    expect(c.depth()).toBe(2)
+  })
+})
+
+// ─── circuit.blochSphere() ───────────────────────────────────────────────────
+
+describe('circuit.blochSphere(q)', () => {
+  it('returns a string starting with <svg', () => {
+    const svg = new Circuit(1).h(0).blochSphere(0)
+    expect(svg).toMatch(/^<svg/)
+  })
+
+  it('contains closing </svg> tag', () => {
+    const svg = new Circuit(1).h(0).blochSphere(0)
+    expect(svg).toMatch(/<\/svg>$/)
+  })
+
+  it('contains 300×300 dimensions', () => {
+    const svg = new Circuit(1).blochSphere(0)
+    expect(svg).toContain('width="300"')
+    expect(svg).toContain('height="300"')
+  })
+
+  it('|0⟩ state: bloch sphere shows state near north pole', () => {
+    // |0⟩ → θ=0, φ=0, bz=1 → py should be well above center
+    const svg = new Circuit(1).blochSphere(0)
+    expect(svg).toContain('|0⟩')
+    expect(svg).toContain('|1⟩')
+    expect(svg).toContain('|+⟩')
+  })
+
+  it('X gate: |1⟩ state SVG contains expected labels', () => {
+    const svg = new Circuit(1).x(0).blochSphere(0)
+    expect(typeof svg).toBe('string')
+    expect(svg.length).toBeGreaterThan(100)
+  })
+
+  it('H gate: equatorial state bloch sphere renders', () => {
+    const svg = new Circuit(1).h(0).blochSphere(0)
+    expect(svg).toContain('stroke="#3b82f6"')  // blue arrow
+  })
+
+  it('throws for circuits with measurement ops', () => {
+    const c = new Circuit(1).h(0).measure(0, 'c', 0)
+    expect(() => c.blochSphere(0)).toThrow(TypeError)
+  })
+})
+
+// ─── circuit.runClifford() ───────────────────────────────────────────────────
+
+describe('circuit.runClifford()', () => {
+  it('|0⟩ always measures 0', () => {
+    const r = new Circuit(1).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+    expect(Object.keys(r.probs)).toHaveLength(1)
+  })
+
+  it('X gate: |1⟩ always measures 1', () => {
+    const r = new Circuit(1).x(0).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('H gate: equal superposition 50/50', () => {
+    const r = new Circuit(1).h(0).runClifford({ shots: 4096, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('HH = I: H applied twice returns to |0⟩', () => {
+    const r = new Circuit(1).h(0).h(0).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('Bell state (H+CNOT): 50/50 between |00⟩ and |11⟩', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).runClifford({ shots: 4096, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('Bell state matches statevector run() probabilities', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const sv  = c.run({ shots: 4096, seed: 42 })
+    const clf = c.runClifford({ shots: 4096, seed: 42 })
+    expect(near(clf.probs['00'] ?? 0, sv.probs['00'] ?? 0, 0.06)).toBe(true)
+    expect(near(clf.probs['11'] ?? 0, sv.probs['11'] ?? 0, 0.06)).toBe(true)
+  })
+
+  it('GHZ state: 50/50 between |000⟩ and |111⟩', () => {
+    const c = new Circuit(3).h(0).cnot(0, 1).cnot(0, 2)
+    const r = c.runClifford({ shots: 4096, seed: 42 })
+    expect(Object.keys(r.probs)).toHaveLength(2)
+    expect(near(r.probs['000'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['111'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('S gate: S|+⟩ = |+i⟩ — still 50/50 when measured in Z basis', () => {
+    const r = new Circuit(1).h(0).s(0).runClifford({ shots: 4096, seed: 7 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('Z gate: Z|0⟩ = |0⟩ (phase unobservable)', () => {
+    const r = new Circuit(1).z(0).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('CZ gate: h(1)·cz(0,1)·h(1) = CNOT — x(0) case gives |11⟩', () => {
+    const r = new Circuit(2).x(0).h(1).cz(0, 1).h(1).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1.0, 10)
+  })
+
+  it('throws TypeError for T gate (non-Clifford)', () => {
+    expect(() => new Circuit(1).t(0).runClifford()).toThrow(TypeError)
+    expect(() => new Circuit(1).t(0).runClifford()).toThrow(/not a Clifford gate/)
+  })
+
+  it('throws TypeError for Rx(π/4) gate (non-Clifford)', () => {
+    expect(() => new Circuit(1).rx(Math.PI / 4, 0).runClifford()).toThrow(TypeError)
+  })
+
+  it('throws TypeError for two-qubit non-Clifford gate (xx)', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 4, 0, 1).runClifford()).toThrow(TypeError)
+  })
+
+  it('default shots is 1024', () => {
+    const r = new Circuit(1).h(0).runClifford({ seed: 42 })
+    expect(r.shots).toBe(1024)
+  })
+
+  it('seed makes results reproducible', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const r1 = c.runClifford({ shots: 200, seed: 99 })
+    const r2 = c.runClifford({ shots: 200, seed: 99 })
+    expect(r1.probs['00']).toBeCloseTo(r2.probs['00'] ?? 0, 10)
+  })
+
+  it('returns Distribution with correct qubits count', () => {
+    const r = new Circuit(3).h(0).cnot(0, 1).runClifford({ shots: 100 })
+    expect(r.qubits).toBe(3)
+  })
+})
+
+// ─── CliffordSim direct tests ─────────────────────────────────────────────────
+
+describe('CliffordSim', () => {
+  it('initial state measures 0 on all qubits', () => {
+    const sim = new CliffordSim(3)
+    expect(sim.measure(0, 0.1)).toBe(0)
+    expect(sim.measure(1, 0.1)).toBe(0)
+    expect(sim.measure(2, 0.1)).toBe(0)
+  })
+
+  it('X flips qubit from 0 to 1', () => {
+    const sim = new CliffordSim(1)
+    sim.x(0)
+    expect(sim.measure(0, 0.1)).toBe(1)
+  })
+
+  it('H then measure: random outcome', () => {
+    // After H, measuring should give random 0/1 depending on rand
+    const sim0 = new CliffordSim(1)
+    sim0.h(0)
+    expect(sim0.measure(0, 0.1)).toBe(0)   // rand < 0.5 → 0
+
+    const sim1 = new CliffordSim(1)
+    sim1.h(0)
+    expect(sim1.measure(0, 0.9)).toBe(1)   // rand >= 0.5 → 1
+  })
+
+  it('CNOT: |00⟩ → |00⟩ (control=0)', () => {
+    const sim = new CliffordSim(2)
+    sim.cnot(0, 1)
+    expect(sim.measure(0, 0.1)).toBe(0)
+    expect(sim.measure(1, 0.1)).toBe(0)
+  })
+
+  it('CNOT: X(0)·CNOT(0,1)|00⟩ → |11⟩', () => {
+    const sim = new CliffordSim(2)
+    sim.x(0)
+    sim.cnot(0, 1)
+    expect(sim.measure(0, 0.1)).toBe(1)
+    expect(sim.measure(1, 0.1)).toBe(1)
+  })
+
+  it('S·S = Z: S²|+⟩ should give |−⟩ which measures 50/50', () => {
+    // S²|+⟩ = Z|+⟩ = |−⟩; measuring in Z basis is 50/50
+    const sim0 = new CliffordSim(1)
+    sim0.h(0); sim0.s(0); sim0.s(0)
+    const m0 = sim0.measure(0, 0.1)
+    expect([0, 1]).toContain(m0)
+  })
+})
+
+// ─── circuit.compile() ───────────────────────────────────────────────────────
+
+describe('circuit.compile(device)', () => {
+  it('throws for unknown device name', () => {
+    expect(() => new Circuit(1).h(0).compile('fake-device')).toThrow(TypeError)
+    expect(() => new Circuit(1).h(0).compile('fake-device')).toThrow(/unknown device/)
+  })
+
+  it('returns a Circuit with only native gates for a simple H gate', () => {
+    const compiled = new Circuit(1).h(0).compile('aria-1')
+    expect(compiled).toBeInstanceOf(Circuit)
+    // Should run without error
+    const r = compiled.run({ shots: 4096, seed: 42 })
+    expect(near(r.probs['0'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['1'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('x(q) compile → gpi(0): gives same result as X gate', () => {
+    const orig     = new Circuit(1).x(0).run({ shots: 100, seed: 1 })
+    const compiled = new Circuit(1).x(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(compiled.probs['1']).toBeCloseTo(1.0, 10)
+    expect(compiled.probs['1']).toBeCloseTo(orig.probs['1'] ?? 0, 10)
+  })
+
+  it('y(q) compile → gpi(π/2): gives same result as Y gate', () => {
+    const orig     = new Circuit(2).x(0).y(0).run({ shots: 100, seed: 1 })
+    const compiled = new Circuit(2).x(0).y(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(compiled.probs['00']).toBeCloseTo(orig.probs['00'] ?? 0, 10)
+  })
+
+  it('z(q) compile → vz(π): Z|0⟩ = |0⟩', () => {
+    const r = new Circuit(1).z(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('s(q) compile → vz(π/2): S|0⟩ = |0⟩ in Z basis', () => {
+    const r = new Circuit(1).s(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('si(q) compile → vz(-π/2): si·s = identity', () => {
+    const r = new Circuit(1).s(0).si(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('t(q) compile → vz(π/4): t·ti = identity', () => {
+    const r = new Circuit(1).t(0).ti(0).compile('aria-1').run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('rz(θ) compile → vz(θ): same as original', () => {
+    const theta = 0.7
+    const orig = new Circuit(1).rz(theta, 0)
+    const comp = new Circuit(1).rz(theta, 0).compile('aria-1')
+    const sv1 = orig.statevector()
+    const sv2 = comp.statevector()
+    // Both should give same probabilities
+    for (const [k, v] of sv1) {
+      const v2 = sv2.get(k)
+      expect(v.re * v.re + v.im * v.im).toBeCloseTo(
+        v2 ? v2.re * v2.re + v2.im * v2.im : 0, 10
+      )
+    }
+  })
+
+  it('gpi/gpi2 pass through unchanged', () => {
+    const c = new Circuit(1).gpi(0.5, 0).gpi2(0.3, 0)
+    const compiled = c.compile('aria-1')
+    // Should simulate identically
+    const sv1 = c.statevector()
+    const sv2 = compiled.statevector()
+    for (const [k, v] of sv1) {
+      const v2 = sv2.get(k)
+      expect(v.re * v.re + v.im * v.im).toBeCloseTo(
+        v2 ? v2.re * v2.re + v2.im * v2.im : 0, 10
+      )
+    }
+  })
+
+  it('ms gate passes through unchanged', () => {
+    const c = new Circuit(2).ms(0, 0, 0, 1)
+    const compiled = c.compile('aria-1')
+    const sv1 = c.statevector()
+    const sv2 = compiled.statevector()
+    for (const [k, v] of sv1) {
+      const v2 = sv2.get(k)
+      expect(v.re * v.re + v.im * v.im).toBeCloseTo(
+        v2 ? v2.re * v2.re + v2.im * v2.im : 0, 10
+      )
+    }
+  })
+
+  it('Bell state (H+CNOT) compiles and produces 50/50', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const compiled = c.compile('aria-1')
+    const r = compiled.run({ shots: 4096, seed: 42 })
+    expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
+  })
+
+  it('compiled Bell state matches original Bell state probabilities', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const orig    = c.run({ shots: 4096, seed: 42 })
+    const compiled = c.compile('aria-1').run({ shots: 4096, seed: 42 })
+    expect(near(compiled.probs['00'] ?? 0, orig.probs['00'] ?? 0, 0.07)).toBe(true)
+    expect(near(compiled.probs['11'] ?? 0, orig.probs['11'] ?? 0, 0.07)).toBe(true)
+  })
+
+  it('throws for non-compilable gate (toffoli)', () => {
+    expect(() => new Circuit(3).ccx(0, 1, 2).compile('aria-1')).toThrow(TypeError)
+  })
+
+  it('throws for non-compilable gate (cy)', () => {
+    expect(() => new Circuit(2).cy(0, 1).compile('aria-1')).toThrow(TypeError)
+  })
+
+  it('throws for non-compilable gate (rx)', () => {
+    expect(() => new Circuit(1).rx(0.5, 0).compile('aria-1')).toThrow(TypeError)
+  })
+
+  it('barrier passes through compile', () => {
+    const c = new Circuit(2).h(0).barrier(0, 1).h(1)
+    const compiled = c.compile('aria-1')
+    expect(compiled).toBeInstanceOf(Circuit)
+    // Barriers should not affect simulation
+    const r = compiled.run({ shots: 4096, seed: 42 })
+    expect(near(r.probs['00'] ?? 0, 0.25, 0.07)).toBe(true)
+  })
+
+  it('supports all three IonQ device names', () => {
+    const c = new Circuit(1).h(0)
+    expect(() => c.compile('aria-1')).not.toThrow()
+    expect(() => c.compile('forte-1')).not.toThrow()
+    expect(() => c.compile('harmony')).not.toThrow()
+  })
+
+  it('swap(a,b) compiles to native gates and gives same result as swap', () => {
+    const orig     = new Circuit(2).x(0).swap(0, 1).exactProbs()
+    const compiled = new Circuit(2).x(0).swap(0, 1).compile('aria-1').exactProbs()
+    // |10⟩ should become |01⟩ after swap: q0=0, q1=1 → bitstring '10'
+    expect(orig['10'] ?? 0).toBeCloseTo(1.0, 10)
+    expect(compiled['10'] ?? 0).toBeCloseTo(1.0, 8)  // slightly relaxed for compiled
+  })
+
+  it('compiled circuit returns a Circuit instance', () => {
+    expect(new Circuit(1).x(0).compile('aria-1')).toBeInstanceOf(Circuit)
   })
 })

@@ -10,6 +10,7 @@ import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, appl
 import { Complex, ZERO } from './complex.js'
 import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
+import { CliffordSim } from './clifford.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -3193,6 +3194,375 @@ export class Circuit {
     const theta = Math.acos(Math.max(-1, Math.min(1, rz)))
     const phi   = Math.atan2(ry, rx)
     return { theta, phi }
+  }
+
+  // ── Circuit depth ─────────────────────────────────────────────────────────
+
+  /**
+   * Return the critical path length — the minimum number of time steps needed
+   * to execute this circuit when gates on independent qubits run in parallel.
+   *
+   * Barriers are scheduling hints only and do not increment depth.
+   * IfOps recurse into their inner ops.
+   */
+  depth(): number {
+    const stepOf = new Array<number>(this.qubits).fill(0)
+
+    function processOps(ops: readonly Op[]): void {
+      for (const op of flattenOps(ops)) {
+        if (op.kind === 'barrier') continue  // no depth increment for barriers
+
+        if (op.kind === 'if') {
+          processOps(op.ops)
+          continue
+        }
+
+        let qubits: number[]
+        switch (op.kind) {
+          case 'single':  qubits = [op.q];                              break
+          case 'cnot':    qubits = [op.control, op.target];             break
+          case 'swap':    qubits = [op.a, op.b];                        break
+          case 'two':     qubits = [op.a, op.b];                        break
+          case 'controlled': qubits = [op.control, op.target];          break
+          case 'toffoli': qubits = [op.c1, op.c2, op.target];           break
+          case 'cswap':   qubits = [op.control, op.a, op.b];            break
+          case 'csrswap': qubits = [op.control, op.a, op.b];            break
+          case 'measure': qubits = [op.q];                               break
+          case 'reset':   qubits = [op.q];                               break
+          case 'subcircuit': qubits = [...op.qubits];                    break
+          default:        qubits = [];                                   break
+        }
+
+        if (qubits.length === 0) continue
+
+        // Find the earliest step this op can start (= max step already used among its qubits)
+        let maxStep = 0
+        for (const q of qubits) maxStep = Math.max(maxStep, stepOf[q] ?? 0)
+
+        // Place the op at maxStep (occupies one step)
+        const nextStep = maxStep + 1
+        for (const q of qubits) stepOf[q] = nextStep
+      }
+    }
+
+    processOps(this.#ops)
+    return Math.max(0, ...stepOf)
+  }
+
+  // ── Bloch sphere visualization ────────────────────────────────────────────
+
+  /**
+   * Return a self-contained SVG string showing the Bloch sphere for qubit `q`.
+   *
+   * Uses `blochAngles(q)` to get the state angles, then renders a 300×300 SVG
+   * with the sphere outline, equatorial ellipse, axes, and a blue arrow for the
+   * state vector using cavalier projection.
+   *
+   * @throws TypeError if the circuit contains measure/reset/if ops (see blochAngles).
+   */
+  blochSphere(q: number): string {
+    const { theta, phi } = this.blochAngles(q)
+
+    const bx = Math.sin(theta) * Math.cos(phi)
+    const by = Math.sin(theta) * Math.sin(phi)
+    const bz = Math.cos(theta)
+
+    const cx = 150, cy = 150, R = 110
+
+    // Cavalier projection: x-axis right, y-axis lower-right, z-axis up
+    const px = cx + R * (bx - by * 0.4)
+    const py = cy - R * (bz + by * 0.1)
+
+    const parts: string[] = []
+
+    // Background
+    parts.push(`<rect width="300" height="300" fill="white"/>`)
+
+    // Sphere outline
+    parts.push(`<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="#94a3b8" stroke-width="1.5"/>`)
+
+    // Equatorial ellipse (dashed)
+    parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${R}" ry="${Math.round(R * 0.35)}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>`)
+
+    // Z-axis: dashed above equator, solid below
+    // Above equator: from cy to cy-R
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - R}" stroke="#475569" stroke-width="1.2" stroke-dasharray="5,3"/>`)
+    // Below equator: solid
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy + R}" stroke="#475569" stroke-width="1.2"/>`)
+
+    // Z-axis labels
+    parts.push(`<text x="${cx}" y="${cy - R - 8}" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|0⟩</text>`)
+    parts.push(`<text x="${cx}" y="${cy + R + 18}" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|1⟩</text>`)
+
+    // X-axis (right-horizontal)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx + R}" y2="${cy}" stroke="#475569" stroke-width="1.2"/>`)
+    parts.push(`<text x="${cx + R + 8}" y="${cy + 4}" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|+⟩</text>`)
+
+    // Y-axis (diagonal lower-right — cavalier projection of +Y)
+    const yTipX = cx + Math.round(R * 0.4)
+    const yTipY = cy + Math.round(R * 0.1) + Math.round(R * 0.35)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${yTipX}" y2="${yTipY}" stroke="#475569" stroke-width="1.2"/>`)
+    parts.push(`<text x="${yTipX + 6}" y="${yTipY + 4}" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|i⟩</text>`)
+
+    // State vector arrow (blue line)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${px.toFixed(1)}" y2="${py.toFixed(1)}" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>`)
+
+    // State vector dot at tip
+    parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#3b82f6"/>`)
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">\n${parts.join('\n')}\n</svg>`
+  }
+
+  // ── Clifford stabilizer simulation ───────────────────────────────────────
+
+  /**
+   * Simulate this circuit using the CHP (Aaronson-Gottesman 2004) Clifford
+   * stabilizer algorithm — exponentially faster than the statevector for
+   * Clifford circuits, with exact probabilities.
+   *
+   * Only Clifford gates are supported:
+   *   h, x, y, z, s, si/sdg, measure, reset, barrier, cnot, swap,
+   *   and controlled gates cx/cy/cz.
+   *
+   * Non-Clifford gates (T, Rx(θ≠kπ/2), etc.) cause a TypeError.
+   *
+   * @param opts.shots  Number of measurement shots (default 1024).
+   * @param opts.seed   Optional PRNG seed for reproducibility.
+   */
+  runClifford({ shots = 1024, seed }: { shots?: number; seed?: number } = {}): Distribution {
+    // ── Validate: check all ops are Clifford ─────────────────────────────
+    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
+    const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
+
+    for (const op of flattenOps(this.#ops)) {
+      switch (op.kind) {
+        case 'barrier': case 'measure': case 'reset': break
+        case 'cnot': case 'swap': break
+        case 'single': {
+          const name = op.meta?.name ?? '?'
+          if (!CLIFFORD_SINGLE.has(name))
+            throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+          break
+        }
+        case 'controlled': {
+          const name = op.meta?.name ?? '?'
+          if (!CLIFFORD_CTRL.has(name))
+            throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+          break
+        }
+        default: {
+          const name = (op as { meta?: GateMeta }).meta?.name ?? op.kind
+          throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+        }
+      }
+    }
+
+    const rng = makePrng(seed)
+    const counts = new Map<bigint, number>()
+
+    // Precompute which qubits are explicitly measured in this circuit
+    const flatOps = flattenOps(this.#ops)
+    const measuredQubits = new Set<number>()
+    for (const op of flatOps) {
+      if (op.kind === 'measure') measuredQubits.add(op.q)
+    }
+
+    // ── Per-shot simulation ───────────────────────────────────────────────
+    for (let shot = 0; shot < shots; shot++) {
+      const sim = new CliffordSim(this.qubits)
+
+      // Track measurement outcomes for this shot (to form the output bitstring)
+      const measured = new Array<number>(this.qubits).fill(0)
+
+      const applyCliffords = (ops: readonly Op[]): void => {
+        for (const op of ops) {
+          switch (op.kind) {
+            case 'barrier': break
+            case 'single': {
+              const name = op.meta?.name ?? ''
+              switch (name) {
+                case 'h':  sim.h(op.q);  break
+                case 'x':  sim.x(op.q);  break
+                case 'y':  sim.y(op.q);  break
+                case 'z':  sim.z(op.q);  break
+                case 's':  sim.s(op.q);  break
+                case 'si': case 'sdg': sim.si(op.q); break
+              }
+              break
+            }
+            case 'cnot':    sim.cnot(op.control, op.target); break
+            case 'swap':    sim.swap(op.a, op.b);            break
+            case 'controlled': {
+              const name = op.meta?.name ?? ''
+              switch (name) {
+                case 'cx': sim.cnot(op.control, op.target); break
+                case 'cy': sim.cy(op.control, op.target);   break
+                case 'cz': sim.cz(op.control, op.target);   break
+              }
+              break
+            }
+            case 'measure': {
+              const outcome = sim.measure(op.q, rng())
+              measured[op.q] = outcome
+              break
+            }
+            case 'reset': {
+              // Reset: measure then conditionally flip back to |0⟩
+              const outcome = sim.measure(op.q, rng())
+              if (outcome === 1) sim.x(op.q)
+              measured[op.q] = 0
+              break
+            }
+            case 'if': {
+              // Recurse into inner ops (creg evaluation not tracked in Clifford mode)
+              applyCliffords(op.ops)
+              break
+            }
+          }
+        }
+      }
+
+      applyCliffords(flatOps)
+
+      // Final readout: for qubits not explicitly measured, measure now
+      let idx = 0n
+      for (let q = 0; q < this.qubits; q++) {
+        const bit = measuredQubits.has(q) ? measured[q]! : sim.measure(q, rng())
+        if (bit) idx |= (1n << BigInt(q))
+      }
+
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+    }
+
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
+    return new Distribution(this.qubits, shots, counts, cregCounts)
+  }
+
+  // ── Hardware compilation ──────────────────────────────────────────────────
+
+  /**
+   * Transpile this circuit to the native gate set of the specified IonQ device.
+   *
+   * Supported devices: 'aria-1', 'forte-1', 'harmony' — all use {GPI, GPI2, MS, VZ}.
+   *
+   * Single-qubit decompositions (all exact up to global phase):
+   *   h  → vz(π/2) · gpi2(0) · vz(π/2)
+   *   x  → gpi(0)
+   *   y  → gpi(π/2)
+   *   z  → vz(π)
+   *   s  → vz(π/2)
+   *   si/sdg → vz(-π/2)
+   *   t  → vz(π/4)
+   *   ti/tdg → vz(-π/4)
+   *   rz/vz → vz (pass through)
+   *   gpi/gpi2 → pass through
+   *
+   * Two-qubit:
+   *   cnot(a,b) → gpi2(π/2,a) · ms(0,0,a,b) · gpi2(3π/2,a) · vz(-π/2,a) · vz(-π/2,b)
+   *   swap(a,b) → three CNOT decompositions (via above)
+   *   ms → pass through
+   *
+   * Barriers pass through. All other gates throw TypeError.
+   *
+   * @param device  Target device name ('aria-1', 'forte-1', 'harmony').
+   * @returns A new Circuit containing only native-gate ops.
+   * @throws TypeError for unsupported gates or unknown device names.
+   */
+  compile(device: string): Circuit {
+    const KNOWN_DEVICES = new Set(['aria-1', 'forte-1', 'harmony'])
+    if (!KNOWN_DEVICES.has(device)) {
+      throw new TypeError(`compile: unknown device '${device}'. Known IonQ devices: ${[...KNOWN_DEVICES].join(', ')}`)
+    }
+
+    const PI  = Math.PI
+    let result = new Circuit(this.qubits, [], this.#cregs, this.#gates)
+
+    // Helper: compile a CNOT(a→b) → native GPI2/MS/VZ sequence (found numerically).
+    // CNOT(ctrl=a, tgt=b) = GPI2(π/2, a) · GPI2(π, b) · MS(0,0, a,b) · GPI2(-π/2, a) · VZ(-π/2, a)
+    const compileCnot = (c: Circuit, a: number, b: number): Circuit => {
+      c = c.gpi2(PI / 2,  a)   // GPI2(π/2) on control
+      c = c.gpi2(PI,      b)   // GPI2(π)   on target
+      c = c.ms(0, 0,      a, b) // MS entangling gate
+      c = c.gpi2(-PI / 2, a)   // GPI2(-π/2) on control
+      c = c.vz(-PI / 2,   a)   // VZ(-π/2) on control
+      return c
+    }
+
+    for (const op of flattenOps(this.#ops)) {
+      switch (op.kind) {
+        case 'barrier':
+          result = result.barrier(...op.qubits)
+          break
+
+        case 'single': {
+          const name = op.meta?.name ?? '?'
+          const q    = op.q
+          switch (name) {
+            case 'gpi':  result = result.gpi(op.meta!.params![0]!, q);  break
+            case 'gpi2': result = result.gpi2(op.meta!.params![0]!, q); break
+            case 'vz':   result = result.vz(op.meta!.params![0]!, q);   break
+            case 'rz':   result = result.vz(op.meta!.params![0]!, q);   break
+            case 'h':
+              result = result.vz(PI / 2, q).gpi2(0, q).vz(PI / 2, q)
+              break
+            case 'x':  result = result.gpi(0, q);        break
+            case 'y':  result = result.gpi(PI / 2, q);   break
+            case 'z':  result = result.vz(PI, q);         break
+            case 's':  result = result.vz(PI / 2, q);    break
+            case 'si': case 'sdg':
+              result = result.vz(-PI / 2, q); break
+            case 't':  result = result.vz(PI / 4, q);    break
+            case 'ti': case 'tdg':
+              result = result.vz(-PI / 4, q); break
+            case 'id': break  // identity — no-op
+            default:
+              throw new TypeError(`compile: gate '${name}' cannot be compiled to ${device} native gates`)
+          }
+          break
+        }
+
+        case 'cnot':
+          result = compileCnot(result, op.control, op.target)
+          break
+
+        case 'swap': {
+          // SWAP = CNOT(a,b) · CNOT(b,a) · CNOT(a,b)
+          result = compileCnot(result, op.a, op.b)
+          result = compileCnot(result, op.b, op.a)
+          result = compileCnot(result, op.a, op.b)
+          break
+        }
+
+        case 'two': {
+          const name = op.meta?.name ?? '?'
+          if (name === 'ms') {
+            // Pass through MS gate natively
+            result = result.ms(op.meta!.params![0]!, op.meta!.params![1]!, op.a, op.b)
+          } else {
+            throw new TypeError(`compile: gate '${name}' cannot be compiled to ${device} native gates`)
+          }
+          break
+        }
+
+        case 'measure':
+          result = result.measure(op.q, op.creg, op.bit)
+          break
+
+        case 'reset':
+          // Reset is not a gate — pass through as-is (preserves collapse semantics)
+          result = result.reset(op.q)
+          break
+
+        default: {
+          const name = (op as { meta?: GateMeta }).meta?.name ?? op.kind
+          throw new TypeError(`compile: gate '${name}' cannot be compiled to ${device} native gates`)
+        }
+      }
+    }
+
+    return result
   }
 
   /**
