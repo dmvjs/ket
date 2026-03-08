@@ -6,7 +6,7 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applyControlled, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
 import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
 
@@ -22,10 +22,13 @@ type TwoOp        = { kind: 'two';        a: number;       b: number;    gate: G
 type ControlledOp = { kind: 'controlled'; control: number; target: number; gate: Gate2x2; meta?: GateMeta }
 type ToffoliOp    = { kind: 'toffoli';    c1: number; c2: number; target: number }
 type CSwapOp      = { kind: 'cswap';      control: number; a: number; b: number }
-type MeasureOp = { kind: 'measure'; q: number; creg: string; bit: number }
-type ResetOp   = { kind: 'reset';   q: number }
-type IfOp      = { kind: 'if';      creg: string; value: number; ops: readonly Op[] }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | MeasureOp | ResetOp | IfOp
+type CsrSwapOp    = { kind: 'csrswap';    control: number; a: number; b: number }
+type MeasureOp    = { kind: 'measure';    q: number; creg: string; bit: number }
+type ResetOp      = { kind: 'reset';      q: number }
+type IfOp         = { kind: 'if';         creg: string; value: number; ops: readonly Op[] }
+/** A user-defined named gate applied to a specific set of parent-circuit qubits. */
+type SubcircuitOp = { kind: 'subcircuit'; name: string; qubits: readonly number[]; def: readonly Op[] }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp
 
 // ─── Mid-circuit measurement helpers ─────────────────────────────────────────
 
@@ -61,16 +64,54 @@ function sampleSV(sv: StateVector, rand: number): bigint {
   return sorted.at(-1)?.[0] ?? 0n
 }
 
+/** Remap every qubit index in `op` through `qmap` (qmap[subcircuit-qubit] = parent-qubit). */
+function remapOp(op: Op, qmap: readonly number[]): Op {
+  const q = (i: number) => qmap[i]!
+  switch (op.kind) {
+    case 'single':     return { ...op, q: q(op.q) }
+    case 'cnot':       return { ...op, control: q(op.control), target: q(op.target) }
+    case 'swap':       return { ...op, a: q(op.a), b: q(op.b) }
+    case 'two':        return { ...op, a: q(op.a), b: q(op.b) }
+    case 'controlled': return { ...op, control: q(op.control), target: q(op.target) }
+    case 'toffoli':    return { ...op, c1: q(op.c1), c2: q(op.c2), target: q(op.target) }
+    case 'cswap':      return { ...op, control: q(op.control), a: q(op.a), b: q(op.b) }
+    case 'csrswap':    return { ...op, control: q(op.control), a: q(op.a), b: q(op.b) }
+    case 'subcircuit': return { ...op, qubits: op.qubits.map(i => q(i)) }
+    default:           return op  // measure/reset/if: validated at defineGate time
+  }
+}
+
+/**
+ * Recursively expand all SubcircuitOps into their constituent primitive ops,
+ * remapping qubit indices at each level. Returns a flat array with no subcircuit ops.
+ */
+function flattenOps(ops: readonly Op[]): readonly Op[] {
+  let hasSubcircuit = false
+  for (const op of ops) if (op.kind === 'subcircuit') { hasSubcircuit = true; break }
+  if (!hasSubcircuit) return ops  // fast path — no allocation for pure-primitive circuits
+
+  const result: Op[] = []
+  for (const op of ops) {
+    if (op.kind === 'subcircuit') {
+      result.push(...flattenOps(op.def.map(inner => remapOp(inner, op.qubits))))
+    } else {
+      result.push(op)
+    }
+  }
+  return result
+}
+
 /** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
 function simulatePure(ops: readonly Op[], qubits: number): StateVector {
   let sv: StateVector = zero(qubits)
-  for (const op of ops) {
+  for (const op of flattenOps(ops)) {
     if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
     else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
     else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
     else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
     else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
     else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
+    else if (op.kind === 'csrswap')    sv = applyCsrSwap(sv, op.control, op.a, op.b)
     else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
   }
   return sv
@@ -87,13 +128,14 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
   const p1 = noise?.p1 ?? 0
   const p2 = noise?.p2 ?? 0
   const pM = noise?.pMeas ?? 0
-  for (const op of ops) {
+  for (const op of flattenOps(ops)) {
     if      (op.kind === 'single')     { sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()) }
     else if (op.kind === 'cnot')       { sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
     else if (op.kind === 'controlled') { sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
     else if (op.kind === 'swap')       { sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
     else if (op.kind === 'toffoli')      sv = applyToffoli(sv, op.c1, op.c2, op.target)
     else if (op.kind === 'cswap')        sv = applyCSwap(sv, op.control, op.a, op.b)
+    else if (op.kind === 'csrswap')      sv = applyCsrSwap(sv, op.control, op.a, op.b)
     else if (op.kind === 'two')        { sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
     else if (op.kind === 'measure') {
       const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
@@ -246,6 +288,7 @@ function qasmGateName(meta: GateMeta): { qname: string; qparams: number[] } {
     case 'r2':   return { qname: 'rz',   qparams: [Math.PI / 2] }
     case 'r4':   return { qname: 'rz',   qparams: [Math.PI / 4] }
     case 'r8':   return { qname: 'rz',   qparams: [Math.PI / 8] }
+    case 'vz':   return { qname: 'rz',   qparams: [...(meta.params ?? [])] }  // VirtualZ ≡ Rz
     case 'cr2':  return { qname: 'crz',  qparams: [Math.PI / 2] }
     case 'cr4':  return { qname: 'crz',  qparams: [Math.PI / 4] }
     case 'cr8':  return { qname: 'crz',  qparams: [Math.PI / 8] }
@@ -403,15 +446,22 @@ export class Circuit {
   readonly qubits: number
   readonly #ops:   readonly Op[]
   readonly #cregs: ReadonlyMap<string, number>  // name → declared size
+  readonly #gates: ReadonlyMap<string, Circuit>  // name → registered sub-circuit
 
-  constructor(qubits: number, ops: readonly Op[] = [], cregs: ReadonlyMap<string, number> = new Map()) {
+  constructor(
+    qubits: number,
+    ops:   readonly Op[]                 = [],
+    cregs: ReadonlyMap<string, number>   = new Map(),
+    gates: ReadonlyMap<string, Circuit>  = new Map(),
+  ) {
     this.qubits  = qubits
     this.#ops    = ops
     this.#cregs  = cregs
+    this.#gates  = gates
   }
 
   #add(op: Op): Circuit {
-    return new Circuit(this.qubits, [...this.#ops, op], this.#cregs)
+    return new Circuit(this.qubits, [...this.#ops, op], this.#cregs, this.#gates)
   }
 
   #ctrl(control: number, target: number, gate: Gate2x2, meta?: GateMeta): Circuit {
@@ -439,6 +489,13 @@ export class Circuit {
   rx(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rx(theta), meta: { name: 'rx', params: [theta] } }) }
   ry(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ry(theta), meta: { name: 'ry', params: [theta] } }) }
   rz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'rz', params: [theta] } }) }
+
+  /**
+   * VirtualZ(θ) — named Rz alias common in superconducting hardware native gate sets
+   * (IBM, Rigetti). Functionally identical to `rz(θ)` but carries the `vz` name through
+   * import/export for hardware compilation pass awareness.
+   */
+  vz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'vz', params: [theta] } }) }
 
   // ── Named phase rotation gates ───────────────────────────────────────────
 
@@ -564,6 +621,11 @@ export class Circuit {
     return this.#add({ kind: 'cswap', control, a, b })
   }
 
+  /** C-√iSWAP: apply √iSWAP to qubits a and b if control is |1⟩. Completes the three-qubit gate set. */
+  csrswap(control: number, a: number, b: number): Circuit {
+    return this.#add({ kind: 'csrswap', control, a, b })
+  }
+
   // ── Statevector inspection ────────────────────────────────────────────────
 
   /**
@@ -652,7 +714,7 @@ export class Circuit {
 
   /** Declare a classical register of `size` bits. */
   creg(name: string, size: number): Circuit {
-    return new Circuit(this.qubits, this.#ops, new Map(this.#cregs).set(name, size))
+    return new Circuit(this.qubits, this.#ops, new Map(this.#cregs).set(name, size), this.#gates)
   }
 
   /**
@@ -666,11 +728,20 @@ export class Circuit {
       this.qubits,
       [...this.#ops, { kind: 'measure', q, creg, bit }],
       new Map(this.#cregs).set(creg, size),
+      this.#gates,
     )
   }
 
-  /** Reset qubit `q` to |0⟩ by measuring and conditionally flipping. */
-  reset(q: number): Circuit { return this.#add({ kind: 'reset', q }) }
+  /**
+   * Reset qubit `q` to the given computational basis state (default |0⟩).
+   *
+   * - `reset(q)` / `reset(q, 0)` — unconditionally collapses `q` to |0⟩.
+   * - `reset(q, 1)` — collapses to |0⟩ then flips to |1⟩, equivalent to `reset(q).x(q)`.
+   */
+  reset(q: number, value: 0 | 1 = 0): Circuit {
+    const r = this.#add({ kind: 'reset', q })
+    return value === 1 ? r.x(q) : r
+  }
 
   /**
    * Conditionally apply a gate (or sequence of gates) only when the classical
@@ -684,8 +755,61 @@ export class Circuit {
    * circuit.if('c', 1, c => c.x(2))
    */
   if(creg: string, value: number, build: (c: Circuit) => Circuit): Circuit {
-    const inner = build(new Circuit(this.qubits))
+    const inner = build(new Circuit(this.qubits, [], new Map(), this.#gates))
     return this.#add({ kind: 'if', creg, value, ops: inner.#ops })
+  }
+
+  // ── Named sub-circuit gates ──────────────────────────────────────────────
+
+  /**
+   * Register a named reusable gate defined by `sub`.
+   *
+   * The registered gate can be used on this circuit (and any circuit derived
+   * from it) via `.gate(name, ...qubits)`.
+   *
+   * @example
+   * const bell = new Circuit(2).h(0).cnot(0, 1)
+   * const c = new Circuit(4)
+   *   .defineGate('bell', bell)
+   *   .gate('bell', 0, 1)   // Bell pair on qubits 0,1
+   *   .gate('bell', 2, 3)   // Bell pair on qubits 2,3
+   */
+  defineGate(name: string, sub: Circuit): Circuit {
+    if (sub.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError(`Gate '${name}' contains classical ops (measure/reset/if), which are not supported inside named gates`)
+    }
+    return new Circuit(this.qubits, this.#ops, this.#cregs, new Map(this.#gates).set(name, sub))
+  }
+
+  /**
+   * Apply a previously registered named gate to the given parent-circuit qubits.
+   *
+   * The number of `qubits` must match the qubit count of the registered gate.
+   * Qubit 0 of the gate maps to `qubits[0]`, qubit 1 to `qubits[1]`, etc.
+   *
+   * @example
+   * circuit.gate('bell', 2, 3)  // apply 'bell' gate to parent qubits 2 and 3
+   */
+  gate(name: string, ...qubits: number[]): Circuit {
+    const sub = this.#gates.get(name)
+    if (!sub) throw new TypeError(`Unknown gate '${name}'. Register it first with .defineGate(name, subcircuit).`)
+    if (qubits.length !== sub.qubits) {
+      throw new TypeError(`Gate '${name}' expects ${sub.qubits} qubit(s), got ${qubits.length}`)
+    }
+    return this.#add({ kind: 'subcircuit', name, qubits, def: sub.#ops })
+  }
+
+  /**
+   * Inline all named gates, returning a new `Circuit` containing only primitive ops.
+   *
+   * Required before serialization (toQASM, toQiskit, etc.) when the circuit
+   * contains named gates applied via `.gate()`.
+   *
+   * @example
+   * circuit.defineGate('bell', bell).gate('bell', 0, 1).decompose()
+   */
+  decompose(): Circuit {
+    return new Circuit(this.qubits, flattenOps(this.#ops), this.#cregs, this.#gates)
   }
 
   // ── IonQ JSON import / export ────────────────────────────────────────────
@@ -748,13 +872,18 @@ export class Circuit {
     const IONQ_SINGLE = new Set(['h','x','y','z','s','si','t','ti','v','vi','rx','ry','rz','r2','r4','r8','gpi','gpi2'])
     const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
     const circuit: IonQGate[] = []
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       if (op.kind === 'cnot') {
         circuit.push({ gate: 'cnot', control: op.control, target: op.target })
       } else if (op.kind === 'swap') {
         circuit.push({ gate: 'swap', targets: [op.a, op.b] })
+      } else if (op.kind === 'csrswap') {
+        throw new TypeError(`Gate 'csrswap' is not serializable to IonQ JSON`)
       } else if (op.kind === 'single' && op.meta?.name === 'id') {
         // Identity gate has no IonQ JSON representation; omit (no effect on state)
+      } else if (op.kind === 'single' && op.meta?.name === 'vz') {
+        // VirtualZ = Rz; IonQ has no vz gate, emit as rz
+        circuit.push({ gate: 'rz', target: op.q, rotation: op.meta.params![0]! / Math.PI })
       } else if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) {
         const { name, params } = op.meta
         const g: IonQGate = { gate: name, target: op.q }
@@ -798,12 +927,13 @@ export class Circuit {
     for (const [name, size] of this.#cregs) lines.push(`creg ${name}[${size}];`)
     if (this.#cregs.size) lines.push('')
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    lines.push(`cx q[${op.control}],q[${op.target}];`); break
         case 'swap':    lines.push(`swap q[${op.a}],q[${op.b}];`);         break
         case 'toffoli': lines.push(`ccx q[${op.c1}],q[${op.c2}],q[${op.target}];`); break
         case 'cswap':   lines.push(`cswap q[${op.control}],q[${op.a}],q[${op.b}];`); break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no OpenQASM 2.0 representation")
         case 'measure': lines.push(`measure q[${op.q}] -> ${op.creg}[${op.bit}];`); break
         case 'reset':   lines.push(`reset q[${op.q}];`); break
         case 'if':      throw new TypeError('if ops cannot be serialized to OpenQASM 2.0')
@@ -906,12 +1036,13 @@ export class Circuit {
     }
     if (cregLines.length) lines.push(...cregLines, '')
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    lines.push(`qc.cx(${op.control}, ${op.target})`);             break
         case 'swap':    lines.push(`qc.swap(${op.a}, ${op.b})`);                      break
         case 'toffoli': lines.push(`qc.ccx(${op.c1}, ${op.c2}, ${op.target})`);      break
         case 'cswap':   lines.push(`qc.cswap(${op.control}, ${op.a}, ${op.b})`);     break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Qiskit representation")
         case 'measure': lines.push(`qc.measure(${op.q}, ${op.creg}[${op.bit}])`);    break
         case 'reset':   lines.push(`qc.reset(${op.q})`);                              break
         case 'if':      throw new TypeError('if ops cannot be serialized to Qiskit')
@@ -940,6 +1071,7 @@ export class Circuit {
             case 'rx': lines.push(`qc.rx(${angle()}, ${q})`);        break
             case 'ry': lines.push(`qc.ry(${angle()}, ${q})`);        break
             case 'rz': lines.push(`qc.rz(${angle()}, ${q})`);        break
+            case 'vz': lines.push(`qc.rz(${angle()}, ${q})`);        break
             case 'u1': lines.push(`qc.u1(${angle()}, ${q})`);        break
             case 'u2': lines.push(`qc.u2(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${q})`); break
             case 'u3': lines.push(`qc.u3(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${pyAngle(p![2]!)}, ${q})`); break
@@ -975,26 +1107,21 @@ export class Circuit {
     return [...imports, ...lines].join('\n')
   }
 
-  /**
-   * Emit Python code for Google Cirq.
-   * Gate coverage: H/X/Y/Z/S/T, rx/ry/rz, r2/r4/r8, u1/u3,
-   * CNOT/CZ/CY/CH/swap/CCNOT/CSWAP, crx/cry/crz/cu1/cu3.
-   * Throws for gpi/gpi2/ms/xx/yy/zz/xy/iswap/srswap/if.
-   */
-  toCirq(): string {
+  /** Build the list of `    cirq.*` op strings shared by toCirq() and toTFQ(). */
+  #cirqOps(): string[] {
     const ops: string[] = []
-
-    const gateOp = (gate: string, qs: number[]) =>
+    const go   = (gate: string, qs: number[]) =>
       `    ${gate}(${qs.map(q => `q[${q}]`).join(', ')}),`
     const rads = (r: number) => `rads=${pyAngle(r)}`
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
-        case 'cnot':    ops.push(gateOp('cirq.CNOT', [op.control, op.target]));  break
-        case 'swap':    ops.push(gateOp('cirq.SWAP', [op.a, op.b]));             break
-        case 'toffoli': ops.push(gateOp('cirq.CCNOT', [op.c1, op.c2, op.target])); break
-        case 'cswap':   ops.push(gateOp('cirq.CSWAP', [op.control, op.a, op.b])); break
-        case 'measure': throw new TypeError('measure ops cannot be serialized to Cirq via toCirc(); use cirq.measure() manually')
+        case 'cnot':    ops.push(go('cirq.CNOT', [op.control, op.target]));    break
+        case 'swap':    ops.push(go('cirq.SWAP', [op.a, op.b]));               break
+        case 'toffoli': ops.push(go('cirq.CCNOT', [op.c1, op.c2, op.target])); break
+        case 'cswap':   ops.push(go('cirq.CSWAP', [op.control, op.a, op.b])); break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Cirq representation")
+        case 'measure': throw new TypeError('measure ops cannot be serialized to Cirq via toCirq(); use cirq.measure() manually')
         case 'reset':   throw new TypeError('reset ops cannot be serialized to Cirq via toCirq()')
         case 'if':      throw new TypeError('if ops cannot be serialized to Cirq')
         case 'two': {
@@ -1006,23 +1133,24 @@ export class Circuit {
           const { name: n, params: p } = op.meta
           const q = op.q
           switch (n) {
-            case 'id':  ops.push(gateOp('cirq.I', [q]));                         break
-            case 'h':   ops.push(gateOp('cirq.H', [q]));                         break
-            case 'x':   ops.push(gateOp('cirq.X', [q]));                         break
-            case 'y':   ops.push(gateOp('cirq.Y', [q]));                         break
-            case 'z':   ops.push(gateOp('cirq.Z', [q]));                         break
-            case 's':   ops.push(gateOp('cirq.S', [q]));                         break
-            case 'si':  ops.push(`    cirq.ZPowGate(exponent=-0.5)(q[${q}]),`);  break
-            case 't':   ops.push(gateOp('cirq.T', [q]));                         break
-            case 'ti':  ops.push(`    cirq.ZPowGate(exponent=-0.25)(q[${q}]),`); break
-            case 'v':   ops.push(`    cirq.X**0.5(q[${q}]),`);                   break
-            case 'vi':  ops.push(`    (cirq.X**-0.5)(q[${q}]),`);                break
-            case 'r2':  ops.push(`    cirq.rz(${rads(Math.PI / 2)})(q[${q}]),`); break
-            case 'r4':  ops.push(`    cirq.rz(${rads(Math.PI / 4)})(q[${q}]),`); break
-            case 'r8':  ops.push(`    cirq.rz(${rads(Math.PI / 8)})(q[${q}]),`); break
-            case 'rx':  ops.push(`    cirq.rx(${rads(p![0]!)})(q[${q}]),`);      break
-            case 'ry':  ops.push(`    cirq.ry(${rads(p![0]!)})(q[${q}]),`);      break
-            case 'rz':  ops.push(`    cirq.rz(${rads(p![0]!)})(q[${q}]),`);      break
+            case 'id':  ops.push(go('cirq.I', [q]));                                                  break
+            case 'h':   ops.push(go('cirq.H', [q]));                                                  break
+            case 'x':   ops.push(go('cirq.X', [q]));                                                  break
+            case 'y':   ops.push(go('cirq.Y', [q]));                                                  break
+            case 'z':   ops.push(go('cirq.Z', [q]));                                                  break
+            case 's':   ops.push(go('cirq.S', [q]));                                                  break
+            case 'si':  ops.push(`    cirq.ZPowGate(exponent=-0.5)(q[${q}]),`);                       break
+            case 't':   ops.push(go('cirq.T', [q]));                                                  break
+            case 'ti':  ops.push(`    cirq.ZPowGate(exponent=-0.25)(q[${q}]),`);                      break
+            case 'v':   ops.push(`    cirq.X**0.5(q[${q}]),`);                                        break
+            case 'vi':  ops.push(`    (cirq.X**-0.5)(q[${q}]),`);                                     break
+            case 'r2':  ops.push(`    cirq.rz(${rads(Math.PI / 2)})(q[${q}]),`);                      break
+            case 'r4':  ops.push(`    cirq.rz(${rads(Math.PI / 4)})(q[${q}]),`);                      break
+            case 'r8':  ops.push(`    cirq.rz(${rads(Math.PI / 8)})(q[${q}]),`);                      break
+            case 'rx':  ops.push(`    cirq.rx(${rads(p![0]!)})(q[${q}]),`);                           break
+            case 'ry':  ops.push(`    cirq.ry(${rads(p![0]!)})(q[${q}]),`);                           break
+            case 'rz':  ops.push(`    cirq.rz(${rads(p![0]!)})(q[${q}]),`);                           break
+            case 'vz':  ops.push(`    cirq.rz(${rads(p![0]!)})(q[${q}]),`);                           break
             case 'u1':  ops.push(`    cirq.ZPowGate(exponent=${pyAngle(p![0]! / Math.PI)})(q[${q}]),`); break
             case 'u3':  throw new TypeError('U3 has no direct Cirq equivalent; use cirq.MatrixGate(np.array([...])) with the explicit unitary')
             case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no Cirq representation`)
@@ -1035,27 +1163,37 @@ export class Circuit {
           const { name: n, params: p } = op.meta
           const [c, t] = [op.control, op.target]
           switch (n) {
-            case 'cy':   ops.push(`    cirq.Y.controlled()(q[${c}], q[${t}]),`);                       break
-            case 'cz':   ops.push(gateOp('cirq.CZ', [c, t]));                                          break
-            case 'ch':   ops.push(`    cirq.H.controlled()(q[${c}], q[${t}]),`);                       break
-            case 'cr2':  ops.push(`    cirq.rz(${rads(Math.PI/2)}).controlled()(q[${c}], q[${t}]),`);  break
-            case 'cr4':  ops.push(`    cirq.rz(${rads(Math.PI/4)}).controlled()(q[${c}], q[${t}]),`);  break
-            case 'cr8':  ops.push(`    cirq.rz(${rads(Math.PI/8)}).controlled()(q[${c}], q[${t}]),`);  break
-            case 'crx':  ops.push(`    cirq.rx(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
-            case 'cry':  ops.push(`    cirq.ry(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
-            case 'crz':  ops.push(`    cirq.rz(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);     break
+            case 'cy':   ops.push(`    cirq.Y.controlled()(q[${c}], q[${t}]),`);                                        break
+            case 'cz':   ops.push(go('cirq.CZ', [c, t]));                                                               break
+            case 'ch':   ops.push(`    cirq.H.controlled()(q[${c}], q[${t}]),`);                                        break
+            case 'cr2':  ops.push(`    cirq.rz(${rads(Math.PI/2)}).controlled()(q[${c}], q[${t}]),`);                   break
+            case 'cr4':  ops.push(`    cirq.rz(${rads(Math.PI/4)}).controlled()(q[${c}], q[${t}]),`);                   break
+            case 'cr8':  ops.push(`    cirq.rz(${rads(Math.PI/8)}).controlled()(q[${c}], q[${t}]),`);                   break
+            case 'crx':  ops.push(`    cirq.rx(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);                      break
+            case 'cry':  ops.push(`    cirq.ry(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);                      break
+            case 'crz':  ops.push(`    cirq.rz(${rads(p![0]!)}).controlled()(q[${c}], q[${t}]),`);                      break
             case 'cu1':  ops.push(`    cirq.ZPowGate(exponent=${pyAngle(p![0]! / Math.PI)}).controlled()(q[${c}], q[${t}]),`); break
-            case 'cs':   ops.push(`    cirq.ZPowGate(exponent=0.5).controlled()(q[${c}], q[${t}]),`);  break
-            case 'ct':   ops.push(`    cirq.ZPowGate(exponent=0.25).controlled()(q[${c}], q[${t}]),`); break
-            case 'csdg': ops.push(`    cirq.ZPowGate(exponent=-0.5).controlled()(q[${c}], q[${t}]),`); break
-            case 'ctdg': ops.push(`    cirq.ZPowGate(exponent=-0.25).controlled()(q[${c}], q[${t}]),`);break
+            case 'cs':   ops.push(`    cirq.ZPowGate(exponent=0.5).controlled()(q[${c}], q[${t}]),`);                   break
+            case 'ct':   ops.push(`    cirq.ZPowGate(exponent=0.25).controlled()(q[${c}], q[${t}]),`);                  break
+            case 'csdg': ops.push(`    cirq.ZPowGate(exponent=-0.5).controlled()(q[${c}], q[${t}]),`);                  break
+            case 'ctdg': ops.push(`    cirq.ZPowGate(exponent=-0.25).controlled()(q[${c}], q[${t}]),`);                 break
             default:     throw new TypeError(`Gate '${n}' has no Cirq representation`)
           }
           break
         }
       }
     }
+    return ops
+  }
 
+  /**
+   * Emit Python code for Google Cirq.
+   * Gate coverage: H/X/Y/Z/S/T, rx/ry/rz, r2/r4/r8, u1/u3,
+   * CNOT/CZ/CY/CH/swap/CCNOT/CSWAP, crx/cry/crz/cu1/cu3.
+   * Throws for gpi/gpi2/ms/xx/yy/zz/xy/iswap/srswap/if.
+   */
+  toCirq(): string {
+    const ops  = this.#cirqOps()
     const body = ops.length ? ops.join('\n') : '    # empty circuit'
     return [
       'import cirq',
@@ -1065,6 +1203,35 @@ export class Circuit {
       'circuit = cirq.Circuit([',
       body,
       '])',
+    ].join('\n')
+  }
+
+  /**
+   * Emit Python code for TensorFlow Quantum (TFQ).
+   *
+   * TFQ wraps Cirq circuits; qubits must be `cirq.GridQubit` instances.
+   * The output includes the `tfq.convert_to_tensor` call needed to feed
+   * the circuit into a TFQ layer.
+   *
+   * ```python
+   * tensor = tfq.convert_to_tensor([circuit])
+   * ```
+   *
+   * Same gate coverage and restrictions as `toCirq()`.
+   */
+  toTFQ(): string {
+    const ops  = this.#cirqOps()
+    const body = ops.length ? ops.join('\n') : '    # empty circuit'
+    return [
+      'import cirq',
+      'import math',
+      'import tensorflow_quantum as tfq',
+      '',
+      `q = [cirq.GridQubit(0, i) for i in range(${this.qubits})]`,
+      'circuit = cirq.Circuit([',
+      body,
+      '])',
+      'tensor = tfq.convert_to_tensor([circuit])',
     ].join('\n')
   }
 
@@ -1095,12 +1262,13 @@ export class Circuit {
     }
 
     const body: string[] = []
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    body.push(`        CNOT(q[${op.control}], q[${op.target}]);`);                                         break
         case 'swap':    body.push(`        SWAP(q[${op.a}], q[${op.b}]);`);                                                    break
         case 'toffoli': body.push(`        CCNOT(q[${op.c1}], q[${op.c2}], q[${op.target}]);`);                               break
         case 'cswap':   body.push(`        Controlled SWAP([q[${op.control}]], (q[${op.a}], q[${op.b}]));`);                   break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Q# representation")
         case 'measure': body.push(`        set ${op.creg}w${op.bit} = M(q[${op.q}]) == One;`);                                 break
         case 'reset':   body.push(`        Reset(q[${op.q}]);`);                                                               break
         case 'if':      throw new TypeError('if ops cannot be serialized to Q#')
@@ -1128,6 +1296,7 @@ export class Circuit {
             case 'rx':  body.push(`        Rx(${ang()}, q[${q}]);`);                        break
             case 'ry':  body.push(`        Ry(${ang()}, q[${q}]);`);                        break
             case 'rz':  body.push(`        Rz(${ang()}, q[${q}]);`);                        break
+            case 'vz':  body.push(`        Rz(${ang()}, q[${q}]);`);                        break
             case 'u1':  body.push(`        Rz(${ang()}, q[${q}]);`);                        break  // U1 = Rz up to global phase
             case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no Q# representation`)
             default:    throw new TypeError(`Gate '${n}' has no Q# representation`)
@@ -1187,12 +1356,13 @@ export class Circuit {
     const used = new Set<string>()
     const body: string[] = []
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    used.add('CNOT');  body.push(`p += CNOT(${op.control}, ${op.target})`);          break
         case 'swap':    used.add('SWAP');  body.push(`p += SWAP(${op.a}, ${op.b})`);                     break
         case 'toffoli': used.add('CCNOT'); body.push(`p += CCNOT(${op.c1}, ${op.c2}, ${op.target})`);   break
         case 'cswap':   used.add('CSWAP'); body.push(`p += CSWAP(${op.control}, ${op.a}, ${op.b})`);    break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no pyQuil representation")
         case 'measure': used.add('MEASURE'); body.push(`p += MEASURE(${op.q}, ro[${op.bit}])`);          break
         case 'reset':   body.push(`p += RESET(${op.q})`);                                                break
         case 'if':      throw new TypeError('if ops cannot be serialized to pyQuil')
@@ -1224,6 +1394,7 @@ export class Circuit {
             case 'rx':  used.add('RX');  body.push(`p += RX(${ang()}, ${q})`);   break
             case 'ry':  used.add('RY');  body.push(`p += RY(${ang()}, ${q})`);   break
             case 'rz':  used.add('RZ');  body.push(`p += RZ(${ang()}, ${q})`);   break
+            case 'vz':  used.add('RZ');  body.push(`p += RZ(${ang()}, ${q})`);   break
             case 'gpi': case 'gpi2': throw new TypeError(`Gate '${n}' has no pyQuil representation`)
             default: throw new TypeError(`Gate '${n}' has no pyQuil representation`)
           }
@@ -1264,12 +1435,13 @@ export class Circuit {
     for (const [name, size] of this.#cregs) lines.push(`DECLARE ${name} BIT[${size}]`)
     if (this.#cregs.size) lines.push('')
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    lines.push(`CNOT ${op.control} ${op.target}`);              break
         case 'swap':    lines.push(`SWAP ${op.a} ${op.b}`);                         break
         case 'toffoli': lines.push(`CCNOT ${op.c1} ${op.c2} ${op.target}`);        break
         case 'cswap':   lines.push(`CSWAP ${op.control} ${op.a} ${op.b}`);         break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Quil representation")
         case 'measure': lines.push(`MEASURE ${op.q} ${op.creg}[${op.bit}]`);       break
         case 'reset':   lines.push(`RESET ${op.q}`);                                break
         case 'if':      throw new TypeError('if ops cannot be serialized to Quil')
@@ -1300,6 +1472,7 @@ export class Circuit {
             case 'rx':  lines.push(`RX(${ang(p![0]!)}) ${q}`);    break
             case 'ry':  lines.push(`RY(${ang(p![0]!)}) ${q}`);    break
             case 'rz':  lines.push(`RZ(${ang(p![0]!)}) ${q}`);    break
+            case 'vz':  lines.push(`RZ(${ang(p![0]!)}) ${q}`);    break
             case 'u1':  lines.push(`PHASE(${ang(p![0]!)}) ${q}`); break
             case 'gpi': case 'gpi2':
               throw new TypeError(`Gate '${n}' has no Quil representation`)
@@ -1348,12 +1521,13 @@ export class Circuit {
     const lines: string[] = []
     const a = (r: number) => pyAngle(r)
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'cnot':    lines.push(`circ.cnot(${op.control}, ${op.target})`);           break
         case 'swap':    lines.push(`circ.swap(${op.a}, ${op.b})`);                      break
         case 'toffoli': lines.push(`circ.ccnot(${op.c1}, ${op.c2}, ${op.target})`);    break
         case 'cswap':   lines.push(`circ.cswap(${op.control}, ${op.a}, ${op.b})`);     break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Braket representation")
         case 'measure': throw new TypeError('measure ops cannot be serialized to Braket via toBraket()')
         case 'reset':   throw new TypeError('reset ops cannot be serialized to Braket via toBraket()')
         case 'if':      throw new TypeError('if ops cannot be serialized to Braket')
@@ -1389,6 +1563,7 @@ export class Circuit {
             case 'rx':  lines.push(`circ.rx(${q}, ${a(p![0]!)})`);              break
             case 'ry':  lines.push(`circ.ry(${q}, ${a(p![0]!)})`);              break
             case 'rz':  lines.push(`circ.rz(${q}, ${a(p![0]!)})`);              break
+            case 'vz':  lines.push(`circ.rz(${q}, ${a(p![0]!)})`);              break
             case 'u1':  lines.push(`circ.phaseshift(${q}, ${a(p![0]!)})`);      break
             case 'gpi': case 'gpi2':
               throw new TypeError(`Gate '${n}' has no Braket representation`)
@@ -1431,6 +1606,217 @@ export class Circuit {
       'circ = Circuit()',
       ...lines,
     ].join('\n')
+  }
+
+  /**
+   * Emit a CUDA Quantum (cudaq) Python kernel.
+   *
+   * ```python
+   * import math
+   * import cudaq
+   *
+   * kernel = cudaq.make_kernel()
+   * q = kernel.qalloc(2)
+   * kernel.h(q[0])
+   * kernel.cx(q[0], q[1])
+   * ```
+   *
+   * Limitations: classical ops (measure/reset/if), IonQ-native gates (gpi/gpi2/ms),
+   * √X variants (v/vi), and interaction gates (xx/yy/zz/xy/iswap/srswap) have no
+   * direct CudaQ equivalent and will throw.
+   */
+  toCudaQ(): string {
+    const lines: string[] = []
+    const a  = (r: number) => pyAngle(r)
+    const qi = (i: number) => `q[${i}]`
+
+    for (const op of flattenOps(this.#ops)) {
+      switch (op.kind) {
+        case 'cnot':    lines.push(`kernel.cx(${qi(op.control)}, ${qi(op.target)})`);              break
+        case 'swap':    lines.push(`kernel.swap(${qi(op.a)}, ${qi(op.b)})`);                       break
+        case 'toffoli': lines.push(`kernel.ccx(${qi(op.c1)}, ${qi(op.c2)}, ${qi(op.target)})`);   break
+        case 'cswap':   lines.push(`kernel.cswap(${qi(op.control)}, ${qi(op.a)}, ${qi(op.b)})`);  break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no CudaQ representation")
+        case 'measure': throw new TypeError('measure ops cannot be serialized to CudaQ via toCudaQ()')
+        case 'reset':   throw new TypeError('reset ops cannot be serialized to CudaQ via toCudaQ()')
+        case 'if':      throw new TypeError('if ops cannot be serialized to CudaQ via toCudaQ()')
+        case 'two': {
+          const n = op.meta?.name
+          throw new TypeError(`Gate '${n ?? 'two'}' has no CudaQ representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = qi(op.q)
+          switch (n) {
+            case 'id':  /* no-op — CudaQ has no identity gate */             break
+            case 'h':   lines.push(`kernel.h(${q})`);                        break
+            case 'x':   lines.push(`kernel.x(${q})`);                        break
+            case 'y':   lines.push(`kernel.y(${q})`);                        break
+            case 'z':   lines.push(`kernel.z(${q})`);                        break
+            case 's':   lines.push(`kernel.s(${q})`);                        break
+            case 'si':  lines.push(`kernel.sdg(${q})`);                      break
+            case 't':   lines.push(`kernel.t(${q})`);                        break
+            case 'ti':  lines.push(`kernel.tdg(${q})`);                      break
+            case 'r2':  lines.push(`kernel.rz(math.pi/2, ${q})`);            break
+            case 'r4':  lines.push(`kernel.rz(math.pi/4, ${q})`);            break
+            case 'r8':  lines.push(`kernel.rz(math.pi/8, ${q})`);            break
+            case 'rx':  lines.push(`kernel.rx(${a(p![0]!)}, ${q})`);         break
+            case 'ry':  lines.push(`kernel.ry(${a(p![0]!)}, ${q})`);         break
+            case 'rz':  lines.push(`kernel.rz(${a(p![0]!)}, ${q})`);         break
+            case 'vz':  lines.push(`kernel.rz(${a(p![0]!)}, ${q})`);         break
+            case 'u1':  lines.push(`kernel.r1(${a(p![0]!)}, ${q})`);         break
+            case 'u2':  lines.push(`kernel.u3(math.pi/2, ${a(p![0]!)}, ${a(p![1]!)}, ${q})`); break
+            case 'u3':  lines.push(`kernel.u3(${a(p![0]!)}, ${a(p![1]!)}, ${a(p![2]!)}, ${q})`); break
+            case 'v': case 'vi':
+              throw new TypeError(`Gate '${n}' has no CudaQ representation`)
+            case 'gpi': case 'gpi2':
+              throw new TypeError(`Gate '${n}' has no CudaQ representation`)
+            default:
+              throw new TypeError(`Gate '${n}' has no CudaQ representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [qi(op.control), qi(op.target)]
+          switch (n) {
+            case 'cy':   lines.push(`kernel.cy(${c}, ${t})`);                         break
+            case 'cz':   lines.push(`kernel.cz(${c}, ${t})`);                         break
+            case 'ch':   lines.push(`kernel.ch(${c}, ${t})`);                         break
+            case 'crx':  lines.push(`kernel.crx(${a(p![0]!)}, ${c}, ${t})`);          break
+            case 'cry':  lines.push(`kernel.cry(${a(p![0]!)}, ${c}, ${t})`);          break
+            case 'crz':  lines.push(`kernel.crz(${a(p![0]!)}, ${c}, ${t})`);          break
+            case 'cr2':  lines.push(`kernel.crz(math.pi/2, ${c}, ${t})`);             break
+            case 'cr4':  lines.push(`kernel.crz(math.pi/4, ${c}, ${t})`);             break
+            case 'cr8':  lines.push(`kernel.crz(math.pi/8, ${c}, ${t})`);             break
+            case 'cu1':  lines.push(`kernel.cr1(${a(p![0]!)}, ${c}, ${t})`);          break
+            case 'cs':   lines.push(`kernel.cr1(math.pi/2, ${c}, ${t})`);             break
+            case 'ct':   lines.push(`kernel.cr1(math.pi/4, ${c}, ${t})`);             break
+            case 'csdg': lines.push(`kernel.cr1(-math.pi/2, ${c}, ${t})`);            break
+            case 'ctdg': lines.push(`kernel.cr1(-math.pi/4, ${c}, ${t})`);            break
+            default:
+              throw new TypeError(`Gate '${n}' has no CudaQ representation`)
+          }
+          break
+        }
+      }
+    }
+
+    return [
+      'import math',
+      'import cudaq',
+      '',
+      'kernel = cudaq.make_kernel()',
+      `q = kernel.qalloc(${this.qubits})`,
+      ...lines,
+    ].join('\n')
+  }
+
+  /**
+   * Emit a Quirk (algassert.com/quirk) JSON circuit descriptor.
+   *
+   * Returns a JSON string `{"cols":[...]}` that can be pasted into Quirk's
+   * "Load" dialog or appended to the URL as `#circuit=<encoded>`.
+   *
+   * Column structure: each column is an array indexed by qubit.
+   * `1` = idle wire, `"•"` = control, named strings or `{id, arg}` = gates.
+   * Angles are in half-turns: arg = θ/π (Rx(π/2) → arg=0.5).
+   *
+   * Limitations: U2/U3/gpi/gpi2/ms, interaction gates (xx/yy/zz/xy/iswap/srswap),
+   * and if/reset ops have no Quirk equivalent and will throw.
+   * Measure ops emit `"Measure"`. U1 is approximated as Rz (same unitary up to global phase).
+   */
+  toQuirk(): string {
+    type QuirkGate = string | number | { id: string; arg: number }
+    const cols: QuirkGate[][] = []
+    const n   = this.qubits
+    const rot = (id: string, theta: number): { id: string; arg: number } =>
+      ({ id, arg: theta / Math.PI })
+
+    const col = (entries: Partial<Record<number, QuirkGate>>) => {
+      const c: QuirkGate[] = new Array(n).fill(1)
+      for (const [q, g] of Object.entries(entries)) c[+q] = g!
+      while (c.length > 1 && c[c.length - 1] === 1) c.pop()
+      cols.push(c)
+    }
+
+    for (const op of flattenOps(this.#ops)) {
+      switch (op.kind) {
+        case 'cnot':    col({ [op.control]: '•',    [op.target]: 'X' });                           break
+        case 'swap':    col({ [op.a]: 'Swap',        [op.b]: 'Swap' });                            break
+        case 'toffoli': col({ [op.c1]: '•', [op.c2]: '•', [op.target]: 'X' });                   break
+        case 'cswap':   col({ [op.control]: '•', [op.a]: 'Swap', [op.b]: 'Swap' });               break
+        case 'csrswap': throw new TypeError("Gate 'csrswap' has no Quirk representation")
+        case 'measure': col({ [op.q]: 'Measure' });                                                break
+        case 'reset':   throw new TypeError('reset ops cannot be serialized to Quirk via toQuirk()')
+        case 'if':      throw new TypeError('if ops cannot be serialized to Quirk via toQuirk()')
+        case 'two': {
+          const n = op.meta?.name
+          throw new TypeError(`Gate '${n ?? 'two'}' has no Quirk representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: nm, params: p } = op.meta
+          const q = op.q
+          switch (nm) {
+            case 'id':  /* skip — no-op */                                  break
+            case 'h':   col({ [q]: 'H' });                                  break
+            case 'x':   col({ [q]: 'X' });                                  break
+            case 'y':   col({ [q]: 'Y' });                                  break
+            case 'z':   col({ [q]: 'Z' });                                  break
+            case 's':   col({ [q]: 'S' });                                  break
+            case 'si':  col({ [q]: 'S†' });                                 break
+            case 't':   col({ [q]: 'T' });                                  break
+            case 'ti':  col({ [q]: 'T†' });                                 break
+            case 'v':   col({ [q]: 'X^½' });                                break
+            case 'vi':  col({ [q]: 'X^-½' });                               break
+            case 'r2':  col({ [q]: rot('Rz', Math.PI / 2) });               break
+            case 'r4':  col({ [q]: rot('Rz', Math.PI / 4) });               break
+            case 'r8':  col({ [q]: rot('Rz', Math.PI / 8) });               break
+            case 'rx':  col({ [q]: rot('Rx', p![0]!) });                    break
+            case 'ry':  col({ [q]: rot('Ry', p![0]!) });                    break
+            case 'rz':  col({ [q]: rot('Rz', p![0]!) });                    break
+            case 'vz':  col({ [q]: rot('Rz', p![0]!) });                    break
+            case 'u1':  col({ [q]: rot('Rz', p![0]!) });                    break  // U1 ≡ Rz (global phase)
+            case 'gpi': case 'gpi2':
+              throw new TypeError(`Gate '${nm}' has no Quirk representation`)
+            default:
+              throw new TypeError(`Gate '${nm}' has no Quirk representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: nm, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          let g: QuirkGate
+          switch (nm) {
+            case 'cy':   g = 'Y';                              break
+            case 'cz':   g = 'Z';                              break
+            case 'ch':   g = 'H';                              break
+            case 'cr2':  g = rot('Rz', Math.PI / 2);           break
+            case 'cr4':  g = rot('Rz', Math.PI / 4);           break
+            case 'cr8':  g = rot('Rz', Math.PI / 8);           break
+            case 'crx':  g = rot('Rx', p![0]!);                break
+            case 'cry':  g = rot('Ry', p![0]!);                break
+            case 'crz':  g = rot('Rz', p![0]!);                break
+            case 'cu1':  g = rot('Rz', p![0]!);                break
+            case 'cs':   g = 'S';                              break
+            case 'ct':   g = 'T';                              break
+            case 'csdg': g = 'S†';                             break
+            case 'ctdg': g = 'T†';                             break
+            default:
+              throw new TypeError(`Gate '${nm}' has no Quirk representation`)
+          }
+          col({ [c]: '•', [t]: g })
+          break
+        }
+      }
+    }
+
+    return JSON.stringify({ cols })
   }
 
   // ── Execution ────────────────────────────────────────────────────────────
@@ -1529,7 +1915,7 @@ export class Circuit {
     const rng = makePrng(seed)
     let state = mpsInit(this.qubits)
 
-    for (const op of this.#ops) {
+    for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
         case 'single':     state = mpsApply1(state, op.q, op.gate);                                        break
         case 'cnot':       state = mpsApply2(state, op.control, op.target, CNOT4, maxBond);                break
@@ -1538,6 +1924,7 @@ export class Circuit {
         case 'controlled': state = mpsApply2(state, op.control, op.target, controlledGate(op.gate), maxBond); break
         case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
         case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+        case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
         case 'measure': case 'reset': case 'if':
           throw new TypeError(`'${op.kind}' not supported in MPS mode`)
       }

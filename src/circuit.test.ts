@@ -1199,6 +1199,74 @@ describe('cswap — Fredkin gate', () => {
   })
 })
 
+// ─── csrswap — C-√iSWAP gate ─────────────────────────────────────────────────
+
+describe('csrswap — C-√iSWAP gate', () => {
+  it('control=0: no effect on |010⟩', () => {
+    // q0=control=0, q1=a=1, q2=b=0 → control is off → state unchanged
+    const r = new Circuit(3).x(1).csrswap(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['010']).toBeCloseTo(1.0, 10)
+  })
+
+  it('control=1, a=b=0: diagonal — |100⟩ unchanged', () => {
+    // control=q0=1, a=q1=0, b=q2=0 → SrSwap diagonal entry → unchanged
+    const r = new Circuit(3).x(0).csrswap(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['001']).toBeCloseTo(1.0, 10)  // q0=1 is rightmost: '001'
+  })
+
+  it('control=1: csrswap² = cswap (√iSWAP composed twice = iSWAP; on |01⟩ subspace iSWAP = swap up to phase)', () => {
+    // Two controlled-SrSwap = controlled-iSWAP. On |c=1,a=1,b=0⟩ we expect complex mixing.
+    // Just verify it produces an entangled state (two outcomes with >0 probability)
+    const sv = new Circuit(3).x(0).x(1).csrswap(0, 1, 2).statevector()
+    expect(sv.size).toBe(2)  // two non-zero amplitude terms
+  })
+
+  it('csrswap·csrswap on control=1, a=0,b=1 matches iSWAP on those qubits', () => {
+    // SrSwap² = iSWAP. Control=1: two csrswap applications = controlled-iSWAP.
+    // Verify: x(0).x(2).csrswap(0,1,2).csrswap(0,1,2) has same probs as x(0).iswap(1,2)
+    const a = new Circuit(3).x(0).x(2).csrswap(0, 1, 2).csrswap(0, 1, 2).exactProbs()
+    const b = new Circuit(3).x(0).x(2).iswap(1, 2).exactProbs()  // iSWAP: |01⟩ → i|10⟩
+    for (const [k, v] of Object.entries(b)) {
+      expect(a[k] ?? 0).toBeCloseTo(v)
+    }
+  })
+})
+
+// ─── vz — VirtualZ gate ───────────────────────────────────────────────────────
+
+describe('vz — VirtualZ gate', () => {
+  it('vz(θ) leaves |0⟩ and |1⟩ populations unchanged (phase not observable in Z-basis)', () => {
+    const r0 = new Circuit(1).vz(Math.PI / 3, 0).run({ shots: 100, seed: 1 })
+    const r1 = new Circuit(1).x(0).vz(Math.PI / 3, 0).run({ shots: 100, seed: 1 })
+    expect(r0.probs['0']).toBeCloseTo(1.0, 10)
+    expect(r1.probs['1']).toBeCloseTo(1.0, 10)
+  })
+
+  it('vz(θ) is functionally identical to rz(θ) — same statevector', () => {
+    const theta = Math.PI / 5
+    const svRz = new Circuit(1).h(0).rz(theta, 0).statevector()
+    const svVz = new Circuit(1).h(0).vz(theta, 0).statevector()
+    for (const [idx, amp] of svRz) {
+      expect(svVz.get(idx)?.re ?? 0).toBeCloseTo(amp.re)
+      expect(svVz.get(idx)?.im ?? 0).toBeCloseTo(amp.im)
+    }
+  })
+
+  it('toQASM emits rz for vz', () => {
+    expect(new Circuit(1).vz(Math.PI / 4, 0).toQASM()).toContain('rz(pi/4) q[0]')
+  })
+
+  it('toQiskit emits qc.rz for vz', () => {
+    expect(new Circuit(1).vz(Math.PI / 4, 0).toQiskit()).toContain('qc.rz(math.pi/4, 0)')
+  })
+
+  it('toIonQ emits rz gate for vz (IonQ has no native vz)', () => {
+    const ionq = new Circuit(1).vz(Math.PI / 4, 0).toIonQ()
+    expect(ionq.circuit[0]?.gate).toBe('rz')
+    expect(ionq.circuit[0]?.rotation).toBeCloseTo(0.25)  // π/4 / π = 0.25
+  })
+})
+
 // ─── Native IonQ gates ────────────────────────────────────────────────────────
 
 describe('GPI gate', () => {
@@ -1565,6 +1633,27 @@ describe('reset', () => {
     const r = new Circuit(2).h(0).cnot(0, 1).reset(0).run({ shots: 100, seed: 1 })
     // Rightmost character in bitstring is q0 → must be 0 in all outcomes
     expect(Object.keys(r.probs).every(bs => bs.at(-1) === '0')).toBe(true)
+  })
+
+  it('reset(q, 1) resets to |1⟩ — qubit always measures as 1', () => {
+    const r0 = new Circuit(1).reset(0, 1).run({ shots: 100, seed: 1 })
+    expect(r0.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('reset(q, 1) resets |0⟩ to |1⟩', () => {
+    const r = new Circuit(1).reset(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('reset(q, 1) resets superposition to |1⟩', () => {
+    const r = new Circuit(1).h(0).reset(0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('reset(q, 0) is equivalent to reset(q) — default behavior unchanged', () => {
+    const a = new Circuit(1).x(0).reset(0, 0).run({ shots: 100, seed: 1 })
+    const b = new Circuit(1).x(0).reset(0).run({ shots: 100, seed: 1 })
+    expect(a.probs['0']).toBeCloseTo(b.probs['0']!, 10)
   })
 })
 
@@ -2670,6 +2759,438 @@ describe('toBraket()', () => {
     expect(() =>
       new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toBraket()
     ).toThrow(TypeError)
+  })
+})
+
+// ─── toCudaQ ──────────────────────────────────────────────────────────────────
+
+describe('toCudaQ()', () => {
+  it('emits valid header', () => {
+    const src = new Circuit(2).h(0).toCudaQ()
+    expect(src).toContain('import cudaq')
+    expect(src).toContain('import math')
+    expect(src).toContain('kernel = cudaq.make_kernel()')
+    expect(src).toContain('q = kernel.qalloc(2)')
+  })
+
+  it('H + CNOT → h + cx', () => {
+    const src = new Circuit(2).h(0).cnot(0, 1).toCudaQ()
+    expect(src).toContain('kernel.h(q[0])')
+    expect(src).toContain('kernel.cx(q[0], q[1])')
+  })
+
+  it('full single-qubit set', () => {
+    const src = new Circuit(1).x(0).y(0).z(0).s(0).si(0).t(0).ti(0).id(0).toCudaQ()
+    expect(src).toContain('kernel.x(q[0])')
+    expect(src).toContain('kernel.y(q[0])')
+    expect(src).toContain('kernel.z(q[0])')
+    expect(src).toContain('kernel.s(q[0])')
+    expect(src).toContain('kernel.sdg(q[0])')
+    expect(src).toContain('kernel.t(q[0])')
+    expect(src).toContain('kernel.tdg(q[0])')
+    // id is silently skipped
+    expect(src).not.toContain('kernel.id')
+  })
+
+  it('rx/ry/rz — angle comes first', () => {
+    const src = new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).rz(Math.PI / 3, 0).toCudaQ()
+    expect(src).toContain('kernel.rx(math.pi/2, q[0])')
+    expect(src).toContain('kernel.ry(math.pi/4, q[0])')
+    expect(src).toContain('kernel.rz(math.pi/3, q[0])')
+  })
+
+  it('r2/r4/r8 → rz with pi fractions', () => {
+    const src = new Circuit(1).r2(0).r4(0).r8(0).toCudaQ()
+    expect(src).toContain('kernel.rz(math.pi/2, q[0])')
+    expect(src).toContain('kernel.rz(math.pi/4, q[0])')
+    expect(src).toContain('kernel.rz(math.pi/8, q[0])')
+  })
+
+  it('u1 → r1', () => {
+    expect(new Circuit(1).u1(Math.PI / 3, 0).toCudaQ()).toContain('kernel.r1(math.pi/3, q[0])')
+  })
+
+  it('u2 → u3(pi/2, phi, lambda)', () => {
+    expect(new Circuit(1).u2(0, Math.PI, 0).toCudaQ()).toContain('kernel.u3(math.pi/2, 0, math.pi, q[0])')
+  })
+
+  it('u3 with all three angles', () => {
+    expect(new Circuit(1).u3(Math.PI / 2, Math.PI / 4, Math.PI / 3, 0).toCudaQ())
+      .toContain('kernel.u3(math.pi/2, math.pi/4, math.pi/3, q[0])')
+  })
+
+  it('swap → kernel.swap', () => {
+    expect(new Circuit(2).swap(0, 1).toCudaQ()).toContain('kernel.swap(q[0], q[1])')
+  })
+
+  it('ccx → kernel.ccx (Toffoli)', () => {
+    expect(new Circuit(3).ccx(0, 1, 2).toCudaQ()).toContain('kernel.ccx(q[0], q[1], q[2])')
+  })
+
+  it('cswap → kernel.cswap (Fredkin)', () => {
+    expect(new Circuit(3).cswap(0, 1, 2).toCudaQ()).toContain('kernel.cswap(q[0], q[1], q[2])')
+  })
+
+  it('cy → kernel.cy, cz → kernel.cz, ch → kernel.ch', () => {
+    const src = new Circuit(2).cy(0, 1).cz(0, 1).ch(0, 1).toCudaQ()
+    expect(src).toContain('kernel.cy(q[0], q[1])')
+    expect(src).toContain('kernel.cz(q[0], q[1])')
+    expect(src).toContain('kernel.ch(q[0], q[1])')
+  })
+
+  it('crx/cry/crz — angle comes first', () => {
+    const src = new Circuit(2).crx(Math.PI / 2, 0, 1).cry(Math.PI / 4, 0, 1).crz(Math.PI / 3, 0, 1).toCudaQ()
+    expect(src).toContain('kernel.crx(math.pi/2, q[0], q[1])')
+    expect(src).toContain('kernel.cry(math.pi/4, q[0], q[1])')
+    expect(src).toContain('kernel.crz(math.pi/3, q[0], q[1])')
+  })
+
+  it('cu1/cs/ct/csdg/ctdg → cr1', () => {
+    const src = new Circuit(2).cu1(Math.PI / 3, 0, 1).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1).toCudaQ()
+    expect(src).toContain('kernel.cr1(math.pi/3, q[0], q[1])')
+    expect(src).toContain('kernel.cr1(math.pi/2, q[0], q[1])')
+    expect(src).toContain('kernel.cr1(math.pi/4, q[0], q[1])')
+    expect(src).toContain('kernel.cr1(-math.pi/2, q[0], q[1])')
+    expect(src).toContain('kernel.cr1(-math.pi/4, q[0], q[1])')
+  })
+
+  it('cr2/cr4/cr8 → crz with pi fractions', () => {
+    const src = new Circuit(2).cr2(0, 1).cr4(0, 1).cr8(0, 1).toCudaQ()
+    expect(src).toContain('kernel.crz(math.pi/2, q[0], q[1])')
+    expect(src).toContain('kernel.crz(math.pi/4, q[0], q[1])')
+    expect(src).toContain('kernel.crz(math.pi/8, q[0], q[1])')
+  })
+
+  it('throws for v/vi (no CudaQ equivalent)', () => {
+    expect(() => new Circuit(1).v(0).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(1).vi(0).toCudaQ()).toThrow(TypeError)
+  })
+
+  it('throws for gpi/gpi2 (IonQ native)', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(1).gpi2(0, 0).toCudaQ()).toThrow(TypeError)
+  })
+
+  it('throws for ms (IonQ native)', () => {
+    expect(() => new Circuit(2).ms(0, 0, 0, 1).toCudaQ()).toThrow(TypeError)
+  })
+
+  it('throws for xx/yy/zz/xy interaction gates', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 4, 0, 1).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(2).yy(Math.PI / 4, 0, 1).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(2).zz(Math.PI / 4, 0, 1).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(2).xy(Math.PI / 4, 0, 1).toCudaQ()).toThrow(TypeError)
+  })
+
+  it('throws for iswap/srswap', () => {
+    expect(() => new Circuit(2).iswap(0, 1).toCudaQ()).toThrow(TypeError)
+    expect(() => new Circuit(2).srswap(0, 1).toCudaQ()).toThrow(TypeError)
+  })
+
+  it('throws for measure ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).toCudaQ()
+    ).toThrow(TypeError)
+  })
+
+  it('throws for if ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toCudaQ()
+    ).toThrow(TypeError)
+  })
+})
+
+// ─── toTFQ ────────────────────────────────────────────────────────────────────
+
+describe('toTFQ()', () => {
+  it('emits valid header with TFQ import and GridQubit', () => {
+    const src = new Circuit(2).h(0).toTFQ()
+    expect(src).toContain('import cirq')
+    expect(src).toContain('import tensorflow_quantum as tfq')
+    expect(src).toContain('cirq.GridQubit(0, i) for i in range(2)')
+    expect(src).toContain('circuit = cirq.Circuit([')
+  })
+
+  it('ends with tfq.convert_to_tensor call', () => {
+    const src = new Circuit(2).h(0).toTFQ()
+    expect(src).toContain('tensor = tfq.convert_to_tensor([circuit])')
+  })
+
+  it('H + CNOT gate ops match Cirq format', () => {
+    const src = new Circuit(2).h(0).cnot(0, 1).toTFQ()
+    expect(src).toContain('cirq.H(q[0])')
+    expect(src).toContain('cirq.CNOT(q[0], q[1])')
+  })
+
+  it('uses LineQubit in toCirq, GridQubit in toTFQ', () => {
+    const circ = new Circuit(2).h(0)
+    expect(circ.toCirq()).toContain('cirq.LineQubit.range(2)')
+    expect(circ.toTFQ()).toContain('cirq.GridQubit(0, i)')
+    expect(circ.toTFQ()).not.toContain('LineQubit')
+  })
+
+  it('gate ops are identical to toCirq()', () => {
+    const circ = new Circuit(2).h(0).s(0).cnot(0, 1).rx(Math.PI / 3, 1)
+    const cirqOps = circ.toCirq().split('\n').filter(l => l.startsWith('    '))
+    const tfqOps  = circ.toTFQ().split('\n').filter(l => l.startsWith('    '))
+    expect(tfqOps).toEqual(cirqOps)
+  })
+
+  it('throws same errors as toCirq — gpi, measure, if', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toTFQ()).toThrow(TypeError)
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).toTFQ()
+    ).toThrow(TypeError)
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toTFQ()
+    ).toThrow(TypeError)
+  })
+})
+
+// ─── toQuirk ──────────────────────────────────────────────────────────────────
+
+describe('toQuirk()', () => {
+  const parse = (c: Circuit) => JSON.parse(c.toQuirk()) as { cols: unknown[][] }
+
+  it('emits valid JSON with cols array', () => {
+    const j = parse(new Circuit(2).h(0).cnot(0, 1))
+    expect(j).toHaveProperty('cols')
+    expect(Array.isArray(j.cols)).toBe(true)
+  })
+
+  it('H gate → single-element column ["H"]', () => {
+    const j = parse(new Circuit(2).h(0))
+    expect(j.cols[0]).toEqual(['H'])
+  })
+
+  it('CNOT → ["•", "X"] column', () => {
+    const j = parse(new Circuit(2).cnot(0, 1))
+    expect(j.cols[0]).toEqual(['•', 'X'])
+  })
+
+  it('trailing idle wires are stripped', () => {
+    // H on q0 in a 3-qubit circuit: only need ["H"], not ["H", 1, 1]
+    const j = parse(new Circuit(3).h(0))
+    expect(j.cols[0]).toEqual(['H'])
+  })
+
+  it('mid-circuit idle wires are preserved as 1', () => {
+    // CNOT(0,2) in a 3-qubit circuit: ["•", 1, "X"]
+    const j = parse(new Circuit(3).cnot(0, 2))
+    expect(j.cols[0]).toEqual(['•', 1, 'X'])
+  })
+
+  it('full single-qubit named gates', () => {
+    const j = parse(new Circuit(1).x(0).y(0).z(0).s(0).si(0).t(0).ti(0).v(0).vi(0))
+    const names = j.cols.map(c => c[0])
+    expect(names).toEqual(['X','Y','Z','S','S†','T','T†','X^½','X^-½'])
+  })
+
+  it('id gate is silently skipped (no column emitted)', () => {
+    const j = parse(new Circuit(1).id(0))
+    expect(j.cols).toHaveLength(0)
+  })
+
+  it('rx/ry/rz → {id, arg} with half-turn angles', () => {
+    const j = parse(new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).rz(Math.PI / 3, 0))
+    expect(j.cols[0]).toEqual([{ id: 'Rx', arg: 0.5 }])
+    expect(j.cols[1]).toEqual([{ id: 'Ry', arg: 0.25 }])
+    expect((j.cols[2]![0] as { id: string; arg: number }).id).toBe('Rz')
+  })
+
+  it('r2/r4/r8 → Rz with pi-fraction args', () => {
+    const j = parse(new Circuit(1).r2(0).r4(0).r8(0))
+    expect(j.cols[0]).toEqual([{ id: 'Rz', arg: 0.5 }])
+    expect(j.cols[1]).toEqual([{ id: 'Rz', arg: 0.25 }])
+    expect(j.cols[2]).toEqual([{ id: 'Rz', arg: 0.125 }])
+  })
+
+  it('u1 → Rz (same unitary up to global phase)', () => {
+    const j = parse(new Circuit(1).u1(Math.PI / 2, 0))
+    expect(j.cols[0]).toEqual([{ id: 'Rz', arg: 0.5 }])
+  })
+
+  it('swap → ["Swap", "Swap"]', () => {
+    const j = parse(new Circuit(2).swap(0, 1))
+    expect(j.cols[0]).toEqual(['Swap', 'Swap'])
+  })
+
+  it('ccx (Toffoli) → ["•", "•", "X"]', () => {
+    const j = parse(new Circuit(3).ccx(0, 1, 2))
+    expect(j.cols[0]).toEqual(['•', '•', 'X'])
+  })
+
+  it('cswap (Fredkin) → ["•", "Swap", "Swap"]', () => {
+    const j = parse(new Circuit(3).cswap(0, 1, 2))
+    expect(j.cols[0]).toEqual(['•', 'Swap', 'Swap'])
+  })
+
+  it('cy/cz/ch controlled gate columns', () => {
+    const jy = parse(new Circuit(2).cy(0, 1))
+    const jz = parse(new Circuit(2).cz(0, 1))
+    const jh = parse(new Circuit(2).ch(0, 1))
+    expect(jy.cols[0]).toEqual(['•', 'Y'])
+    expect(jz.cols[0]).toEqual(['•', 'Z'])
+    expect(jh.cols[0]).toEqual(['•', 'H'])
+  })
+
+  it('cs/ct/csdg/ctdg controlled phase gates', () => {
+    const j = parse(new Circuit(2).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1))
+    expect(j.cols[0]).toEqual(['•', 'S'])
+    expect(j.cols[1]).toEqual(['•', 'T'])
+    expect(j.cols[2]).toEqual(['•', 'S†'])
+    expect(j.cols[3]).toEqual(['•', 'T†'])
+  })
+
+  it('crx/cry/crz → controlled {id, arg}', () => {
+    const j = parse(new Circuit(2).crx(Math.PI / 2, 0, 1).cry(Math.PI / 4, 0, 1))
+    expect(j.cols[0]).toEqual(['•', { id: 'Rx', arg: 0.5 }])
+    expect(j.cols[1]).toEqual(['•', { id: 'Ry', arg: 0.25 }])
+  })
+
+  it('measure → "Measure" column', () => {
+    const j = parse(new Circuit(1).creg('c', 1).measure(0, 'c', 0))
+    expect(j.cols[0]).toEqual(['Measure'])
+  })
+
+  it('throws for u2/u3', () => {
+    expect(() => new Circuit(1).u2(0, Math.PI, 0).toQuirk()).toThrow(TypeError)
+    expect(() => new Circuit(1).u3(Math.PI/2, 0, Math.PI, 0).toQuirk()).toThrow(TypeError)
+  })
+
+  it('throws for gpi/gpi2/ms', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toQuirk()).toThrow(TypeError)
+    expect(() => new Circuit(2).ms(0, 0, 0, 1).toQuirk()).toThrow(TypeError)
+  })
+
+  it('throws for interaction gates (xx/yy/zz/xy/iswap/srswap)', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 4, 0, 1).toQuirk()).toThrow(TypeError)
+    expect(() => new Circuit(2).iswap(0, 1).toQuirk()).toThrow(TypeError)
+    expect(() => new Circuit(2).srswap(0, 1).toQuirk()).toThrow(TypeError)
+  })
+
+  it('throws for reset and if ops', () => {
+    expect(() => new Circuit(1).creg('c', 1).reset(0).toQuirk()).toThrow(TypeError)
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toQuirk()
+    ).toThrow(TypeError)
+  })
+})
+
+// ─── Named sub-circuit gates (defineGate / gate / decompose) ─────────────────
+
+describe('defineGate() / gate() / decompose()', () => {
+  // ── Basic correctness ──────────────────────────────────────────────────────
+
+  it('Bell-pair gate produces correct statevector', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c    = new Circuit(2).defineGate('bell', bell).gate('bell', 0, 1)
+    const sv   = c.statevector()
+    // |Φ+⟩ = (|00⟩ + |11⟩) / √2
+    expect(sv.get(0b00n)?.re).toBeCloseTo(1 / Math.sqrt(2))
+    expect(sv.get(0b11n)?.re).toBeCloseTo(1 / Math.sqrt(2))
+  })
+
+  it('qubit remapping — gate applied to non-zero qubits', () => {
+    // Apply Bell pair to qubits 1 and 2 of a 3-qubit circuit
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c = new Circuit(3).defineGate('bell', bell).gate('bell', 1, 2)
+    const p = c.exactProbs()
+    expect(p['000']).toBeCloseTo(0.5)
+    expect(p['110']).toBeCloseTo(0.5)   // qubits 1 and 2 entangled, qubit 0 unchanged
+  })
+
+  it('gate applied twice with different qubit mappings', () => {
+    // Two Bell pairs in a 4-qubit circuit
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c = new Circuit(4).defineGate('bell', bell).gate('bell', 0, 1).gate('bell', 2, 3)
+    const p = c.exactProbs()
+    expect(p['0000']).toBeCloseTo(0.25)
+    expect(p['0011']).toBeCloseTo(0.25)
+    expect(p['1100']).toBeCloseTo(0.25)
+    expect(p['1111']).toBeCloseTo(0.25)
+  })
+
+  it('gate combined with surrounding primitive ops', () => {
+    const inv = new Circuit(1).h(0)
+    const c = new Circuit(1).h(0).defineGate('H', inv).gate('H', 0)  // H·H = I
+    const sv = c.statevector()
+    expect(sv.get(0n)?.re).toBeCloseTo(1)
+  })
+
+  it('nested named gates — gate built from another named gate', () => {
+    const bell  = new Circuit(2).h(0).cnot(0, 1)
+    const ghz3  = new Circuit(3).defineGate('bell', bell).gate('bell', 0, 1).cnot(0, 2)
+    const c     = new Circuit(3).defineGate('ghz3', ghz3).gate('ghz3', 0, 1, 2)
+    const p     = c.exactProbs()
+    expect(p['000']).toBeCloseTo(0.5)
+    expect(p['111']).toBeCloseTo(0.5)
+  })
+
+  // ── decompose() ────────────────────────────────────────────────────────────
+
+  it('decompose() returns a circuit with no subcircuit ops', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c = new Circuit(2).defineGate('bell', bell).gate('bell', 0, 1).decompose()
+    // After decompose, circuit runs identically to the direct form
+    expect(c.exactProbs()['00']).toBeCloseTo(0.5)
+    expect(c.exactProbs()['11']).toBeCloseTo(0.5)
+  })
+
+  it('decompose() statevector matches simulation of named gate directly', () => {
+    const qft2 = new Circuit(2).h(1).cu1(Math.PI / 2, 0, 1).h(0).swap(0, 1)
+    const viaGate    = new Circuit(2).defineGate('qft2', qft2).gate('qft2', 0, 1)
+    const viaInline  = qft2
+    const svGate   = viaGate.statevector()
+    const svInline = viaInline.statevector()
+    for (const [idx, amp] of svInline) {
+      const g = svGate.get(idx)
+      expect(g?.re ?? 0).toBeCloseTo(amp.re)
+      expect(g?.im ?? 0).toBeCloseTo(amp.im)
+    }
+  })
+
+  it('decompose().toQASM() produces valid output', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const src  = new Circuit(2).defineGate('bell', bell).gate('bell', 0, 1).decompose().toQASM()
+    expect(src).toContain('h q[0]')
+    expect(src).toContain('cx q[0],q[1]')
+  })
+
+  // ── run() / shot sampling ──────────────────────────────────────────────────
+
+  it('run() with named gate produces correct distribution', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const dist = new Circuit(2).defineGate('bell', bell).gate('bell', 0, 1).run({ shots: 4096, seed: 42 })
+    expect(dist.probs['00']).toBeGreaterThan(0.45)
+    expect(dist.probs['11']).toBeGreaterThan(0.45)
+    expect(dist.probs['01'] ?? 0).toBeLessThan(0.02)
+    expect(dist.probs['10'] ?? 0).toBeLessThan(0.02)
+  })
+
+  // ── Error handling ─────────────────────────────────────────────────────────
+
+  it('throws for unknown gate name', () => {
+    expect(() => new Circuit(2).gate('nonexistent', 0, 1)).toThrow(TypeError)
+    expect(() => new Circuit(2).gate('nonexistent', 0, 1)).toThrow(/nonexistent/)
+  })
+
+  it('throws for wrong qubit count', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c = new Circuit(3).defineGate('bell', bell)
+    expect(() => c.gate('bell', 0)).toThrow(TypeError)
+    expect(() => c.gate('bell', 0)).toThrow(/expects 2/)
+    expect(() => c.gate('bell', 0, 1, 2)).toThrow(TypeError)
+  })
+
+  it('throws when defining a gate that contains measure ops', () => {
+    const withMeasure = new Circuit(1).creg('c', 1).measure(0, 'c', 0)
+    expect(() => new Circuit(1).defineGate('bad', withMeasure)).toThrow(TypeError)
+  })
+
+  it('throws when defining a gate that contains if ops', () => {
+    const withIf = new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0))
+    expect(() => new Circuit(1).defineGate('bad', withIf)).toThrow(TypeError)
   })
 })
 

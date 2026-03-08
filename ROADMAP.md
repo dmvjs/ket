@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (453 tests, ~200ms)**
+**Test suite (528 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -46,6 +46,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 - `marginals()`: per-qubit P(q=1) from statevector; tested against known states and Bell/GHZ
 - `cu2(φ,λ)`: completes cu1/cu2/cu3 family; QASM round-trip, Qiskit export with params
 - `stateAsString()`: human-readable amplitude listing; handles real/imaginary/complex, omits near-zero terms
+- `defineGate(name, sub)` / `gate(name, ...qubits)` / `decompose()`: named sub-circuit gates with qubit remapping; nested composition; auto-flattened for simulation; serialization via decompose()
 
 ---
 
@@ -164,22 +165,22 @@ Gaps identified against quantum-circuit (the leading JS quantum simulator), orde
 **`id` — identity gate ✓**
 Named no-op that survives round-trips through all import/export formats. `fromQASM` also silently skips `barrier` statements.
 
-**`vz(θ)` — VirtualZ**
-A named Rz alias common in superconducting hardware native gate sets (IBM, Rigetti). Functionally identical to `rz` but carries distinct semantics for hardware compilation passes and should be preserved by name through import/export.
+**`vz(θ)` — VirtualZ ✓**
+A named Rz alias common in superconducting hardware native gate sets (IBM, Rigetti). Functionally identical to `rz`; serializes as `rz` in all targets (no hardware supports vz by name in their interchange formats).
 
 **`cu2(φ, λ)` — controlled U2 ✓**
 Completes the `cu1`/`cu2`/`cu3` family. Appears in IBM circuit exports.
 
-**`csrswap` — controlled √SWAP**
-Completes the three-qubit gate set alongside `ccx` and `cswap`. Niche but present in quantum-circuit's reference implementation.
+**`csrswap` — controlled √SWAP ✓**
+Completes the three-qubit gate set alongside `ccx` and `cswap`. If control=1, applies √iSWAP (SrSwap) to the two target qubits. Niche; throws in all serializers (no standard interchange representation).
 
 ### 7b. Per-qubit marginal probabilities ✓
 
 `circuit.marginals()` — returns `number[]` where `result[q]` is `P(qubit q = |1⟩)`, summed over all basis states. Shares the pure-circuit restriction of `statevector()`.
 
-### 7c. Reset to |1⟩
+### 7c. Reset to |1⟩ ✓
 
-`Circuit.reset(qubit)` currently only resets to |0⟩. quantum-circuit's `resetQubit(q, value)` supports resetting to either |0⟩ or |1⟩. The |1⟩ case is trivially `reset(q).x(q)` but users expect a first-class API.
+`circuit.reset(q, value?)` — `value` defaults to 0; `reset(q, 1)` resets to |1⟩ (equivalent to `reset(q).x(q)` but first-class API).
 
 ### 7d. Statevector pretty-print ✓
 
@@ -192,16 +193,22 @@ Handles real, imaginary, and complex coefficients; omits near-zero terms; correc
 |---|---|---|
 | Quil | `circuit.toQuil()` ✓ | Rigetti native format |
 | Amazon Braket | `circuit.toBraket()` ✓ | AWS quantum hardware |
-| CudaQ | `circuit.toCudaQ()` | NVIDIA GPU-accelerated simulation |
-| TensorFlow Quantum | `circuit.toTFQ()` | Hybrid quantum-classical ML |
-| Quirk JSON | `circuit.toQuirk()` | Browser-based circuit visualizer |
+| CudaQ | `circuit.toCudaQ()` ✓ | NVIDIA GPU-accelerated simulation |
+| TensorFlow Quantum | `circuit.toTFQ()` ✓ | Hybrid quantum-classical ML |
+| Quirk JSON | `circuit.toQuirk()` ✓ | Browser-based circuit visualizer |
 
-### 7f. Named sub-circuit gates
+### 7f. Named sub-circuit gates ✓
 
-`Circuit.registerGate(name, subcircuit)` — define a reusable named gate from a `Circuit`.
-`circuit.decompose()` — inline all user-defined gates back to primitives.
+`circuit.defineGate(name, subcircuit)` — register a reusable named gate from a `Circuit`.
+`circuit.gate(name, ...qubits)` — apply a registered gate with qubit remapping.
+`circuit.decompose()` — inline all named gates back to primitives.
 
-This is architecturally the largest gap. quantum-circuit allows circuits to be used as gates inside other circuits, which is essential for modular algorithm design (e.g., encoding a QFT as a black-box gate in QPE rather than inlining it). Would require extending the `Op` type and all serializers.
+Implemented as a new `SubcircuitOp` op type. Simulation auto-flattens subcircuits
+(transparent to `.run()`, `.statevector()`, `.runMps()`, etc.). Nested named gates
+(gates whose definition uses other named gates) work via recursive expansion.
+Serialization requires an explicit `.decompose()` call; all serializers auto-flatten
+named gates before emitting. Classical ops (measure/reset/if) inside gate definitions
+are rejected at `defineGate()` time.
 
 ---
 

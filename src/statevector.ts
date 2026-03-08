@@ -168,6 +168,45 @@ export function applyCSwap(sv: StateVector, control: number, a: number, b: numbe
 }
 
 /**
+ * Apply a C-√iSWAP (controlled-SrSwap) gate: if control = |1⟩, apply √iSWAP to qubits a and b.
+ *
+ * √iSWAP matrix in the |00⟩/|01⟩/|10⟩/|11⟩ subspace (a is MSB):
+ *   diag(1, 1) on |00⟩/|11⟩ and the off-diagonal 2×2:
+ *   [[1/√2, i/√2], [i/√2, 1/√2]] for |01⟩/|10⟩.
+ */
+export function applyCsrSwap(sv: StateVector, control: number, a: number, b: number): StateVector {
+  const next:  StateVector = new Map()
+  const cmask = 1n << BigInt(control)
+  const amask = 1n << BigInt(a)
+  const bmask = 1n << BigInt(b)
+  const seen  = new Set<bigint>()
+  const sq2   = 1 / Math.sqrt(2)
+
+  for (const idx of sv.keys()) {
+    const ctx = idx & ~(cmask | amask | bmask)
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    // Process control=0 (pass-through) and control=1 (apply SrSwap) halves
+    for (const cc of [0n, cmask]) {
+      const bases = [ctx | cc, ctx | cc | bmask, ctx | cc | amask, ctx | cc | amask | bmask]
+      const amps  = bases.map(i => sv.get(i) ?? ZERO)
+
+      if (cc === 0n) {
+        for (let r = 0; r < 4; r++) accumulate(next, bases[r]!, amps[r]!)
+      } else {
+        accumulate(next, bases[0]!, amps[0]!)  // |c00⟩ unchanged
+        accumulate(next, bases[3]!, amps[3]!)  // |c11⟩ unchanged
+        const [a01, a10] = [amps[1]!, amps[2]!]
+        accumulate(next, bases[1]!, add(mul({ re: sq2, im: 0 }, a01), mul({ re: 0, im: sq2 }, a10)))
+        accumulate(next, bases[2]!, add(mul({ re: 0, im: sq2 }, a01), mul({ re: sq2, im: 0 }, a10)))
+      }
+    }
+  }
+  return next
+}
+
+/**
  * Apply a controlled single-qubit gate: if control = |1⟩, apply gate to target.
  */
 export function applyControlled(sv: StateVector, control: number, target: number, [[a,b],[c,d]]: Gate2x2): StateVector {
