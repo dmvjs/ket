@@ -5006,3 +5006,104 @@ describe('Circuit.fromCirq()', () => {
     expect(() => Circuit.fromCirq('cirq.H(q[0])')).toThrow(TypeError)
   })
 })
+
+// ─── initialState option ──────────────────────────────────────────────────────
+
+describe('initialState', () => {
+  it('statevector: starts from given basis state', () => {
+    // X on q0 starting from |10⟩ (q0=0,q1=1) → |11⟩
+    const sv = new Circuit(2).x(0).statevector({ initialState: '10' })
+    expect(sv.get(0b11n)?.re).toBeCloseTo(1, 8)
+    expect(sv.size).toBe(1)
+  })
+
+  it('run: pure fast path respects initialState', () => {
+    // H on q0 starting from |1⟩ → equal superposition with negative phase
+    const p = new Circuit(1).h(0).run({ shots: 10000, seed: 1, initialState: '1' }).probs
+    expect((p['0'] ?? 0) + (p['1'] ?? 0)).toBeCloseTo(1, 4)
+    expect(p['0'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('run: starting from |11⟩ = measuring CNOT at all-ones', () => {
+    // CNOT(0,1) on |11⟩: control=q0=1 flips q1 (1→0) → q0=1,q1=0 = bitstring '01'
+    const p = new Circuit(2).cnot(0, 1).run({ shots: 1000, seed: 1, initialState: '11' }).probs
+    expect(p['01'] ?? 0).toBeCloseTo(1, 1)
+  })
+
+  it('runMps: respects initialState', () => {
+    // X on q0 from |10⟩ → |11⟩
+    const p = new Circuit(2).x(0).runMps({ shots: 1000, seed: 1, initialState: '10' }).probs
+    expect(p['11'] ?? 0).toBeCloseTo(1, 1)
+  })
+
+  it('throws on wrong-length bitstring', () => {
+    expect(() => new Circuit(2).h(0).statevector({ initialState: '0' })).toThrow(TypeError)
+  })
+
+  it('throws on non-binary characters', () => {
+    expect(() => new Circuit(2).h(0).statevector({ initialState: '0x' })).toThrow(TypeError)
+  })
+})
+
+// ─── Circuit.fromQobj() ───────────────────────────────────────────────────────
+
+describe('Circuit.fromQobj()', () => {
+  it('parses a basic Bell-state Qobj', () => {
+    const qobj = {
+      experiments: [{
+        header: { n_qubits: 2, creg_sizes: [['out', 2]] as [string, number][] },
+        instructions: [
+          { name: 'h',       qubits: [0],    params: [] },
+          { name: 'cx',      qubits: [0, 1], params: [] },
+          { name: 'measure', qubits: [0],    params: [], memory: [0] },
+          { name: 'measure', qubits: [1],    params: [], memory: [1] },
+        ],
+      }],
+    }
+    const c = Circuit.fromQobj(qobj)
+    expect(c.qubits).toBe(2)
+    const r = c.run({ shots: 2000, seed: 1 })
+    expect((r.probs['00'] ?? 0) + (r.probs['11'] ?? 0)).toBeCloseTo(1, 1)
+  })
+
+  it('parses parametric gates', () => {
+    const orig = new Circuit(2).rx(Math.PI / 3, 0).crz(Math.PI / 4, 0, 1)
+    const qobj = {
+      experiments: [{
+        header: { n_qubits: 2, creg_sizes: [] as [string, number][] },
+        instructions: [
+          { name: 'rx',  qubits: [0],    params: [Math.PI / 3] },
+          { name: 'crz', qubits: [0, 1], params: [Math.PI / 4] },
+        ],
+      }],
+    }
+    expect(svFidelity(orig, Circuit.fromQobj(qobj))).toBeCloseTo(1, 8)
+  })
+
+  it('skips snapshot instructions', () => {
+    const qobj = {
+      experiments: [{
+        header: { n_qubits: 1, creg_sizes: [] as [string, number][] },
+        instructions: [
+          { name: 'h',        qubits: [0], params: [] },
+          { name: 'snapshot', qubits: [0], params: [] },
+        ],
+      }],
+    }
+    expect(() => Circuit.fromQobj(qobj)).not.toThrow()
+  })
+
+  it('throws on unknown instruction', () => {
+    const qobj = {
+      experiments: [{
+        header: { n_qubits: 1, creg_sizes: [] as [string, number][] },
+        instructions: [{ name: 'unknowngate', qubits: [0], params: [] }],
+      }],
+    }
+    expect(() => Circuit.fromQobj(qobj)).toThrow(TypeError)
+  })
+
+  it('throws when experiments array is empty', () => {
+    expect(() => Circuit.fromQobj({ experiments: [] })).toThrow(TypeError)
+  })
+})

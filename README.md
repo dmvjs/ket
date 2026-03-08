@@ -1,6 +1,6 @@
 # ket
 
-TypeScript quantum circuit simulator. Immutable API, three backends, 13 import/export formats, zero dependencies.
+TypeScript quantum circuit simulator. Immutable API, three backends, 14 import/export formats, zero dependencies.
 
 ## Why ket
 
@@ -8,7 +8,7 @@ TypeScript quantum circuit simulator. Immutable API, three backends, 13 import/e
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Three simulation backends** — statevector, MPS/tensor network, and exact density matrix in one library.
-- **13 import/export formats** — more than any comparable JavaScript quantum library.
+- **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, and VQE ship with the core.
 
 ## Install
@@ -33,14 +33,6 @@ The ESM bundle is 167kb unminified / ~20kb gzipped. No external dependencies.
 Requires Node.js ≥ 22 for server-side use.
 
 ## Quick start
-
-```bash
-npm install @kirkelliott/ket
-```
-
-```typescript
-import { Circuit } from '@kirkelliott/ket'
-```
 
 ### Bell state — draw and run
 
@@ -94,6 +86,15 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 | Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
 
 The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12.
+
+All backends accept an `initialState` option to start from an arbitrary computational basis state instead of |0...0⟩:
+
+```typescript
+// Start from |110⟩ (q0=0, q1=1, q2=1)
+circuit.run({ initialState: '110' })
+circuit.runMps({ shots: 1000, initialState: '110' })
+circuit.statevector({ initialState: '110' })
+```
 
 ## Gates
 
@@ -185,6 +186,7 @@ The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density 
 | Quil 2.0 | ✓ | ✓ | `Circuit.fromQuil(s)` / `circuit.toQuil()` |
 | JSON (native) | ✓ | ✓ | `Circuit.fromJSON(json)` / `circuit.toJSON()` |
 | Qiskit (Python) | ✓ | ✓ | `Circuit.fromQiskit(s)` / `circuit.toQiskit()` |
+| Qiskit Qobj JSON | ✓ | — | `Circuit.fromQobj(json)` |
 | Cirq (Python) | ✓ | ✓ | `Circuit.fromCirq(s)` / `circuit.toCirq()` |
 | Q# | — | ✓ | `circuit.toQSharp()` |
 | pyQuil | — | ✓ | `circuit.toPyQuil()` |

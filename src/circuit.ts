@@ -104,9 +104,16 @@ function flattenOps(ops: readonly Op[]): readonly Op[] {
   return result
 }
 
+/** Build a computational-basis statevector from a bitstring (q0 rightmost, IonQ convention). */
+function svFromBitstring(s: string, qubits: number): StateVector {
+  if (s.length !== qubits || !/^[01]+$/.test(s))
+    throw new TypeError(`initialState '${s}' must be a ${qubits}-character binary string`)
+  return new Map([[BigInt('0b' + s), { re: 1, im: 0 }]])
+}
+
 /** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
-function simulatePure(ops: readonly Op[], qubits: number): StateVector {
-  let sv: StateVector = zero(qubits)
+function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
+  let sv: StateVector = init ?? zero(qubits)
   for (const op of flattenOps(ops)) {
     if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
     else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
@@ -636,6 +643,8 @@ export interface RunOptions {
   seed?: number
   /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
   noise?: string | NoiseParams
+  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  initialState?: string
 }
 
 export interface MpsRunOptions {
@@ -643,6 +652,8 @@ export interface MpsRunOptions {
   seed?: number
   /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
   maxBond?: number
+  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  initialState?: string
 }
 
 /**
@@ -937,12 +948,15 @@ export class Circuit {
   /**
    * Simulate the circuit and return the full sparse amplitude map.
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   *
+   * @param initialState Optional starting computational basis state as a bitstring (q0 rightmost).
    */
-  statevector(): Map<bigint, Complex> {
+  statevector({ initialState }: { initialState?: string } = {}): Map<bigint, Complex> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
     }
-    return simulatePure(this.#ops, this.qubits)
+    const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
+    return simulatePure(this.#ops, this.qubits, init)
   }
 
   /**
@@ -1646,6 +1660,81 @@ export class Circuit {
           default:      throw new TypeError(`fromCirq: unknown gate '${simple[1]}'`)
         }
         continue
+      }
+    }
+    return c
+  }
+
+  /**
+   * Parse a Qiskit Qobj JSON object into a Circuit.
+   * Accepts the object returned by `qc.qobj()` or IBM Quantum job results.
+   * Only the first experiment is used.
+   */
+  static fromQobj(qobj: {
+    experiments: ReadonlyArray<{
+      header:       { n_qubits: number; creg_sizes?: ReadonlyArray<readonly [string, number]> }
+      instructions: ReadonlyArray<{ name: string; qubits: number[]; params?: number[]; memory?: number[] }>
+    }>
+  }): Circuit {
+    const exp = qobj.experiments[0]
+    if (!exp) throw new TypeError('fromQobj: no experiments found')
+
+    let c = new Circuit(exp.header.n_qubits)
+
+    // Build memory-slot → (cregName, bitOffset) map
+    const slotMap: Array<{ creg: string; bit: number }> = []
+    for (const [name, size] of exp.header.creg_sizes ?? []) {
+      c = c.creg(name, size)
+      for (let b = 0; b < size; b++) slotMap.push({ creg: name, bit: b })
+    }
+
+    for (const { name, qubits: qs, params: p = [], memory: mem = [] } of exp.instructions) {
+      switch (name) {
+        case 'id':    c = c.id(qs[0]!);                                        break
+        case 'h':     c = c.h(qs[0]!);                                         break
+        case 'x':     c = c.x(qs[0]!);                                         break
+        case 'y':     c = c.y(qs[0]!);                                         break
+        case 'z':     c = c.z(qs[0]!);                                         break
+        case 's':     c = c.s(qs[0]!);                                         break
+        case 'sdg':   c = c.si(qs[0]!);                                        break
+        case 't':     c = c.t(qs[0]!);                                         break
+        case 'tdg':   c = c.ti(qs[0]!);                                        break
+        case 'sx':    c = c.v(qs[0]!);                                         break
+        case 'sxdg':  c = c.vi(qs[0]!);                                        break
+        case 'rx':    c = c.rx(p[0]!, qs[0]!);                                 break
+        case 'ry':    c = c.ry(p[0]!, qs[0]!);                                 break
+        case 'rz':    c = c.rz(p[0]!, qs[0]!);                                 break
+        case 'u1': case 'p':
+                      c = c.u1(p[0]!, qs[0]!);                                 break
+        case 'u2':    c = c.u2(p[0]!, p[1]!, qs[0]!);                          break
+        case 'u3':    c = c.u3(p[0]!, p[1]!, p[2]!, qs[0]!);                   break
+        case 'cx': case 'cnot':
+                      c = c.cnot(qs[0]!, qs[1]!);                              break
+        case 'cy':    c = c.cy(qs[0]!, qs[1]!);                                break
+        case 'cz':    c = c.cz(qs[0]!, qs[1]!);                                break
+        case 'ch':    c = c.ch(qs[0]!, qs[1]!);                                break
+        case 'swap':  c = c.swap(qs[0]!, qs[1]!);                              break
+        case 'iswap': c = c.iswap(qs[0]!, qs[1]!);                             break
+        case 'crx':   c = c.crx(p[0]!, qs[0]!, qs[1]!);                        break
+        case 'cry':   c = c.cry(p[0]!, qs[0]!, qs[1]!);                        break
+        case 'crz':   c = c.crz(p[0]!, qs[0]!, qs[1]!);                        break
+        case 'cu1':   c = c.cu1(p[0]!, qs[0]!, qs[1]!);                        break
+        case 'cu2':   c = c.cu2(p[0]!, p[1]!, qs[0]!, qs[1]!);                 break
+        case 'cu3':   c = c.cu3(p[0]!, p[1]!, p[2]!, qs[0]!, qs[1]!);          break
+        case 'rxx':   c = c.xx(p[0]!, qs[0]!, qs[1]!);                         break
+        case 'ryy':   c = c.yy(p[0]!, qs[0]!, qs[1]!);                         break
+        case 'rzz':   c = c.zz(p[0]!, qs[0]!, qs[1]!);                         break
+        case 'ccx':   c = c.ccx(qs[0]!, qs[1]!, qs[2]!);                       break
+        case 'cswap': c = c.cswap(qs[0]!, qs[1]!, qs[2]!);                     break
+        case 'reset': c = c.reset(qs[0]!);                                      break
+        case 'barrier': c = c.barrier(...qs);                                   break
+        case 'measure': {
+          const slot = slotMap[mem[0]!]
+          if (slot) c = c.measure(qs[0]!, slot.creg, slot.bit)
+          break
+        }
+        case 'snapshot': case 'save_statevector': break  // Qiskit metadata — skip
+        default: throw new TypeError(`fromQobj: unknown instruction '${name}'`)
       }
     }
     return c
@@ -2564,8 +2653,9 @@ export class Circuit {
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
-  run({ shots = 1024, seed, noise }: RunOptions = {}): Distribution {
-    const rng = makePrng(seed)
+  run({ shots = 1024, seed, noise, initialState }: RunOptions = {}): Distribution {
+    const rng  = makePrng(seed)
+    const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
 
     // Resolve noise: named device profile → NoiseParams, or use as-is
     const noiseParams: NoiseParams | undefined =
@@ -2582,7 +2672,7 @@ export class Circuit {
 
     // ── Fast path: pure circuit without noise — simulate once, sample N times ──
     if (!noiseParams && !this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
-      const sv     = simulatePure(this.#ops, this.qubits)
+      const sv     = simulatePure(this.#ops, this.qubits, init)
       const probs  = probabilities(sv)
       const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
 
@@ -2621,7 +2711,7 @@ export class Circuit {
         Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
       )
 
-      const sv = applyOps(this.#ops, zero(this.qubits), shotCregs, rng, noiseParams)
+      const sv = applyOps(this.#ops, init ?? zero(this.qubits), shotCregs, rng, noiseParams)
 
       // Final readout: sample then apply SPAM noise per qubit
       let finalIdx = sampleSV(sv, rng())
@@ -2653,9 +2743,16 @@ export class Circuit {
    *
    * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
    */
-  runMps({ shots = 1024, seed, maxBond = 64 }: MpsRunOptions = {}): Distribution {
+  runMps({ shots = 1024, seed, maxBond = 64, initialState }: MpsRunOptions = {}): Distribution {
     const rng = makePrng(seed)
     let state = mpsInit(this.qubits)
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, this.qubits) // validate
+      const rev = initialState.split('').reverse() // rev[q] = bit for qubit q
+      for (let q = 0; q < this.qubits; q++) {
+        if (rev[q] === '1') state = mpsApply1(state, q, G.X)
+      }
+    }
 
     for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
