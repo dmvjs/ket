@@ -2,8 +2,8 @@
   <rect width="700" height="220" fill="white"/>
   <text x="350" y="20" text-anchor="middle" font-size="13" font-weight="600" fill="#222" font-family="sans-serif">Bell state — H(0) + CNOT(0, n−1)</text>
   <rect x="48" y="32" width="311" height="156" fill="#f8f9fa" rx="2"/>
-  <line x1="48" y1="200.3" x2="359" y2="200.3" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="78.4" x2="359" y2="78.4" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="199.6" x2="359" y2="199.6" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="76.4" x2="359" y2="76.4" stroke="#e8e8e8" stroke-width="1"/>
   <line x1="48" y1="32" x2="48" y2="188" stroke="#bbb" stroke-width="1"/>
   <line x1="48" y1="188" x2="359" y2="188" stroke="#bbb" stroke-width="1"/>
   <text x="48.0" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">2</text>
@@ -16,30 +16,30 @@
   <text x="289.9" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">16</text>
   <text x="324.4" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">18</text>
   <text x="359.0" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">20</text>
-  <text x="44" y="203.3" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1µs</text>
-  <text x="44" y="81.4" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10µs</text>
+  <text x="44" y="202.6" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1µs</text>
+  <text x="44" y="79.4" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10µs</text>
   <text transform="translate(14,110) rotate(-90)" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">time</text>
   <text x="204" y="213" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">qubits</text>
-  <path d="M48.0,32.0 L65.3,137.5 L82.6,170.6 L99.8,177.4 L117.1,177.7 L134.4,178.7 L151.7,179.5 L168.9,179.8 L186.2,118.3 L203.5,149.6 L220.8,177.4 L238.1,174.0 L255.3,187.6 L272.6,188.0 L289.9,186.3 L307.2,188.0 L324.4,187.5 L341.7,184.0 L359.0,186.3" fill="none" stroke="#4f86f7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M48.0,32.0 L65.3,133.6 L82.6,166.6 L99.8,173.4 L117.1,173.4 L134.4,174.7 L151.7,174.4 L168.9,176.1 L186.2,121.6 L203.5,143.3 L220.8,172.7 L238.1,179.3 L255.3,185.5 L272.6,187.6 L289.9,185.9 L307.2,184.7 L324.4,188.0 L341.7,182.7 L359.0,184.3" fill="none" stroke="#4f86f7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
   <circle cx="48.0" cy="32.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="65.3" cy="137.5" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="82.6" cy="170.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="99.8" cy="177.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="117.1" cy="177.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="134.4" cy="178.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="151.7" cy="179.5" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="168.9" cy="179.8" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="186.2" cy="118.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="203.5" cy="149.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="220.8" cy="177.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="238.1" cy="174.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="255.3" cy="187.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="272.6" cy="188.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="289.9" cy="186.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="307.2" cy="188.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="324.4" cy="187.5" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="341.7" cy="184.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="359.0" cy="186.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="65.3" cy="133.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="82.6" cy="166.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="99.8" cy="173.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="117.1" cy="173.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="134.4" cy="174.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="151.7" cy="174.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="168.9" cy="176.1" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="186.2" cy="121.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="203.5" cy="143.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="220.8" cy="172.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="238.1" cy="179.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="255.3" cy="185.5" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="272.6" cy="187.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="289.9" cy="185.9" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="307.2" cy="184.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="324.4" cy="188.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="341.7" cy="182.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="359.0" cy="184.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
   <rect x="379" y="32" width="311" height="156" fill="#f8f9fa" rx="2"/>
   <line x1="379" y1="144.0" x2="690" y2="144.0" stroke="#e8e8e8" stroke-width="1"/>
   <line x1="379" y1="14.5" x2="690" y2="14.5" stroke="#e8e8e8" stroke-width="1"/>
