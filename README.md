@@ -349,34 +349,13 @@ All operation types are preserved: gates, measure, reset, if, and named sub-circ
 
 ## Performance
 
-<!-- benchmark:start -->
-
-Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 5 runs.
+Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Charts auto-update on every push to main.
 
 Statevector is exact but O(2ⁿ) — time and memory grow with the number of non-zero amplitudes, not just qubit count. Sparse circuits like Bell maintain two amplitudes at any width and run in near-constant time. Dense circuits (uniform superposition, QFT) fill all 2ⁿ entries and hit the exponential wall around 20 qubits. The MPS backend removes that ceiling for circuits with bounded entanglement.
 
 ![Bell state benchmark](benchmark/charts/bell.svg)
 ![Uniform superposition benchmark](benchmark/charts/uniform.svg)
 ![QFT benchmark](benchmark/charts/qft.svg)
-
-| Circuit | Backend | Qubits | Time |
-|---|---|---|---|
-| Random depth-4 | Statevector | 8  | 1.8ms  |
-| Random depth-4 | Statevector | 12 | 11.3ms |
-| Random depth-4 | Statevector | 16 | 462.3ms |
-| Random depth-4 | Statevector | 20 | 16.88s |
-| QFT            | Statevector | 8  | 491µs     |
-| QFT            | Statevector | 12 | 4.9ms    |
-| QFT            | Statevector | 16 | 185.6ms    |
-| QFT            | Statevector | 20 | 7.52s    |
-| GHZ            | MPS χ=2     | 20 | 6.9ms   |
-| GHZ            | MPS χ=2     | 50 | 15.6ms   |
-| GHZ            | MPS χ=2     | 100| 30.2ms  |
-| Random depth-4 | MPS χ=8     | 20 | 3.9ms |
-| Random depth-4 | MPS χ=8     | 30 | 5.9ms |
-| Random depth-4 | MPS χ=8     | 50 | 9.6ms |
-
-<!-- benchmark:end -->
 
 ## How it works
 
