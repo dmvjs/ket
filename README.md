@@ -312,6 +312,18 @@ const restored2 = Circuit.fromJSON(JSON.parse(json))
 
 All operation types are preserved: gates, measure, reset, if, and named sub-circuits. Gate matrices are reconstructed from metadata on load.
 
+## Performance
+
+<!-- benchmark:start -->
+
+Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 7 runs.
+
+| Circuit | Backend | Qubits | Time |
+|---|---|---|---|
+| — | — | — | run `workflow_dispatch` → Benchmark to populate |
+
+<!-- benchmark:end -->
+
 ## Testing
 
 695 tests, ~200ms. Run with:
