@@ -58,7 +58,7 @@ const result = bell
   .measure(0, 'out', 0)
   .measure(1, 'out', 1)
   .run({ shots: 1000, seed: 42 })
-// result.counts → { '00': ~500, '11': ~500 }
+// result.probs → { '00': ~0.5, '11': ~0.5 }
 ```
 
 ### Clifford simulation
@@ -74,6 +74,10 @@ for (let i = 0; i < 5; i++) ghz = ghz.measure(i, 'out', i)
 
 const result = ghz.runClifford({ shots: 1024, seed: 42 })
 // result.probs → { '00000': ~0.5, '11111': ~0.5 }
+
+// Add noise — same interface as statevector/density matrix
+ghz.runClifford({ shots: 10000, noise: 'aria-1' })
+ghz.runClifford({ shots: 10000, noise: { p1: 0.001, p2: 0.005, pMeas: 0.004 } })
 ```
 
 Non-Clifford gates throw at runtime:
@@ -106,7 +110,7 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 | Statevector | `circuit.run()` / `circuit.statevector()` | O(2ⁿ), sparse | Exact simulation, practical up to ~20 qubits |
 | MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²) | Low-entanglement circuits, 50+ qubits |
 | Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
-| Clifford stabilizer | `circuit.runClifford({ shots })` | O(n²) | Clifford-only circuits, exact sampling |
+| Clifford stabilizer | `circuit.runClifford({ shots, noise? })` | O(n²) | Clifford-only circuits, QEC threshold curves |
 
 The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
 
@@ -343,17 +347,20 @@ main.decompose()  // inline all named gates back to primitives
 
 ## Noise models
 
-Statevector and density matrix backends both accept a noise configuration.
+All three stochastic backends accept a noise configuration with the same interface:
 
 ```typescript
-// Named device profile
+// Named device profile (statevector, Clifford, density matrix)
 circuit.run({ noise: 'aria-1' })
-circuit.dm({ noise: 'forte-1' })
-circuit.run({ shots: 1000, noise: 'harmony' })
+circuit.runClifford({ shots: 10000, noise: 'forte-1' })
+circuit.dm({ noise: 'harmony' })
 
 // Custom noise parameters
 circuit.run({ noise: { p1: 0.001, p2: 0.005, pMeas: 0.004 } })
+circuit.runClifford({ shots: 10000, noise: { p1: 0.001, p2: 0.005 } })
 ```
+
+`p1` — single-qubit depolarizing error probability per gate. `p2` — two-qubit depolarizing probability. `pMeas` — bit-flip probability on each measured bit (SPAM error).
 
 Named profiles match the device table in [IonQ device targeting](#ionq-device-targeting). The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
 
@@ -390,9 +397,46 @@ The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse 
 
 The Clifford stabilizer backend implements the CHP algorithm (Aaronson & Gottesman 2004) with a bit-packed binary tableau. Each row stores 32 stabilizer bits per array element; row multiplication uses vectorized popcount for phase accumulation and word-level XOR for tableau update, both O(n/32). Gate application (H, S, CNOT, etc.) is O(n) over the 2n tableau rows. Measurement is O(n²) worst-case per qubit. The gate set is exactly the Clifford group — any non-Clifford gate raises a TypeError.
 
+## Quantum error correction
+
+`CliffordSim` is exported directly for researchers who need more control than `runClifford` provides — custom decoders, syndrome extraction, mid-circuit readout, threshold curve generation.
+
+```typescript
+import { CliffordSim } from '@kirkelliott/ket'
+
+// Bell state as a minimal 2-qubit code: stabilizers XX and ZZ
+const sim = new CliffordSim(2)
+sim.h(0); sim.cnot(0, 1)
+
+sim.stabilizerGenerators()  // → ['+XX', '+ZZ']
+
+// Inject a bit-flip error on qubit 0
+sim.x(0)
+
+// Syndrome: ZZ flips sign, revealing the X error
+sim.stabilizerGenerators()  // → ['+XX', '-ZZ']
+
+// Measure qubit 0 to collapse the syndrome
+const outcome = sim.measure(0, Math.random())
+```
+
+`stabilizerGenerators()` returns the current stabilizer generators as signed Pauli strings (`'+'` or `'-'` prefix, then one character per qubit: `I`, `X`, `Y`, `Z`). The sign encodes the ±1 eigenvalue. A sign flip on a generator is a syndrome bit — it identifies which error occurred without revealing the logical state. Call it after syndrome measurement to extract the full stabilizer state for soft-decision decoding.
+
+For threshold curves, pass `noise` to `runClifford` and sweep the error rate:
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+
+// Sweep p2 to find the surface code threshold
+for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
+  const result = surfaceCode.runClifford({ shots: 10000, noise: { p2 } })
+  console.log(p2, result.probs['0'])  // logical error rate vs physical error rate
+}
+```
+
 ## Testing
 
-778 tests, ~200ms. Run with:
+811 tests, ~200ms. Run with:
 
 ```bash
 npm test

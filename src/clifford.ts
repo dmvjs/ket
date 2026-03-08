@@ -272,4 +272,25 @@ export class CliffordSim {
       return _r[2 * n] ?? 0
     }
   }
+
+  /**
+   * Return the n stabilizer generators as signed Pauli strings, e.g. `['+XZZXI', '-IXZZX']`.
+   * Rows n..2n-1 of the tableau; sign from the phase bit (0 → '+', 1 → '-').
+   */
+  stabilizerGenerators(): string[] {
+    const { n, W, _x, _z, _r } = this
+    const out: string[] = []
+    for (let i = n; i < 2 * n; i++) {
+      const iW = i * W
+      let s = (_r[i] ?? 0) ? '-' : '+'
+      for (let q = 0; q < n; q++) {
+        const w = q >> 5, sh = q & 31
+        const xb = ((_x[iW + w] ?? 0) >>> sh) & 1
+        const zb = ((_z[iW + w] ?? 0) >>> sh) & 1
+        s += xb && zb ? 'Y' : xb ? 'X' : zb ? 'Z' : 'I'
+      }
+      out.push(s)
+    }
+    return out
+  }
 }

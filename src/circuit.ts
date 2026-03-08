@@ -208,6 +208,14 @@ const TWO_PAULI: readonly (readonly [Gate2x2 | null, Gate2x2 | null])[] = [
   [G.Z, null], [G.Z, G.X], [G.Z, G.Y], [G.Z, G.Z],
 ]
 
+// Same 15 Paulis encoded as (0=I,1=X,2=Y,3=Z) pairs — used by Clifford depolarizing channel.
+const TWO_PAULI_IDX: readonly [number, number][] = [
+  [0,1],[0,2],[0,3],
+  [1,0],[1,1],[1,2],[1,3],
+  [2,0],[2,1],[2,2],[2,3],
+  [3,0],[3,1],[3,2],[3,3],
+]
+
 /** Apply single-qubit depolarizing channel: random Pauli X/Y/Z with total probability p. */
 function dep1(sv: StateVector, q: number, p: number, rand: number): StateVector {
   if (rand >= p) return sv
@@ -3328,8 +3336,10 @@ export class Circuit {
    *
    * @param opts.shots  Number of measurement shots (default 1024).
    * @param opts.seed   Optional PRNG seed for reproducibility.
+   * @param opts.noise  Device name (`'aria-1'` / `'forte-1'` / `'harmony'`) or
+   *                    `{ p1?, p2?, pMeas? }` depolarizing + readout error rates.
    */
-  runClifford({ shots = 1024, seed }: { shots?: number; seed?: number } = {}): Distribution {
+  runClifford({ shots = 1024, seed, noise }: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
     // ── Validate: check all ops are Clifford ─────────────────────────────
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
@@ -3357,6 +3367,18 @@ export class Circuit {
       }
     }
 
+    // Resolve noise profile
+    const noiseParams: NoiseParams | undefined =
+      noise == null         ? undefined :
+      typeof noise === 'string' ? (() => {
+        const p = DEVICE_NOISE[noise]
+        if (!p) throw new TypeError(`Unknown device profile '${noise}'. Known: ${Object.keys(DEVICE_NOISE).join(', ')}`)
+        return p
+      })() : noise
+    const p1    = noiseParams?.p1    ?? 0
+    const p2    = noiseParams?.p2    ?? 0
+    const pMeas = noiseParams?.pMeas ?? 0
+
     const rng = makePrng(seed)
     const counts = new Map<bigint, number>()
 
@@ -3367,9 +3389,31 @@ export class Circuit {
       if (op.kind === 'measure') measuredQubits.add(op.q)
     }
 
+    // Clifford depolarizing: random Pauli X/Y/Z with total prob p
+    const cDep1 = (q: number, p: number): void => {
+      const r = rng()
+      if (r >= p) return
+      const s = r / p
+      if (s < 1/3) sim.x(q)
+      else if (s < 2/3) sim.y(q)
+      else sim.z(q)
+    }
+
+    // Clifford two-qubit depolarizing: random non-identity {I,X,Y,Z}⊗{I,X,Y,Z} with total prob p
+    const applyPauli = (q: number, p: number): void => {
+      if (p === 1) sim.x(q); else if (p === 2) sim.y(q); else if (p === 3) sim.z(q)
+    }
+    const cDep2 = (a: number, b: number, p: number): void => {
+      const r = rng()
+      if (r >= p) return
+      const [ea, eb] = TWO_PAULI_IDX[Math.min(Math.floor(r / p * 15), 14)]!
+      applyPauli(a, ea); applyPauli(b, eb)
+    }
+
     // ── Per-shot simulation ───────────────────────────────────────────────
+    let sim!: CliffordSim
     for (let shot = 0; shot < shots; shot++) {
-      const sim = new CliffordSim(this.qubits)
+      sim = new CliffordSim(this.qubits)
 
       // Track measurement outcomes for this shot (to form the output bitstring)
       const measured = new Array<number>(this.qubits).fill(0)
@@ -3388,10 +3432,17 @@ export class Circuit {
                 case 's':  sim.s(op.q);  break
                 case 'si': case 'sdg': sim.si(op.q); break
               }
+              if (p1) cDep1(op.q, p1)
               break
             }
-            case 'cnot':    sim.cnot(op.control, op.target); break
-            case 'swap':    sim.swap(op.a, op.b);            break
+            case 'cnot':
+              sim.cnot(op.control, op.target)
+              if (p2) cDep2(op.control, op.target, p2)
+              break
+            case 'swap':
+              sim.swap(op.a, op.b)
+              if (p2) cDep2(op.a, op.b, p2)
+              break
             case 'controlled': {
               const name = op.meta?.name ?? ''
               switch (name) {
@@ -3399,10 +3450,12 @@ export class Circuit {
                 case 'cy': sim.cy(op.control, op.target);   break
                 case 'cz': sim.cz(op.control, op.target);   break
               }
+              if (p2) cDep2(op.control, op.target, p2)
               break
             }
             case 'measure': {
-              const outcome = sim.measure(op.q, rng())
+              const raw = sim.measure(op.q, rng())
+              const outcome = pMeas && rng() < pMeas ? (raw ^ 1) : raw
               measured[op.q] = outcome
               break
             }

@@ -1683,6 +1683,39 @@ describe('if — conditional gate (2b)', () => {
     expect(r.probs['0']).toBeCloseTo(1, 5)
   })
 
+  it('multi-bit creg: if fires on value=2 (bit 1 set, bit 0 clear)', () => {
+    // x(1) → q1=1. measure q0→c[0]=0, q1→c[1]=1. cregValue=2. if(c,2) fires → x(0) → qubit 0 flips.
+    const r = new Circuit(2).x(1)
+      .creg('c', 2)
+      .measure(0, 'c', 0)
+      .measure(1, 'c', 1)
+      .if('c', 2, c => c.x(0))
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1, 10)
+  })
+
+  it('multi-bit creg: if does NOT fire on value=1 when register is 2', () => {
+    // same setup as above — creg is 2, if(c,1) must not fire
+    const r = new Circuit(2).x(1)
+      .creg('c', 2)
+      .measure(0, 'c', 0)
+      .measure(1, 'c', 1)
+      .if('c', 1, c => c.x(0))
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1, 10)  // q0 unchanged=0, q1=1 → '10' (q1 is MSB)
+  })
+
+  it('multi-bit creg: if fires on value=3 (both bits set)', () => {
+    // x(0).x(1) → q0=q1=1. measure both → c=3. if(c,3) fires → x(2).
+    const r = new Circuit(3).x(0).x(1)
+      .creg('c', 2)
+      .measure(0, 'c', 0)
+      .measure(1, 'c', 1)
+      .if('c', 3, c => c.x(2))
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['111']).toBeCloseTo(1, 10)
+  })
+
   // ── Quantum teleportation with true mid-circuit measurement ──────────────────
   //
   // The textbook protocol:
@@ -3370,6 +3403,34 @@ describe('MPS backend — error paths', () => {
   })
 })
 
+describe('MPS backend — non-adjacent two-qubit gates', () => {
+  it('cnot(0,3) on 4-qubit circuit matches statevector', () => {
+    // Exercises the SWAP-bubble path in mpsApply2 (b = a+3)
+    const c = new Circuit(4).h(0).cnot(0, 3)
+    const sv  = c.exactProbs()
+    const mps = c.runMps({ shots: 8192, seed: 1 })
+    for (const [bs, p] of Object.entries(sv)) {
+      expect(near(mps.probs[bs] ?? 0, p, 0.04)).toBe(true)
+    }
+  })
+
+  it('cnot(0,5) on 6-qubit circuit: Bell pair on endpoints', () => {
+    const c = new Circuit(6).h(0).cnot(0, 5)
+    const mps = c.runMps({ shots: 4000, seed: 2 })
+    expect(near(mps.probs['000000'] ?? 0, 0.5, 0.04)).toBe(true)
+    expect(near(mps.probs['100001'] ?? 0, 0.5, 0.04)).toBe(true)
+  })
+
+  it('cz(0,3) via h·cz·h = cnot: matches statevector', () => {
+    const c = new Circuit(4).h(0).h(3).cz(0, 3).h(3)
+    const sv  = c.exactProbs()
+    const mps = c.runMps({ shots: 8192, seed: 3 })
+    for (const [bs, p] of Object.entries(sv)) {
+      expect(near(mps.probs[bs] ?? 0, p, 0.04)).toBe(true)
+    }
+  })
+})
+
 // ─── Immutability ─────────────────────────────────────────────────────────────
 
 describe('Circuit immutability', () => {
@@ -4663,6 +4724,50 @@ describe('dm() — noisy circuit', () => {
   })
 })
 
+describe('dm() — three-qubit gates', () => {
+  it('ccx: |011⟩ → |111⟩ with purity 1', () => {
+    const dm = new Circuit(3).x(0).x(1).ccx(0, 1, 2).dm()
+    expect(dm.purity()).toBeCloseTo(1, 10)
+    expect(dm.probabilities()['111']).toBeCloseTo(1, 10)
+  })
+
+  it('ccx: controls not met — target unchanged', () => {
+    // x(2) = q2=1 only; controls q0=q1=0 → no flip; q2 stays 1 → '100'
+    const dm = new Circuit(3).x(2).ccx(0, 1, 2).dm()
+    expect(dm.probabilities()['100']).toBeCloseTo(1, 10)
+  })
+
+  it('ccx probabilities match statevector', () => {
+    const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2)
+    const sv = c.exactProbs()
+    const dm = c.dm().probabilities()
+    for (const [bs, p] of Object.entries(sv)) {
+      expect(dm[bs]).toBeCloseTo(p, 10)
+    }
+  })
+
+  it('cswap: control=1, swaps q1 and q2 — |101⟩ → |011⟩', () => {
+    // x(0).x(2): q0=1,q2=1 → '101'; cswap(control=q0=1) swaps q1↔q2 → q0=1,q1=1,q2=0 → '011'
+    const dm = new Circuit(3).x(0).x(2).cswap(0, 1, 2).dm()
+    expect(dm.probabilities()['011']).toBeCloseTo(1, 10)
+  })
+
+  it('cswap: control=0, no swap — q2 stays 1', () => {
+    // x(2): q2=1 → '100'; control q0=0 → no swap → stays '100'
+    const dm = new Circuit(3).x(2).cswap(0, 1, 2).dm()
+    expect(dm.probabilities()['100']).toBeCloseTo(1, 10)
+  })
+
+  it('cswap probabilities match statevector', () => {
+    const c = new Circuit(3).h(0).x(1).cswap(0, 1, 2)
+    const sv = c.exactProbs()
+    const dm = c.dm().probabilities()
+    for (const [bs, p] of Object.entries(sv)) {
+      expect(dm[bs]).toBeCloseTo(p, 10)
+    }
+  })
+})
+
 // ─── Gate aliases ─────────────────────────────────────────────────────────────
 
 describe('sdg / tdg aliases', () => {
@@ -5369,6 +5474,38 @@ describe('circuit.runClifford()', () => {
     const r = new Circuit(3).h(0).cnot(0, 1).runClifford({ shots: 100 })
     expect(r.qubits).toBe(3)
   })
+
+  it('reset: X then reset always gives 0', () => {
+    let c = new Circuit(1).x(0).creg('c', 1)
+    c = c.reset(0).measure(0, 'c', 0)
+    const r = c.runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('noise: custom { pMeas: 1 } flips every measured bit', () => {
+    // X sets qubit to |1⟩; pMeas=1 flips every measurement → always reads 0
+    let c = new Circuit(1).x(0).creg('c', 1).measure(0, 'c', 0)
+    const r = c.runClifford({ shots: 200, seed: 1, noise: { pMeas: 1 } })
+    expect(r.probs['0']).toBeCloseTo(1.0, 10)
+  })
+
+  it('noise: named device profile runs without error and returns valid probs', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const r = c.runClifford({ shots: 500, seed: 42, noise: 'aria-1' })
+    const total = Object.values(r.probs).reduce((a, b) => a + b, 0)
+    expect(total).toBeCloseTo(1.0, 5)
+  })
+
+  it('noise: custom p1/p2 runs without error and probs sum to 1', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const r = c.runClifford({ shots: 500, seed: 1, noise: { p1: 0.01, p2: 0.05 } })
+    const total = Object.values(r.probs).reduce((a, b) => a + b, 0)
+    expect(total).toBeCloseTo(1.0, 5)
+  })
+
+  it('noise: unknown device name throws TypeError', () => {
+    expect(() => new Circuit(1).h(0).runClifford({ noise: 'fake-device' })).toThrow(TypeError)
+  })
 })
 
 // ─── CliffordSim direct tests ─────────────────────────────────────────────────
@@ -5419,6 +5556,117 @@ describe('CliffordSim', () => {
     sim0.h(0); sim0.s(0); sim0.s(0)
     const m0 = sim0.measure(0, 0.1)
     expect([0, 1]).toContain(m0)
+  })
+
+  it('S†S = I: si undoes s', () => {
+    const sim = new CliffordSim(1)
+    sim.s(0); sim.si(0)
+    expect(sim.measure(0, 0.1)).toBe(0)
+  })
+
+  it('Y gate: Y|0⟩ = i|1⟩ → measures 1', () => {
+    const sim = new CliffordSim(1)
+    sim.y(0)
+    expect(sim.measure(0, 0.1)).toBe(1)
+  })
+
+  it('Y gate: Y|1⟩ = -i|0⟩ → measures 0', () => {
+    const sim = new CliffordSim(1)
+    sim.x(0); sim.y(0)
+    expect(sim.measure(0, 0.1)).toBe(0)
+  })
+
+  it('SWAP: X(0)·SWAP(0,1)|00⟩ → |01⟩', () => {
+    const sim = new CliffordSim(2)
+    sim.x(0); sim.swap(0, 1)
+    expect(sim.measure(0, 0.1)).toBe(0)
+    expect(sim.measure(1, 0.1)).toBe(1)
+  })
+
+  it('CY: X(0)·CY(0,1)|00⟩ → |11⟩ (CY acts as Y when control=1)', () => {
+    const sim = new CliffordSim(2)
+    sim.x(0); sim.cy(0, 1)
+    expect(sim.measure(0, 0.1)).toBe(1)
+    expect(sim.measure(1, 0.1)).toBe(1)
+  })
+
+  it('CZ same-word: X(0)·H(1)·CZ(0,1)·H(1) → |11⟩ (CZ = CNOT in H basis, qubits in same word)', () => {
+    const sim = new CliffordSim(2)
+    sim.x(0); sim.h(1); sim.cz(0, 1); sim.h(1)
+    expect(sim.measure(0, 0.1)).toBe(1)
+    expect(sim.measure(1, 0.1)).toBe(1)
+  })
+
+  it('SWAP same-word: X(0)·SWAP(0,31)|00...0⟩ → qubit 0=0, qubit 31=1 (both in word 0)', () => {
+    const sim = new CliffordSim(32)
+    sim.x(0); sim.swap(0, 31)
+    expect(sim.measure(0, 0.1)).toBe(0)
+    expect(sim.measure(31, 0.1)).toBe(1)
+  })
+
+  it('n=33 word boundary: CNOT(0,32) across word boundary', () => {
+    const sim = new CliffordSim(33)
+    sim.x(0); sim.cnot(0, 32)
+    expect(sim.measure(0, 0.1)).toBe(1)
+    expect(sim.measure(32, 0.1)).toBe(1)
+  })
+
+  it('n=33 word boundary: CNOT(31,32) across word boundary', () => {
+    const sim = new CliffordSim(33)
+    sim.x(31); sim.cnot(31, 32)
+    expect(sim.measure(31, 0.1)).toBe(1)
+    expect(sim.measure(32, 0.1)).toBe(1)
+  })
+
+  it('n=33 word boundary: CZ(0,32) — X(0)·H(32)·CZ(0,32)·H(32) → |11⟩', () => {
+    const sim = new CliffordSim(33)
+    sim.x(0); sim.h(32); sim.cz(0, 32); sim.h(32)
+    expect(sim.measure(0, 0.1)).toBe(1)
+    expect(sim.measure(32, 0.1)).toBe(1)
+  })
+
+  it('n=33 word boundary: SWAP(0,32) → swaps across words', () => {
+    const sim = new CliffordSim(33)
+    sim.x(0); sim.swap(0, 32)
+    expect(sim.measure(0, 0.1)).toBe(0)
+    expect(sim.measure(32, 0.1)).toBe(1)
+  })
+
+  it('stabilizerGenerators: initial |00⟩ → ["+ZI", "+IZ"]', () => {
+    const sim = new CliffordSim(2)
+    expect(sim.stabilizerGenerators()).toEqual(['+ZI', '+IZ'])
+  })
+
+  it('stabilizerGenerators: H(0)|00⟩ → ["+XI", "+IZ"]', () => {
+    const sim = new CliffordSim(2)
+    sim.h(0)
+    expect(sim.stabilizerGenerators()).toEqual(['+XI', '+IZ'])
+  })
+
+  it('stabilizerGenerators: H(0)·S(0)|00⟩ → first generator is Y (Y encoding)', () => {
+    // H maps Z→X; S maps X→Y; so stabilizer of qubit 0 becomes Y
+    const sim = new CliffordSim(2)
+    sim.h(0); sim.s(0)
+    const stabs = sim.stabilizerGenerators()
+    expect(stabs[0]).toBe('+YI')
+    expect(stabs[1]).toBe('+IZ')
+  })
+
+  it('stabilizerGenerators: minus sign — X(0)·measure(0) collapses to -Z or +Z', () => {
+    // After measuring |+⟩ and getting 0, stabilizer should be +Z
+    const sim = new CliffordSim(1)
+    sim.h(0)
+    const outcome = sim.measure(0, 0.1)  // rand < 0.5 → 0
+    expect(outcome).toBe(0)
+    const [stab] = sim.stabilizerGenerators()
+    expect(stab).toBe('+Z')
+  })
+
+  it('stabilizerGenerators: returns n strings each of length n+1', () => {
+    const sim = new CliffordSim(5)
+    const stabs = sim.stabilizerGenerators()
+    expect(stabs).toHaveLength(5)
+    for (const s of stabs) expect(s).toHaveLength(6)  // sign + 5 chars
   })
 })
 
