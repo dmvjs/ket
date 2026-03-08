@@ -6,7 +6,7 @@
 
 import { Circuit, qft } from '../dist/ket.js'
 
-const RUNS = 7  // take median of N runs
+const RUNS = 5  // take median of N runs
 
 function median(arr) {
   const s = [...arr].sort((a, b) => a - b)
@@ -22,6 +22,16 @@ function bench(fn) {
     times.push(performance.now() - t)
   }
   return median(times)
+}
+
+/** Single timed run — used for chart data after JIT is warm from bench() above. */
+function point(fn) {
+  const t = performance.now()
+  const out = fn()
+  const ms = performance.now() - t
+  // Estimate memory from statevector entry count: ~96 bytes per Map entry (BigInt key + Complex value + overhead)
+  const memMB = out instanceof Map ? out.size * 96 / (1024 * 1024) : 0
+  return { ms, memMB }
 }
 
 function randomCircuit(n, depth) {
@@ -41,7 +51,7 @@ function ghz(n) {
 
 const results = {}
 
-// Statevector: random depth-4 circuits (statevector caps out ~20q; 24q takes minutes)
+// Statevector: random depth-4 circuits (caps out ~20q; beyond that takes minutes on CI)
 for (const n of [8, 12, 16, 20]) {
   const c = randomCircuit(n, 4)
   results[`sv_random_${n}q`] = bench(() => c.statevector())
@@ -63,6 +73,31 @@ for (const n of [20, 50, 100]) {
 for (const n of [20, 30, 50]) {
   const c = randomCircuit(n, 4)
   results[`mps_random_${n}q_chi8`] = bench(() => c.runMps({ shots: 1000, maxBond: 8 }))
+}
+
+// Chart data: per-qubit time + memory for n=2..20 (JIT is warm from above runs)
+results.charts = {}
+
+// Bell state: H(0) + CNOT(0, n-1) — only 2 amplitudes regardless of n (sparse)
+results.charts.bell = []
+for (let n = 2; n <= 20; n++) {
+  const c = new Circuit(n).h(0).cnot(0, n - 1)
+  results.charts.bell.push({ n, ...point(() => c.statevector()) })
+}
+
+// Uniform superposition: H on all qubits — all 2^n amplitudes (dense)
+results.charts.uniform = []
+for (let n = 2; n <= 20; n++) {
+  let c = new Circuit(n)
+  for (let q = 0; q < n; q++) c = c.h(q)
+  results.charts.uniform.push({ n, ...point(() => c.statevector()) })
+}
+
+// QFT: all 2^n amplitudes with quadratic gate depth
+results.charts.qft = []
+for (let n = 2; n <= 20; n++) {
+  const c = qft(n)
+  results.charts.qft.push({ n, ...point(() => c.statevector()) })
 }
 
 console.log(JSON.stringify(results, null, 2))

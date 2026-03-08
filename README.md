@@ -81,7 +81,7 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 
 | Backend | Method | Memory | Best for |
 |---|---|---|---|
-| Statevector | `circuit.run()` / `circuit.statevector()` | O(2ⁿ), sparse | Exact simulation up to ~25 qubits |
+| Statevector | `circuit.run()` / `circuit.statevector()` | O(2ⁿ), sparse | Exact simulation, practical up to ~20 qubits |
 | MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²) | Low-entanglement circuits, 50+ qubits |
 | Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
 
@@ -351,7 +351,13 @@ All operation types are preserved: gates, measure, reset, if, and named sub-circ
 
 <!-- benchmark:start -->
 
-Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 7 runs.
+Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 5 runs.
+
+Statevector is exact but O(2ⁿ) — time and memory grow with the number of non-zero amplitudes, not just qubit count. Sparse circuits like Bell maintain two amplitudes at any width and run in near-constant time. Dense circuits (uniform superposition, QFT) fill all 2ⁿ entries and hit the exponential wall around 20 qubits. The MPS backend removes that ceiling for circuits with bounded entanglement.
+
+![Bell state benchmark](benchmark/charts/bell.svg)
+![Uniform superposition benchmark](benchmark/charts/uniform.svg)
+![QFT benchmark](benchmark/charts/qft.svg)
 
 | Circuit | Backend | Qubits | Time |
 |---|---|---|---|
