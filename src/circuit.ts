@@ -3168,30 +3168,19 @@ export class Circuit {
     const sv  = this.statevector(initialState !== undefined ? { initialState } : {})
     const mask = 1n << BigInt(q)
 
-    // Reduced density matrix elements
+    // Reduced density matrix elements — single pass
     let rho00 = 0, rho11 = 0, rho01re = 0, rho01im = 0
 
-    for (const [idx0, amp0] of sv) {
-      if ((idx0 & mask) !== 0n) continue    // only iterate over |0⟩ basis for qubit q
-      const amp1 = sv.get(idx0 | mask)
-      rho00   += amp0.re * amp0.re + amp0.im * amp0.im
-      if (amp1) {
-        rho11   += amp1.re * amp1.re + amp1.im * amp1.im
-        // ρ₀₁ = Σ ψ(idx0) · ψ(idx0|mask)*  →  Re = amp0·Re(conj(amp1)),  Im = Im(amp0·conj(amp1))
-        rho01re += amp0.re * amp1.re + amp0.im * amp1.im
-        rho01im += amp0.im * amp1.re - amp0.re * amp1.im
-      }
-    }
-    // Also accumulate rho11 for basis states where qubit q=1 but no q=0 counterpart is in sv
-    for (const [idx1, amp1] of sv) {
-      if ((idx1 & mask) === 0n) continue
-      rho11 += amp1.re * amp1.re + amp1.im * amp1.im
-    }
-    // Correct double-counting: rho11 was added in both loops above
-    // Fix: recompute rho11 cleanly
-    rho11 = 0
     for (const [idx, amp] of sv) {
-      if ((idx & mask) !== 0n) rho11 += amp.re * amp.re + amp.im * amp.im
+      const p = amp.re * amp.re + amp.im * amp.im
+      if ((idx & mask) !== 0n) { rho11 += p; continue }
+      rho00 += p
+      const amp1 = sv.get(idx | mask)
+      if (amp1) {
+        // ρ₀₁ = Σ ψ(idx) · ψ(idx|mask)*
+        rho01re += amp.re * amp1.re + amp.im * amp1.im
+        rho01im += amp.im * amp1.re - amp.re * amp1.im
+      }
     }
 
     // Bloch vector: rz = ρ₀₀ - ρ₁₁, rx = 2·Re(ρ₀₁), ry = -2·Im(ρ₀₁)

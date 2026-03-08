@@ -250,7 +250,7 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
       throw new TypeError(`ops '${ops}' length must equal ansatz.qubits (${n})`)
     }
     if (Math.abs(coeff) < 1e-15) continue
-    if ([...ops].every(ch => ch === 'I')) { energy += coeff; continue }
+    if (!/[XYZ]/.test(ops)) { energy += coeff; continue }
 
     // Rotate each qubit into the Z basis for its Pauli operator
     let rot = ansatz
