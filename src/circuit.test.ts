@@ -4237,3 +4237,230 @@ describe('blochAngles()', () => {
     expect(() => new Circuit(1).measure(0, 'c', 0).blochAngles(0)).toThrow(TypeError)
   })
 })
+
+// ─── Circuit.fromQuil() ───────────────────────────────────────────────────────
+
+/** Quil round-trip: emit via toQuil(), reimport, verify statevector fidelity. */
+function quilRoundTrip(c: Circuit): Circuit { return Circuit.fromQuil(c.toQuil()) }
+
+describe('Circuit.fromQuil()', () => {
+  it('H gate on q0', () => {
+    const c = Circuit.fromQuil('H 0')
+    expect(svFidelity(new Circuit(1).h(0), c)).toBeCloseTo(1, 8)
+  })
+
+  it('CNOT', () => {
+    const c = Circuit.fromQuil('H 0\nCNOT 0 1')
+    expect(svFidelity(new Circuit(2).h(0).cnot(0, 1), c)).toBeCloseTo(1, 8)
+  })
+
+  it('CCNOT (Toffoli)', () => {
+    const orig = new Circuit(3).x(0).x(1).ccx(0, 1, 2)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('CSWAP (Fredkin)', () => {
+    const orig = new Circuit(3).x(0).x(1).cswap(0, 1, 2)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('SWAP', () => {
+    const orig = new Circuit(2).x(0).swap(0, 1)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('CZ', () => {
+    const orig = new Circuit(2).h(0).cz(0, 1)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('ISWAP', () => {
+    const orig = new Circuit(2).h(0).iswap(0, 1)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('RX / RY / RZ with pi angles', () => {
+    const orig = new Circuit(1).rx(Math.PI / 3, 0).ry(Math.PI / 4, 0).rz(Math.PI / 6, 0)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('PHASE → u1', () => {
+    const orig = new Circuit(1).u1(Math.PI / 4, 0)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('CPHASE → cu1', () => {
+    const orig = new Circuit(2).h(0).cu1(Math.PI / 2, 0, 1)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('DAGGER S → si', () => {
+    const c = Circuit.fromQuil('DAGGER S 0')
+    expect(svFidelity(new Circuit(1).si(0), c)).toBeCloseTo(1, 8)
+  })
+
+  it('DAGGER T → ti', () => {
+    const c = Circuit.fromQuil('DAGGER T 0')
+    expect(svFidelity(new Circuit(1).ti(0), c)).toBeCloseTo(1, 8)
+  })
+
+  it('CONTROLLED H → ch', () => {
+    const orig = new Circuit(2).h(0).ch(0, 1)
+    expect(svFidelity(orig, Circuit.fromQuil(orig.toQuil()))).toBeCloseTo(1, 8)
+  })
+
+  it('CONTROLLED RX → crx', () => {
+    const orig = new Circuit(2).h(0).crx(Math.PI / 3, 0, 1)
+    expect(svFidelity(orig, Circuit.fromQuil(orig.toQuil()))).toBeCloseTo(1, 8)
+  })
+
+  it('CONTROLLED RZ → crz', () => {
+    const orig = new Circuit(2).h(0).crz(Math.PI / 5, 0, 1)
+    expect(svFidelity(orig, Circuit.fromQuil(orig.toQuil()))).toBeCloseTo(1, 8)
+  })
+
+  it('DECLARE and MEASURE preserved', () => {
+    const quil = 'DECLARE ro BIT[1]\nH 0\nMEASURE 0 ro[0]'
+    const c = Circuit.fromQuil(quil)
+    expect(c.qubits).toBe(1)
+    // run should not throw (creg is registered)
+    expect(() => c.run({ shots: 10, seed: 1 })).not.toThrow()
+  })
+
+  it('RESET single qubit', () => {
+    const c = Circuit.fromQuil('H 0\nRESET 0')
+    const r = c.run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('infers qubit count from highest index', () => {
+    expect(Circuit.fromQuil('H 5').qubits).toBe(6)
+  })
+
+  it('strips # comments', () => {
+    const c = Circuit.fromQuil('# prepare Bell state\nH 0  # Hadamard\nCNOT 0 1')
+    expect(svFidelity(new Circuit(2).h(0).cnot(0, 1), c)).toBeCloseTo(1, 8)
+  })
+
+  it('ignores PRAGMA and HALT lines', () => {
+    expect(() => Circuit.fromQuil('PRAGMA INITIAL_REWIRING "PARTIAL"\nH 0\nHALT')).not.toThrow()
+  })
+
+  it('throws on unknown gate', () => {
+    expect(() => Circuit.fromQuil('TELEPORT 0 1')).toThrow(TypeError)
+  })
+
+  it('GHZ-3 round-trip through Quil', () => {
+    const orig = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2)
+    expect(svFidelity(orig, quilRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+})
+
+// ─── toLatex() ────────────────────────────────────────────────────────────────
+
+describe('toLatex()', () => {
+  it('wraps in quantikz environment', () => {
+    const tex = new Circuit(1).h(0).toLatex()
+    expect(tex).toMatch(/^\\begin\{quantikz\}/)
+    expect(tex).toMatch(/\\end\{quantikz\}$/)
+  })
+
+  it('H gate emits \\gate{H}', () => {
+    expect(new Circuit(1).h(0).toLatex()).toContain('\\gate{H}')
+  })
+
+  it('CNOT emits \\ctrl and \\targ', () => {
+    const tex = new Circuit(2).cnot(0, 1).toLatex()
+    expect(tex).toContain('\\ctrl{1}')
+    expect(tex).toContain('\\targ{}')
+  })
+
+  it('CNOT reversed: control below target', () => {
+    const tex = new Circuit(2).cnot(1, 0).toLatex()
+    expect(tex).toContain('\\ctrl{-1}')
+    expect(tex).toContain('\\targ{}')
+  })
+
+  it('SWAP emits \\swap on both qubits', () => {
+    const tex = new Circuit(2).swap(0, 1).toLatex()
+    expect(tex).toContain('\\swap{1}')
+    expect(tex).toContain('\\swap{-1}')
+  })
+
+  it('Toffoli emits two \\ctrl and one \\targ', () => {
+    const tex = new Circuit(3).ccx(0, 1, 2).toLatex()
+    const ctrlCount = (tex.match(/\\ctrl\{/g) ?? []).length
+    expect(ctrlCount).toBe(2)
+    expect(tex).toContain('\\targ{}')
+  })
+
+  it('controlled-H emits \\ctrl and \\gate{H}', () => {
+    const tex = new Circuit(2).ch(0, 1).toLatex()
+    expect(tex).toContain('\\ctrl{1}')
+    expect(tex).toContain('\\gate{H}')
+  })
+
+  it('Rx uses \\frac notation for nice angles', () => {
+    const tex = new Circuit(1).rx(Math.PI / 2, 0).toLatex()
+    expect(tex).toContain('\\frac{\\pi}{2}')
+  })
+
+  it('parameterized gates include angle in label', () => {
+    const tex = new Circuit(1).rz(Math.PI / 4, 0).toLatex()
+    expect(tex).toContain('R_z(')
+    expect(tex).toContain('\\frac{\\pi}{4}')
+  })
+
+  it('S† uses \\dagger', () => {
+    const tex = new Circuit(1).si(0).toLatex()
+    expect(tex).toContain('S^\\dagger')
+  })
+
+  it('qubit labels use q_{n} subscript', () => {
+    const tex = new Circuit(3).h(0).toLatex()
+    expect(tex).toContain('q_{0}')
+    expect(tex).toContain('q_{1}')
+    expect(tex).toContain('q_{2}')
+  })
+
+  it('measure emits \\meter{}', () => {
+    const tex = new Circuit(1).h(0).measure(0, 'c', 0).toLatex()
+    expect(tex).toContain('\\meter{}')
+  })
+
+  it('reset emits \\gate{\\ket{0}}', () => {
+    const tex = new Circuit(1).reset(0).toLatex()
+    expect(tex).toContain('\\ket{0}')
+  })
+
+  it('two-qubit gate uses \\gate[2]', () => {
+    const tex = new Circuit(2).xx(Math.PI / 4, 0, 1).toLatex()
+    expect(tex).toContain('\\gate[2]')
+    expect(tex).toContain('XX(')
+  })
+
+  it('iSWAP two-qubit gate', () => {
+    const tex = new Circuit(2).iswap(0, 1).toLatex()
+    expect(tex).toContain('\\text{iSWAP}')
+  })
+
+  it('empty circuit returns bare quantikz environment', () => {
+    const tex = new Circuit(0).toLatex()
+    expect(tex).toBe('\\begin{quantikz}\n\\end{quantikz}')
+  })
+
+  it('multi-row circuit has correct number of \\\\ separators', () => {
+    const tex = new Circuit(3).h(0).h(1).h(2).toLatex()
+    const separators = (tex.match(/\\\\/g) ?? []).length
+    expect(separators).toBe(2)  // n-1 row separators
+  })
+
+  it('Bell circuit has lstick labels and correct structure', () => {
+    const tex = new Circuit(2).h(0).cnot(0, 1).toLatex()
+    expect(tex).toContain('\\lstick{$q_{0}$}')
+    expect(tex).toContain('\\lstick{$q_{1}$}')
+    expect(tex).toContain('\\gate{H}')
+    expect(tex).toContain('\\ctrl{1}')
+    expect(tex).toContain('\\targ{}')
+  })
+})

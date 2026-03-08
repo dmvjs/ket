@@ -463,6 +463,69 @@ function opsToJSON(ops: readonly Op[]): unknown[] {
   })
 }
 
+// ─── LaTeX helpers ────────────────────────────────────────────────────────────
+
+/** Format a radian value as a LaTeX math expression using \frac{}{} for clean fractions. */
+function latexAngle(r: number): string {
+  if (Math.abs(r) < 1e-14) return '0'
+  const f = r / Math.PI
+  for (const d of [1, 2, 3, 4, 6, 8, 12, 16]) {
+    for (let n = -16; n <= 16; n++) {
+      if (n === 0) continue
+      if (Math.abs(f - n / d) < 1e-12) {
+        const sign = n < 0 ? '-' : ''
+        const a = Math.abs(n)
+        if (d === 1) return a === 1 ? `${sign}\\pi` : `${sign}${a}\\pi`
+        return a === 1 ? `${sign}\\frac{\\pi}{${d}}` : `${sign}\\frac{${a}\\pi}{${d}}`
+      }
+    }
+  }
+  return String(r)
+}
+
+function latexSingleLabel(op: SingleOp): string {
+  const nm = op.meta?.name, p = op.meta?.params ?? []
+  const a  = (i: number) => latexAngle(p[i] ?? 0)
+  switch (nm) {
+    case 'h': return 'H';  case 'x': return 'X';  case 'y': return 'Y';  case 'z': return 'Z'
+    case 's': return 'S';  case 'si': return 'S^\\dagger'; case 't': return 'T'; case 'ti': return 'T^\\dagger'
+    case 'v': return '\\sqrt{X}'; case 'vi': return '\\sqrt{X}^\\dagger'; case 'id': return 'I'
+    case 'rx': return `R_x(${a(0)})`; case 'ry': return `R_y(${a(0)})`
+    case 'rz': case 'vz': return `R_z(${a(0)})`
+    case 'r2': return 'R_2'; case 'r4': return 'R_4'; case 'r8': return 'R_8'
+    case 'u1': return `U_1(${a(0)})`; case 'u2': return `U_2(${a(0)},${a(1)})`
+    case 'u3': return `U_3(${a(0)},${a(1)},${a(2)})`
+    case 'gpi': return `\\text{GPI}(${a(0)})`; case 'gpi2': return `\\text{GPI2}(${a(0)})`
+    default: return nm ? nm.toUpperCase() : 'U'
+  }
+}
+
+function latexTwoLabel(op: TwoOp): string {
+  const nm = op.meta?.name, p = op.meta?.params ?? []
+  const a  = (i: number) => latexAngle(p[i] ?? 0)
+  switch (nm) {
+    case 'xx': return `XX(${a(0)})`; case 'yy': return `YY(${a(0)})`
+    case 'zz': return `ZZ(${a(0)})`; case 'xy': return `XY(${a(0)})`
+    case 'iswap': return '\\text{iSWAP}'; case 'srswap': return '\\sqrt{\\text{iSWAP}}'
+    case 'ms': return `\\text{MS}(${a(0)},${a(1)})`
+    default: return nm ? nm.toUpperCase() : 'U'
+  }
+}
+
+function latexCtrlTargetLabel(op: ControlledOp): string {
+  const nm = op.meta?.name, p = op.meta?.params ?? []
+  const a  = (i: number) => latexAngle(p[i] ?? 0)
+  switch (nm) {
+    case 'cx': return 'X';  case 'cy': return 'Y';  case 'cz': return 'Z';  case 'ch': return 'H'
+    case 'crx': return `R_x(${a(0)})`; case 'cry': return `R_y(${a(0)})`; case 'crz': return `R_z(${a(0)})`
+    case 'cu1': return `U_1(${a(0)})`; case 'cu2': return `U_2(${a(0)},${a(1)})`
+    case 'cu3': return `U_3(${a(0)},${a(1)},${a(2)})`
+    case 'cs': return 'S';  case 'ct': return 'T';  case 'csdg': return 'S^\\dagger'; case 'ctdg': return 'T^\\dagger'
+    case 'cr2': return 'R_2'; case 'cr4': return 'R_4'; case 'cr8': return 'R_8'
+    default: return nm ? nm.slice(1).toUpperCase() : 'U'
+  }
+}
+
 // ─── Visualization helpers ────────────────────────────────────────────────────
 
 /** Format a radian angle using Unicode π for draw() / toSVG() labels. */
@@ -1215,6 +1278,126 @@ export class Circuit {
     return c
   }
 
+  /**
+   * Parse a Quil 2.0 program and return an equivalent Circuit.
+   *
+   * Supported: all standard single/two/three-qubit gates, `CONTROLLED` prefix,
+   * `DAGGER` prefix, `MEASURE`, `RESET`, `DECLARE BIT[]`.
+   * Qubit count is inferred from the highest qubit index referenced.
+   * `DEFGATE` and `PRAGMA` are silently skipped.
+   *
+   * @example
+   * const c = Circuit.fromQuil('H 0\nCNOT 0 1\nMEASURE 0 ro[0]')
+   */
+  static fromQuil(source: string): Circuit {
+    // Strip comments (# to end of line), then split into non-empty lines
+    const lines = source
+      .split('\n')
+      .map(l => l.replace(/#.*/g, '').trim())
+      .filter(Boolean)
+
+    const cregs = new Map<string, number>()
+    let maxQubit = 0
+
+    // ── Pass 1: DECLARE registers + infer qubit count ──────────────────────
+    for (const line of lines) {
+      const decl = line.match(/^DECLARE\s+(\w+)\s+BIT\[(\d+)\]/)
+      if (decl) { cregs.set(decl[1]!, parseInt(decl[2]!)); continue }
+      // Strip parenthesised params before scanning qubit indices
+      const withoutParams = line.replace(/\([^)]*\)/g, '')
+      for (const m of withoutParams.matchAll(/\b(\d+)\b/g)) {
+        maxQubit = Math.max(maxQubit, parseInt(m[1]!))
+      }
+    }
+
+    let c = new Circuit(maxQubit + 1)
+    for (const [name, size] of cregs) c = c.creg(name, size)
+
+    // ── Pass 2: apply gates ─────────────────────────────────────────────────
+    for (const line of lines) {
+      if (/^(DECLARE|DEFGATE|DEFCIRCUIT|PRAGMA|HALT|WAIT|NOP)\b/.test(line)) continue
+
+      // MEASURE qubit reg[bit]
+      const meas = line.match(/^MEASURE\s+(\d+)\s+(\w+)\[(\d+)\]$/)
+      if (meas) { c = c.measure(parseInt(meas[1]!), meas[2]!, parseInt(meas[3]!)); continue }
+
+      // RESET [qubit?]
+      const rst = line.match(/^RESET(?:\s+(\d+))?$/)
+      if (rst) {
+        if (rst[1] !== undefined) {
+          c = c.reset(parseInt(rst[1]!))
+        } else {
+          for (let q = 0; q < c.qubits; q++) c = c.reset(q)
+        }
+        continue
+      }
+
+      // CONTROLLED gateName[(params)] ctrl tgt
+      const ctrlLine = line.match(/^CONTROLLED\s+(\w+)(?:\(([^)]*)\))?\s+(\d+)\s+(\d+)$/)
+      if (ctrlLine) {
+        const [, gName, paramStr, ctrlStr, tgtStr] = ctrlLine
+        const p = paramStr ? paramStr.split(',').map(parseAngle) : []
+        const [con, tgt] = [parseInt(ctrlStr!), parseInt(tgtStr!)]
+        switch (gName!.toUpperCase()) {
+          case 'H':     c = c.ch(con, tgt);             break
+          case 'Y':     c = c.cy(con, tgt);             break
+          case 'Z':     c = c.cz(con, tgt);             break
+          case 'RX':    c = c.crx(p[0]!, con, tgt);    break
+          case 'RY':    c = c.cry(p[0]!, con, tgt);    break
+          case 'RZ':    c = c.crz(p[0]!, con, tgt);    break
+          case 'PHASE': c = c.cu1(p[0]!, con, tgt);    break
+          default: throw new TypeError(`fromQuil: unknown CONTROLLED gate '${gName}'`)
+        }
+        continue
+      }
+
+      // DAGGER gateName qubit  (S†, T†)
+      const daggerLine = line.match(/^DAGGER\s+(\w+)\s+(\d+)$/)
+      if (daggerLine) {
+        const [, gName, qStr] = daggerLine
+        const q = parseInt(qStr!)
+        switch (gName!.toUpperCase()) {
+          case 'S': c = c.si(q); break
+          case 'T': c = c.ti(q); break
+          default: throw new TypeError(`fromQuil: unknown DAGGER gate '${gName}'`)
+        }
+        continue
+      }
+
+      // Generic: GATENAME[(params)] qubit [qubit ...]
+      const gate = line.match(/^(\w+)(?:\(([^)]*)\))?\s+([\d\s]+)$/)
+      if (gate) {
+        const [, gName, paramStr, qStr] = gate
+        const p  = paramStr ? paramStr.split(',').map(parseAngle) : []
+        const qs = qStr!.trim().split(/\s+/).map(Number)
+        const [q0, q1, q2] = qs
+        switch (gName!.toUpperCase()) {
+          case 'I':      c = c.id(q0!);                        break
+          case 'H':      c = c.h(q0!);                         break
+          case 'X':      c = c.x(q0!);                         break
+          case 'Y':      c = c.y(q0!);                         break
+          case 'Z':      c = c.z(q0!);                         break
+          case 'S':      c = c.s(q0!);                         break
+          case 'T':      c = c.t(q0!);                         break
+          case 'RX':     c = c.rx(p[0]!, q0!);                 break
+          case 'RY':     c = c.ry(p[0]!, q0!);                 break
+          case 'RZ':     c = c.rz(p[0]!, q0!);                 break
+          case 'PHASE':  c = c.u1(p[0]!, q0!);                 break
+          case 'CNOT':   c = c.cnot(q0!, q1!);                 break
+          case 'CZ':     c = c.cz(q0!, q1!);                   break
+          case 'SWAP':   c = c.swap(q0!, q1!);                  break
+          case 'ISWAP':  c = c.iswap(q0!, q1!);                break
+          case 'CPHASE': c = c.cu1(p[0]!, q0!, q1!);           break
+          case 'CCNOT':  c = c.ccx(q0!, q1!, q2!);             break
+          case 'CSWAP':  c = c.cswap(q0!, q1!, q2!);           break
+          default: throw new TypeError(`fromQuil: unknown gate '${gName}'`)
+        }
+        continue
+      }
+    }
+    return c
+  }
+
   // ── Export targets ───────────────────────────────────────────────────────
 
   /**
@@ -1709,6 +1892,111 @@ export class Circuit {
       }
     }
     return lines.join('\n')
+  }
+
+  /**
+   * Emit a `quantikz` LaTeX environment for the circuit.
+   *
+   * The output is a self-contained `\begin{quantikz}...\end{quantikz}` block
+   * using the `tikz-quantikz` package.  Paste it into any LaTeX document that
+   * loads `\usepackage{quantikz}` (and `\usepackage{amsmath}` for `\ket{}`).
+   *
+   * Gate coverage: all single-qubit gates, CNOT, SWAP, controlled family,
+   * Toffoli, Fredkin, two-qubit interaction gates, measure, reset.
+   * `if` ops are silently skipped (no standard quantikz representation).
+   *
+   * @example
+   * console.log(new Circuit(2).h(0).cnot(0, 1).toLatex())
+   * // \begin{quantikz}
+   * // \lstick{$q_{0}$} & \gate{H} & \ctrl{1} & \qw \\
+   * // \lstick{$q_{1}$} & \qw & \targ{} & \qw
+   * // \end{quantikz}
+   */
+  toLatex(): string {
+    const n = this.qubits
+    if (n === 0) return '\\begin{quantikz}\n\\end{quantikz}'
+
+    const ops = flattenOps(this.#ops).filter(op => op.kind !== 'if')
+
+    // Column assignment (same greedy algorithm as draw() / toSVG())
+    const colOf = new Array<number>(n).fill(0)
+    type PlacedOp = { op: Op; col: number }
+    const placed: PlacedOp[] = []
+    for (const op of ops) {
+      const qs = opQubits(op)
+      if (qs.length === 0) continue
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+      let col = 0
+      for (let q = minQ; q <= maxQ; q++) col = Math.max(col, colOf[q]!)
+      for (let q = minQ; q <= maxQ; q++) colOf[q] = col + 1
+      placed.push({ op, col })
+    }
+    const numCols = Math.max(0, ...colOf)
+
+    // cell[q][c] — quantikz command for each (qubit, column) slot; '' = absorbed by a spanning gate
+    const cell: string[][] = Array.from({ length: n }, () =>
+      new Array<string>(numCols).fill('\\qw')
+    )
+
+    for (const { op, col } of placed) {
+      const qs = opQubits(op)
+      const minQ = Math.min(...qs), maxQ = Math.max(...qs)
+
+      switch (op.kind) {
+        case 'single':
+          cell[op.q]![col] = `\\gate{${latexSingleLabel(op)}}`
+          break
+        case 'cnot':
+          cell[op.control]![col] = `\\ctrl{${op.target - op.control}}`
+          cell[op.target]![col]  = '\\targ{}'
+          break
+        case 'swap':
+          cell[op.a]![col] = `\\swap{${op.b - op.a}}`
+          cell[op.b]![col] = `\\swap{${op.a - op.b}}`
+          break
+        case 'controlled':
+          cell[op.control]![col] = `\\ctrl{${op.target - op.control}}`
+          cell[op.target]![col]  = `\\gate{${latexCtrlTargetLabel(op)}}`
+          break
+        case 'toffoli':
+          cell[op.c1]![col]     = `\\ctrl{${op.target - op.c1}}`
+          cell[op.c2]![col]     = `\\ctrl{${op.target - op.c2}}`
+          cell[op.target]![col] = '\\targ{}'
+          break
+        case 'cswap':
+          cell[op.control]![col] = `\\ctrl{${Math.min(op.a, op.b) - op.control}}`
+          cell[Math.min(op.a, op.b)]![col] = `\\swap{${Math.max(op.a, op.b) - Math.min(op.a, op.b)}}`
+          cell[Math.max(op.a, op.b)]![col] = `\\swap{${Math.min(op.a, op.b) - Math.max(op.a, op.b)}}`
+          break
+        case 'csrswap': {
+          const [tA, tB] = [Math.min(op.a, op.b), Math.max(op.a, op.b)]
+          const span = tB - tA + 1
+          cell[op.control]![col] = `\\ctrl{${tA - op.control}}`
+          cell[tA]![col]         = `\\gate[${span}]{\\sqrt{\\text{iSWAP}}}`
+          for (let q = tA + 1; q <= tB; q++) cell[q]![col] = ''
+          break
+        }
+        case 'two': {
+          const span = maxQ - minQ + 1
+          cell[minQ]![col] = `\\gate[${span}]{${latexTwoLabel(op)}}`
+          for (let q = minQ + 1; q <= maxQ; q++) cell[q]![col] = ''
+          break
+        }
+        case 'measure':
+          cell[op.q]![col] = '\\meter{}'
+          break
+        case 'reset':
+          cell[op.q]![col] = '\\gate{\\ket{0}}'
+          break
+      }
+    }
+
+    const rows = Array.from({ length: n }, (_, q) => {
+      const cells = cell[q]!.filter(c => c !== '').join(' & ')
+      return `\\lstick{$q_{${q}}$} & ${cells} & \\qw`
+    })
+
+    return `\\begin{quantikz}\n${rows.join(' \\\\\n')}\n\\end{quantikz}`
   }
 
   /**

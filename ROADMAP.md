@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (583 tests, ~200ms)**
+**Test suite (623 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -50,6 +50,8 @@ A living document charting the path from a correct, minimal core to a complete, 
 - `cu2(φ,λ)`: completes cu1/cu2/cu3 family; QASM round-trip, Qiskit export with params
 - `stateAsString()`: human-readable amplitude listing; handles real/imaginary/complex, omits near-zero terms
 - `defineGate(name, sub)` / `gate(name, ...qubits)` / `decompose()`: named sub-circuit gates with qubit remapping; nested composition; auto-flattened for simulation; serialization via decompose()
+- `Circuit.fromQuil(source)`: parse Quil 2.0 programs — all standard gates, CONTROLLED/DAGGER prefixes, MEASURE/RESET/DECLARE; qubit count inferred from highest index
+- `circuit.toLatex()`: `quantikz` LaTeX environment — proper `\frac{\pi}{n}` angles, `\ctrl{}`, `\targ{}`, `\swap{}`, `\gate[2]{}` for two-qubit gates, `\meter{}`, subscript qubit labels
 - `toJSON()` / `Circuit.fromJSON(json)`: lossless versioned JSON round-trip; gate matrices reconstructed from meta on load; supports all op types including measure/reset/if/subcircuit; accepts string or parsed object
 
 ---
@@ -208,7 +210,7 @@ Handles real, imaginary, and complex coefficients; omits near-zero terms; correc
 
 | Target | Method | Use case |
 |---|---|---|
-| Quil | `circuit.toQuil()` ✓ | Rigetti native format |
+| Quil | `circuit.toQuil()` ✓ / `Circuit.fromQuil()` ✓ | Rigetti native format (import + export) |
 | Amazon Braket | `circuit.toBraket()` ✓ | AWS quantum hardware |
 | CudaQ | `circuit.toCudaQ()` ✓ | NVIDIA GPU-accelerated simulation |
 | TensorFlow Quantum | `circuit.toTFQ()` ✓ | Hybrid quantum-classical ML |
