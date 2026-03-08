@@ -2,13 +2,13 @@
   <rect width="700" height="220" fill="white"/>
   <text x="350" y="20" text-anchor="middle" font-size="13" font-weight="600" fill="#222" font-family="sans-serif">Quantum Fourier Transform (QFT)</text>
   <rect x="48" y="32" width="311" height="156" fill="#f8f9fa" rx="2"/>
-  <line x1="48" y1="186.0" x2="359" y2="186.0" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="159.3" x2="359" y2="159.3" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="132.6" x2="359" y2="132.6" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="105.9" x2="359" y2="105.9" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="79.3" x2="359" y2="79.3" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="52.6" x2="359" y2="52.6" stroke="#e8e8e8" stroke-width="1"/>
-  <line x1="48" y1="25.9" x2="359" y2="25.9" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="185.6" x2="359" y2="185.6" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="158.9" x2="359" y2="158.9" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="132.2" x2="359" y2="132.2" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="105.4" x2="359" y2="105.4" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="78.7" x2="359" y2="78.7" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="52.0" x2="359" y2="52.0" stroke="#e8e8e8" stroke-width="1"/>
+  <line x1="48" y1="25.3" x2="359" y2="25.3" stroke="#e8e8e8" stroke-width="1"/>
   <line x1="48" y1="32" x2="48" y2="188" stroke="#bbb" stroke-width="1"/>
   <line x1="48" y1="188" x2="359" y2="188" stroke="#bbb" stroke-width="1"/>
   <text x="48.0" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">2</text>
@@ -21,34 +21,34 @@
   <text x="289.9" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">16</text>
   <text x="324.4" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">18</text>
   <text x="359.0" y="201" text-anchor="middle" font-size="8" fill="#999" font-family="monospace">20</text>
-  <text x="44" y="189.0" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10µs</text>
-  <text x="44" y="162.3" text-anchor="end" font-size="8" fill="#999" font-family="monospace">100µs</text>
-  <text x="44" y="135.6" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1.0ms</text>
-  <text x="44" y="108.9" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10ms</text>
-  <text x="44" y="82.3" text-anchor="end" font-size="8" fill="#999" font-family="monospace">100ms</text>
-  <text x="44" y="55.6" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1.0s</text>
-  <text x="44" y="28.9" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10.0s</text>
+  <text x="44" y="188.6" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10µs</text>
+  <text x="44" y="161.9" text-anchor="end" font-size="8" fill="#999" font-family="monospace">100µs</text>
+  <text x="44" y="135.2" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1.0ms</text>
+  <text x="44" y="108.4" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10ms</text>
+  <text x="44" y="81.7" text-anchor="end" font-size="8" fill="#999" font-family="monospace">100ms</text>
+  <text x="44" y="55.0" text-anchor="end" font-size="8" fill="#999" font-family="monospace">1.0s</text>
+  <text x="44" y="28.3" text-anchor="end" font-size="8" fill="#999" font-family="monospace">10.0s</text>
   <text transform="translate(14,110) rotate(-90)" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">time</text>
   <text x="204" y="213" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">qubits</text>
-  <path d="M48.0,172.8 L65.3,188.0 L82.6,182.5 L99.8,175.9 L117.1,167.6 L134.4,158.9 L151.7,150.4 L168.9,142.1 L186.2,133.6 L203.5,111.2 L220.8,115.9 L238.1,102.8 L255.3,93.7 L272.6,84.4 L289.9,74.1 L307.2,64.4 L324.4,53.4 L341.7,42.4 L359.0,32.0" fill="none" stroke="#4f86f7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="48.0" cy="172.8" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <path d="M48.0,173.1 L65.3,188.0 L82.6,183.3 L99.8,176.2 L117.1,168.0 L134.4,160.2 L151.7,151.1 L168.9,142.4 L186.2,132.6 L203.5,110.8 L220.8,115.6 L238.1,102.8 L255.3,93.4 L272.6,82.2 L289.9,73.4 L307.2,63.9 L324.4,52.7 L341.7,42.2 L359.0,32.0" fill="none" stroke="#4f86f7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="48.0" cy="173.1" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
   <circle cx="65.3" cy="188.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="82.6" cy="182.5" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="99.8" cy="175.9" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="117.1" cy="167.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="134.4" cy="158.9" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="151.7" cy="150.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="168.9" cy="142.1" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="186.2" cy="133.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="203.5" cy="111.2" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="220.8" cy="115.9" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="82.6" cy="183.3" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="99.8" cy="176.2" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="117.1" cy="168.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="134.4" cy="160.2" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="151.7" cy="151.1" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="168.9" cy="142.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="186.2" cy="132.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="203.5" cy="110.8" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="220.8" cy="115.6" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
   <circle cx="238.1" cy="102.8" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="255.3" cy="93.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="272.6" cy="84.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="289.9" cy="74.1" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="307.2" cy="64.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="324.4" cy="53.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
-  <circle cx="341.7" cy="42.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="255.3" cy="93.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="272.6" cy="82.2" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="289.9" cy="73.4" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="307.2" cy="63.9" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="324.4" cy="52.7" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
+  <circle cx="341.7" cy="42.2" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
   <circle cx="359.0" cy="32.0" r="2.5" fill="#4f86f7" stroke="white" stroke-width="1"/>
   <rect x="379" y="32" width="311" height="156" fill="#f8f9fa" rx="2"/>
   <line x1="379" y1="175.4" x2="690" y2="175.4" stroke="#e8e8e8" stroke-width="1"/>
