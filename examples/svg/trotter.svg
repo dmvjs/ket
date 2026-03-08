@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 992 120" width="992" height="120">
+<rect width="992" height="120" fill="#ffffff"/>
+<line x1="44" y1="44" x2="968" y2="44" stroke="#334155" stroke-width="1.5"/>
+<line x1="44" y1="84" x2="968" y2="84" stroke="#334155" stroke-width="1.5"/>
+<text x="40" y="48" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q0:</text>
+<text x="40" y="88" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q1:</text>
+<line x1="78" y1="44" x2="78" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="78" cy="44" r="5" fill="#334155"/>
+<circle cx="78" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="78" y1="74" x2="78" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="68" y1="84" x2="88" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="107" y="73" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="140.5" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">Rz(π/4)</text>
+<line x1="203" y1="44" x2="203" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="203" cy="44" r="5" fill="#334155"/>
+<circle cx="203" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="203" y1="74" x2="203" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="193" y1="84" x2="213" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="244" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="255" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<rect x="244" y="73" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="255" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="307" y1="44" x2="307" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="307" cy="44" r="5" fill="#334155"/>
+<circle cx="307" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="307" y1="74" x2="307" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="297" y1="84" x2="317" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="336" y="73" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="369.5" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">Rz(π/4)</text>
+<line x1="432" y1="44" x2="432" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="432" cy="44" r="5" fill="#334155"/>
+<circle cx="432" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="432" y1="74" x2="432" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="422" y1="84" x2="442" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="473" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="484" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<rect x="473" y="73" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="484" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="536" y1="44" x2="536" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="536" cy="44" r="5" fill="#334155"/>
+<circle cx="536" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="536" y1="74" x2="536" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="526" y1="84" x2="546" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="565" y="73" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="598.5" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">Rz(π/4)</text>
+<line x1="661" y1="44" x2="661" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="661" cy="44" r="5" fill="#334155"/>
+<circle cx="661" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="661" y1="74" x2="661" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="651" y1="84" x2="671" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="702" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="713" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<rect x="702" y="73" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="713" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="765" y1="44" x2="765" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="765" cy="44" r="5" fill="#334155"/>
+<circle cx="765" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="765" y1="74" x2="765" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="755" y1="84" x2="775" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="794" y="73" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="827.5" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">Rz(π/4)</text>
+<line x1="890" y1="44" x2="890" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="890" cy="44" r="5" fill="#334155"/>
+<circle cx="890" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="890" y1="74" x2="890" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="880" y1="84" x2="900" y2="84" stroke="#334155" stroke-width="1.5"/>
+<rect x="931" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="942" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<rect x="931" y="73" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="942" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+</svg>

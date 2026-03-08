@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="white"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#475569" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#475569" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#475569" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#475569" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|i⟩</text>
+<line x1="150" y1="150" x2="150.0" y2="40.0" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="150.0" cy="40.0" r="5" fill="#3b82f6"/>
+</svg>

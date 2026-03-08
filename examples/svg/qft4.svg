@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 826 200" width="826" height="200">
+<rect width="826" height="200" fill="#ffffff"/>
+<line x1="44" y1="44" x2="802" y2="44" stroke="#334155" stroke-width="1.5"/>
+<line x1="44" y1="84" x2="802" y2="84" stroke="#334155" stroke-width="1.5"/>
+<line x1="44" y1="124" x2="802" y2="124" stroke="#334155" stroke-width="1.5"/>
+<line x1="44" y1="164" x2="802" y2="164" stroke="#334155" stroke-width="1.5"/>
+<text x="40" y="48" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q0:</text>
+<text x="40" y="88" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q1:</text>
+<text x="40" y="128" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q2:</text>
+<text x="40" y="168" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q3:</text>
+<rect x="67" y="153" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="78" y="168" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="140.5" y1="124" x2="140.5" y2="164" stroke="#334155" stroke-width="1.5"/>
+<circle cx="140.5" cy="124" r="5" fill="#334155"/>
+<rect x="107" y="153" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="140.5" y="168" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/2)</text>
+<line x1="213.5" y1="84" x2="213.5" y2="164" stroke="#334155" stroke-width="1.5"/>
+<circle cx="213.5" cy="84" r="5" fill="#334155"/>
+<rect x="180" y="153" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="213.5" y="168" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/4)</text>
+<line x1="286.5" y1="44" x2="286.5" y2="164" stroke="#334155" stroke-width="1.5"/>
+<circle cx="286.5" cy="44" r="5" fill="#334155"/>
+<rect x="253" y="153" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="286.5" y="168" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/8)</text>
+<rect x="338" y="113" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="349" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="411.5" y1="84" x2="411.5" y2="124" stroke="#334155" stroke-width="1.5"/>
+<circle cx="411.5" cy="84" r="5" fill="#334155"/>
+<rect x="378" y="113" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="411.5" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/2)</text>
+<line x1="484.5" y1="44" x2="484.5" y2="124" stroke="#334155" stroke-width="1.5"/>
+<circle cx="484.5" cy="44" r="5" fill="#334155"/>
+<rect x="451" y="113" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="484.5" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/4)</text>
+<rect x="536" y="73" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="547" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="609.5" y1="44" x2="609.5" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="609.5" cy="44" r="5" fill="#334155"/>
+<rect x="576" y="73" width="67" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="609.5" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">U1(π/2)</text>
+<rect x="661" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="672" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="724" y1="44" x2="724" y2="164" stroke="#334155" stroke-width="1.5"/>
+<line x1="717" y1="37" x2="731" y2="51" stroke="#334155" stroke-width="2"/>
+<line x1="731" y1="37" x2="717" y2="51" stroke="#334155" stroke-width="2"/>
+<line x1="717" y1="157" x2="731" y2="171" stroke="#334155" stroke-width="2"/>
+<line x1="731" y1="157" x2="717" y2="171" stroke="#334155" stroke-width="2"/>
+<line x1="776" y1="84" x2="776" y2="124" stroke="#334155" stroke-width="1.5"/>
+<line x1="769" y1="77" x2="783" y2="91" stroke="#334155" stroke-width="2"/>
+<line x1="783" y1="77" x2="769" y2="91" stroke="#334155" stroke-width="2"/>
+<line x1="769" y1="117" x2="783" y2="131" stroke="#334155" stroke-width="2"/>
+<line x1="783" y1="117" x2="769" y2="131" stroke="#334155" stroke-width="2"/>
+</svg>

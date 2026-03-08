@@ -149,6 +149,84 @@ export function phaseEstimation(
   return appendIqft(c, precision)
 }
 
+// ── Trotterized Hamiltonian simulation ────────────────────────────────────────
+
+/**
+ * Apply exp(−i·theta·P) for a single Pauli string P to circuit c.
+ * Basis: X→H, Y→Rx(−π/2); Rz(2θ) on the last active qubit; reverse.
+ */
+function pauliEvolution(c: Circuit, n: number, ops: string, theta: number): Circuit {
+  const active: number[] = []
+  for (let q = 0; q < n; q++) {
+    if ((ops[n - 1 - q] ?? 'I') !== 'I') active.push(q)
+  }
+  if (active.length === 0) return c
+  // Forward basis rotations
+  for (const q of active) {
+    const p = ops[n - 1 - q] ?? 'I'
+    if (p === 'X') c = c.h(q)
+    else if (p === 'Y') c = c.rx(-Math.PI / 2, q)
+  }
+  // CNOT ladder to last active qubit
+  for (let i = 0; i < active.length - 1; i++) c = c.cnot(active[i]!, active[i + 1]!)
+  c = c.rz(2 * theta, active[active.length - 1]!)
+  // Reverse CNOT ladder
+  for (let i = active.length - 2; i >= 0; i--) c = c.cnot(active[i]!, active[i + 1]!)
+  // Inverse basis rotations
+  for (const q of active) {
+    const p = ops[n - 1 - q] ?? 'I'
+    if (p === 'X') c = c.h(q)
+    else if (p === 'Y') c = c.rx(Math.PI / 2, q)
+  }
+  return c
+}
+
+/**
+ * Trotterized Hamiltonian simulation: e^{−iHt} ≈ (∏_j e^{−iH_j·t/r})^r.
+ *
+ * Implements the Lie–Trotter product formula (order=1) and the
+ * symmetric Trotter–Suzuki decomposition (order=2) for a Hamiltonian
+ * expressed as a sum of Pauli strings.
+ *
+ * @param n           Number of qubits.
+ * @param hamiltonian Pauli-string Hamiltonian — same convention as {@link PauliTerm}:
+ *                    `ops[0]` acts on qubit n−1 (MSB), `ops[n−1]` on qubit 0 (LSB).
+ * @param t           Total evolution time.
+ * @param steps       Number of Trotter steps r (default 1). Error scales as O(t²/r).
+ * @param order       1 = first-order, 2 = second-order Suzuki (error O(t³/r²), default 1).
+ * @returns           Circuit approximating e^{−iHt}|ψ⟩.
+ */
+export function trotter(
+  n: number,
+  hamiltonian: PauliTerm[],
+  t: number,
+  steps = 1,
+  order: 1 | 2 = 1,
+): Circuit {
+  let c = new Circuit(n)
+  const dt = t / steps
+
+  for (let s = 0; s < steps; s++) {
+    if (order === 1) {
+      for (const { coeff, ops } of hamiltonian) {
+        if (ops.length !== n) throw new TypeError(`ops '${ops}' length must equal n (${n})`)
+        c = pauliEvolution(c, n, ops, coeff * dt)
+      }
+    } else {
+      // Second-order Suzuki: forward half-step + reverse half-step
+      for (const { coeff, ops } of hamiltonian) {
+        if (ops.length !== n) throw new TypeError(`ops '${ops}' length must equal n (${n})`)
+        c = pauliEvolution(c, n, ops, coeff * dt / 2)
+      }
+      for (let j = hamiltonian.length - 1; j >= 0; j--) {
+        const { coeff, ops } = hamiltonian[j]!
+        c = pauliEvolution(c, n, ops, coeff * dt / 2)
+      }
+    }
+  }
+  return c
+}
+
 // ── Variational Quantum Eigensolver ───────────────────────────────────────────
 
 /**

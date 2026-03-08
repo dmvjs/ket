@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 120" width="180" height="120">
+<rect width="180" height="120" fill="#ffffff"/>
+<line x1="44" y1="44" x2="156" y2="44" stroke="#334155" stroke-width="1.5"/>
+<line x1="44" y1="84" x2="156" y2="84" stroke="#334155" stroke-width="1.5"/>
+<text x="40" y="48" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q0:</text>
+<text x="40" y="88" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q1:</text>
+<rect x="67" y="33" width="22" height="22" rx="5" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+<text x="78" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">H</text>
+<line x1="130" y1="44" x2="130" y2="84" stroke="#334155" stroke-width="1.5"/>
+<circle cx="130" cy="44" r="5" fill="#334155"/>
+<circle cx="130" cy="84" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>
+<line x1="130" y1="74" x2="130" y2="94" stroke="#334155" stroke-width="1.5"/>
+<line x1="120" y1="84" x2="140" y2="84" stroke="#334155" stroke-width="1.5"/>
+</svg>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit } from './circuit.js'
-import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe } from './algorithms.js'
+import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 
@@ -5816,5 +5816,69 @@ describe('circuit.compile(device)', () => {
 
   it('compiled circuit returns a Circuit instance', () => {
     expect(new Circuit(1).x(0).compile('aria-1')).toBeInstanceOf(Circuit)
+  })
+})
+
+// ─── trotter() ────────────────────────────────────────────────────────────────
+
+describe('trotter()', () => {
+  // exp(-i·θ·Z)|0⟩ = e^{-iθ}|0⟩ (global phase only — |0⟩ is Z eigenstate)
+  it('single Z term: exp(-iθZ)|0⟩ leaves |0⟩ probability unchanged', () => {
+    const c = trotter(1, [{ coeff: 1, ops: 'Z' }], Math.PI / 6)
+    const p = c.exactProbs()
+    expect(p['0'] ?? 0).toBeCloseTo(1.0, 10)
+  })
+
+  it('single X term: exp(-iθX)|0⟩ = cos(θ)|0⟩ − i·sin(θ)|1⟩ (prob sin²θ)', () => {
+    const theta = Math.PI / 4
+    const c = trotter(1, [{ coeff: 1, ops: 'X' }], theta)
+    const p = c.exactProbs()
+    expect(p['1'] ?? 0).toBeCloseTo(Math.sin(theta) ** 2, 8)
+  })
+
+  it('identity term (all I): returns circuit with no gates, state unchanged', () => {
+    const c = trotter(1, [{ coeff: 3.5, ops: 'I' }], 1.0)
+    const p = c.exactProbs()
+    expect(p['0'] ?? 0).toBeCloseTo(1.0, 10)
+  })
+
+  it('order=2 second-order Suzuki: Z term still leaves |0⟩ unchanged (half+half = full global phase)', () => {
+    const c = trotter(1, [{ coeff: 1, ops: 'Z' }], Math.PI / 5, 1, 2)
+    const p = c.exactProbs()
+    expect(p['0'] ?? 0).toBeCloseTo(1.0, 10)
+  })
+
+  it('multi-step Z: steps=4 gives same result as steps=1 (single-term is step-exact)', () => {
+    const theta = Math.PI / 5
+    const c1 = trotter(1, [{ coeff: 1, ops: 'Z' }], theta, 1)
+    const c4 = trotter(1, [{ coeff: 1, ops: 'Z' }], theta, 4)
+    const p1 = c1.exactProbs()
+    const p4 = c4.exactProbs()
+    expect(p1['0'] ?? 0).toBeCloseTo(p4['0'] ?? 0, 8)
+    expect(p1['1'] ?? 0).toBeCloseTo(p4['1'] ?? 0, 8)
+  })
+
+  it('ZZ term on 2 qubits: |00⟩ is +1 eigenstate of ZZ, probs unchanged for any t', () => {
+    const c = trotter(2, [{ coeff: 1, ops: 'ZZ' }], Math.PI / 4)
+    const p = c.exactProbs()
+    // Only global phase — |00⟩ stays |00⟩ in probability
+    expect(p['00'] ?? 0).toBeCloseTo(1.0, 8)
+  })
+
+  it('XX+ZZ Hamiltonian, order=2 has same # of probabilities as order=1', () => {
+    const ham: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }, { coeff: 1, ops: 'XX' }]
+    const c1 = trotter(2, ham, 0.1, 2, 1)
+    const c2 = trotter(2, ham, 0.1, 2, 2)
+    const p1 = Object.keys(c1.exactProbs()).length
+    const p2 = Object.keys(c2.exactProbs()).length
+    expect(p1).toBe(p2)
+  })
+
+  it('throws if ops length mismatches n', () => {
+    expect(() => trotter(2, [{ coeff: 1, ops: 'Z' }], 1.0)).toThrow(TypeError)
+  })
+
+  it('returns a Circuit instance', () => {
+    expect(trotter(1, [{ coeff: 1, ops: 'Z' }], 1.0)).toBeInstanceOf(Circuit)
   })
 })

@@ -13,7 +13,7 @@ TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/ex
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
-- **Algorithm library built-in** — QFT, Grover's search, QPE, and VQE ship with the core.
+- **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, and Trotterized Hamiltonian simulation ship with the core.
 
 ## Install
 
@@ -263,7 +263,7 @@ circuit.dm({ noise: 'aria-1' })
 ## Algorithms
 
 ```typescript
-import { Circuit, qft, iqft, grover, phaseEstimation, vqe } from '@kirkelliott/ket'
+import { Circuit, qft, iqft, grover, phaseEstimation, vqe, trotter } from '@kirkelliott/ket'
 
 // Quantum Fourier Transform
 const qftCircuit = qft(4)
@@ -279,10 +279,18 @@ const qpe = phaseEstimation(4, tGate)
 
 // Variational Quantum Eigensolver
 const ansatz = new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1)
-const hamiltonian = [{ coeff: 0.5, paulis: [{ qubit: 0, axis: 'Z' }] }]
-const result = vqe(ansatz, hamiltonian)
-// result.energy — expectation value ⟨ψ|H|ψ⟩
+const hamiltonian = [{ coeff: 0.5, ops: 'ZI' }, { coeff: 0.5, ops: 'IZ' }]
+const energy = vqe(ansatz, hamiltonian)  // ⟨ψ|H|ψ⟩
+
+// Trotterized Hamiltonian simulation
+// e^{-iHt} ≈ (∏_j e^{-iH_j·t/r})^r
+const H = [{ coeff: 1.0, ops: 'ZZ' }, { coeff: 0.5, ops: 'XX' }]
+const evolution = trotter(2, H, Math.PI / 4, 4, 2)  // 4 steps, order 2
+// evolution is a Circuit approximating e^{-iHt}|ψ⟩
+evolution.exactProbs()  // measure the evolved state
 ```
+
+`trotter(n, hamiltonian, t, steps?, order?)` implements the Lie–Trotter product formula (`order=1`) and the symmetric Trotter–Suzuki decomposition (`order=2`). The Hamiltonian is a list of `PauliTerm` objects — same convention as `vqe`: `ops[0]` acts on qubit n−1 (MSB), `ops[n−1]` on qubit 0 (LSB). Each term is exponentiated as a CNOT-ladder circuit with basis rotations (H for X, Rx(±π/2) for Y) and an Rz phase. Error scales as O(t²/r) for order 1 and O(t³/r²) for order 2.
 
 ## Visualization
 
@@ -301,6 +309,28 @@ Gates on non-conflicting qubits share a column. Parameterized gates display thei
 ### SVG export
 
 `circuit.toSVG()` returns a self-contained SVG string with no external fonts or stylesheets. The layout matches `draw()`: same column packing, rounded gate boxes, filled control dots, circle-cross CNOT targets, and × SWAP marks. Safe to write directly to `.svg` files or inline in HTML.
+
+Bell state:
+
+![Bell circuit](examples/svg/bell.svg)
+
+4-qubit QFT:
+
+![QFT circuit](examples/svg/qft4.svg)
+
+### Bloch sphere
+
+`circuit.blochSphere(q)` returns a self-contained SVG showing the single-qubit state for qubit `q` as an arrow on the Bloch sphere. Internally uses `blochAngles(q)`, which partial-traces the statevector over all other qubits.
+
+|0⟩ state (north pole) and |+⟩ = H|0⟩ state (equator):
+
+![Bloch |0⟩](examples/svg/bloch_zero.svg) ![Bloch |+⟩](examples/svg/bloch_plus.svg)
+
+```typescript
+// Write to file
+import fs from 'fs'
+fs.writeFileSync('state.svg', circuit.blochSphere(0))
+```
 
 ### LaTeX
 
@@ -440,7 +470,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-811 tests, ~200ms. Run with:
+820 tests, ~200ms. Run with:
 
 ```bash
 npm test
