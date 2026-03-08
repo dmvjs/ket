@@ -1,6 +1,6 @@
 # ket
 
-TypeScript quantum circuit simulator. Immutable API, three backends, 13 import/export formats, zero dependencies.
+TypeScript quantum circuit simulator. Immutable API, three backends, 15 import/export formats, zero dependencies.
 
 ## Why ket
 
@@ -8,7 +8,7 @@ TypeScript quantum circuit simulator. Immutable API, three backends, 13 import/e
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Three simulation backends** — statevector, MPS/tensor network, and exact density matrix in one library.
-- **13 import/export formats** — more than any comparable JavaScript quantum library.
+- **15 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, and VQE ship with the core.
 
 ## Install
@@ -176,8 +176,8 @@ The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density 
 | IonQ JSON | ✓ | ✓ | `Circuit.fromIonQ(json)` / `circuit.toIonQ()` |
 | Quil 2.0 | ✓ | ✓ | `Circuit.fromQuil(s)` / `circuit.toQuil()` |
 | JSON (native) | ✓ | ✓ | `Circuit.fromJSON(json)` / `circuit.toJSON()` |
-| Qiskit (Python) | — | ✓ | `circuit.toQiskit()` |
-| Cirq (Python) | — | ✓ | `circuit.toCirq()` |
+| Qiskit (Python) | ✓ | ✓ | `Circuit.fromQiskit(s)` / `circuit.toQiskit()` |
+| Cirq (Python) | ✓ | ✓ | `Circuit.fromCirq(s)` / `circuit.toCirq()` |
 | Q# | — | ✓ | `circuit.toQSharp()` |
 | pyQuil | — | ✓ | `circuit.toPyQuil()` |
 | Amazon Braket | — | ✓ | `circuit.toBraket()` |

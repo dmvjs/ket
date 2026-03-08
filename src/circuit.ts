@@ -1464,6 +1464,193 @@ export class Circuit {
     return c
   }
 
+  /**
+   * Parse Qiskit Python QuantumCircuit code back into a Circuit.
+   * Accepts the output of toQiskit() — round-trips all gates supported by that method.
+   */
+  static fromQiskit(source: string): Circuit {
+    const pa = (e: string) => parseAngle(e.replace(/math\.pi/g, 'pi').trim())
+
+    const nm = source.match(/QuantumCircuit\((\d+)\)/)
+    if (!nm) throw new TypeError('fromQiskit: cannot find QuantumCircuit(N)')
+    let c = new Circuit(parseInt(nm[1]!))
+
+    const cregRe = /ClassicalRegister\((\d+),\s*['"](\w+)['"]\)/g
+    let cm: RegExpExecArray | null
+    while ((cm = cregRe.exec(source)) !== null) c = c.creg(cm[2]!, parseInt(cm[1]!))
+
+    for (const rawLine of source.split('\n')) {
+      const m = rawLine.trim().match(/^qc\.(\w+)\(([^)]*(?:\[[^\]]*\][^)]*)*)\)$/)
+      if (!m) continue
+      const [, method, argStr] = m
+      const args = argStr!.split(',').map(s => s.trim()).filter(Boolean)
+      const qi = (s: string) => parseInt(s)
+      switch (method!) {
+        case 'h':      c = c.h(qi(args[0]!));                                                             break
+        case 'x':      c = c.x(qi(args[0]!));                                                             break
+        case 'y':      c = c.y(qi(args[0]!));                                                             break
+        case 'z':      c = c.z(qi(args[0]!));                                                             break
+        case 's':      c = c.s(qi(args[0]!));                                                             break
+        case 'sdg':    c = c.si(qi(args[0]!));                                                            break
+        case 't':      c = c.t(qi(args[0]!));                                                             break
+        case 'tdg':    c = c.ti(qi(args[0]!));                                                            break
+        case 'sx':     c = c.v(qi(args[0]!));                                                             break
+        case 'sxdg':   c = c.vi(qi(args[0]!));                                                            break
+        case 'id':     c = c.id(qi(args[0]!));                                                            break
+        case 'rx':     c = c.rx(pa(args[0]!), qi(args[1]!));                                              break
+        case 'ry':     c = c.ry(pa(args[0]!), qi(args[1]!));                                              break
+        case 'rz':     c = c.rz(pa(args[0]!), qi(args[1]!));                                              break
+        case 'u1':     c = c.u1(pa(args[0]!), qi(args[1]!));                                              break
+        case 'u2':     c = c.u2(pa(args[0]!), pa(args[1]!), qi(args[2]!));                                break
+        case 'u3':     c = c.u3(pa(args[0]!), pa(args[1]!), pa(args[2]!), qi(args[3]!));                  break
+        case 'p':      c = c.p(pa(args[0]!), qi(args[1]!));                                               break
+        case 'cx':     c = c.cnot(qi(args[0]!), qi(args[1]!));                                            break
+        case 'cy':     c = c.cy(qi(args[0]!), qi(args[1]!));                                              break
+        case 'cz':     c = c.cz(qi(args[0]!), qi(args[1]!));                                              break
+        case 'ch':     c = c.ch(qi(args[0]!), qi(args[1]!));                                              break
+        case 'swap':   c = c.swap(qi(args[0]!), qi(args[1]!));                                            break
+        case 'crx':    c = c.crx(pa(args[0]!), qi(args[1]!), qi(args[2]!));                               break
+        case 'cry':    c = c.cry(pa(args[0]!), qi(args[1]!), qi(args[2]!));                               break
+        case 'crz':    c = c.crz(pa(args[0]!), qi(args[1]!), qi(args[2]!));                               break
+        case 'cu1':    c = c.cu1(pa(args[0]!), qi(args[1]!), qi(args[2]!));                               break
+        case 'cu2':    c = c.cu2(pa(args[0]!), pa(args[1]!), qi(args[2]!), qi(args[3]!));                 break
+        case 'cu3':    c = c.cu3(pa(args[0]!), pa(args[1]!), pa(args[2]!), qi(args[3]!), qi(args[4]!));   break
+        case 'rxx':    c = c.xx(pa(args[0]!), qi(args[1]!), qi(args[2]!));                                break
+        case 'ryy':    c = c.yy(pa(args[0]!), qi(args[1]!), qi(args[2]!));                                break
+        case 'rzz':    c = c.zz(pa(args[0]!), qi(args[1]!), qi(args[2]!));                                break
+        case 'iswap':  c = c.iswap(qi(args[0]!), qi(args[1]!));                                           break
+        case 'ccx':    c = c.ccx(qi(args[0]!), qi(args[1]!), qi(args[2]!));                               break
+        case 'cswap':  c = c.cswap(qi(args[0]!), qi(args[1]!), qi(args[2]!));                             break
+        case 'reset':  c = c.reset(qi(args[0]!));                                                         break
+        case 'barrier': {
+          const qs = args.filter(a => /^\d+$/.test(a)).map(Number)
+          c = qs.length ? c.barrier(...qs) : c.barrier()
+          break
+        }
+        case 'measure': {
+          const mt = args[1]!.match(/(\w+)\[(\d+)\]/)
+          if (!mt) throw new TypeError(`fromQiskit: invalid measure target '${args[1]}'`)
+          c = c.measure(qi(args[0]!), mt[1]!, parseInt(mt[2]!))
+          break
+        }
+        case 'add_register': break
+        default: throw new TypeError(`fromQiskit: unknown method 'qc.${method}'`)
+      }
+    }
+    return c
+  }
+
+  /**
+   * Parse Cirq Python circuit code back into a Circuit.
+   * Accepts the output of toCirq() — round-trips all gates supported by that method.
+   */
+  static fromCirq(source: string): Circuit {
+    const pa = (e: string) => parseAngle(e.replace(/math\.pi/g, 'pi').trim())
+
+    const nm = source.match(/LineQubit\.range\((\d+)\)/)
+    if (!nm) throw new TypeError('fromCirq: cannot find LineQubit.range(N)')
+    let c = new Circuit(parseInt(nm[1]!))
+
+    const qis = (s: string): number[] =>
+      Array.from(s.matchAll(/q\[(\d+)\]/g), m => parseInt(m[1]!))
+
+    for (const rawLine of source.split('\n')) {
+      const line = rawLine.trim().replace(/,$/, '')
+      if (!line.startsWith('cirq.') && !line.startsWith('(cirq.')) continue
+      if (line.startsWith('cirq.Circuit') || line.startsWith('cirq.LineQubit')) continue
+
+      // cirq.ZPowGate(exponent=E).controlled()(q[c], q[t])
+      const zpowCtrl = line.match(/^cirq\.ZPowGate\(exponent=([^)]+)\)\.controlled\(\)\(q\[(\d+)\],\s*q\[(\d+)\]\)$/)
+      if (zpowCtrl) {
+        const exp = parseFloat(zpowCtrl[1]!);  const ci = parseInt(zpowCtrl[2]!);  const ti = parseInt(zpowCtrl[3]!)
+        if (Math.abs(exp - 0.5)  < 1e-9) c = c.cs(ci, ti)
+        else if (Math.abs(exp - 0.25) < 1e-9) c = c.ct(ci, ti)
+        else if (Math.abs(exp + 0.5)  < 1e-9) c = c.csdg(ci, ti)
+        else if (Math.abs(exp + 0.25) < 1e-9) c = c.ctdg(ci, ti)
+        else c = c.cu1(exp * Math.PI, ci, ti)
+        continue
+      }
+
+      // cirq.ZPowGate(exponent=E)(q[i])
+      const zpow = line.match(/^cirq\.ZPowGate\(exponent=([^)]+)\)\(q\[(\d+)\]\)$/)
+      if (zpow) {
+        const exp = parseFloat(zpow[1]!);  const q = parseInt(zpow[2]!)
+        if (Math.abs(exp - 0.5)  < 1e-9) c = c.s(q)
+        else if (Math.abs(exp - 0.25) < 1e-9) c = c.t(q)
+        else if (Math.abs(exp + 0.5)  < 1e-9) c = c.si(q)
+        else if (Math.abs(exp + 0.25) < 1e-9) c = c.ti(q)
+        else c = c.u1(exp * Math.PI, q)
+        continue
+      }
+
+      // cirq.rx(rads=E).controlled()(q[c], q[t])
+      const radsCtrl = line.match(/^cirq\.(rx|ry|rz)\(rads=([^)]+)\)\.controlled\(\)\(q\[(\d+)\],\s*q\[(\d+)\]\)$/)
+      if (radsCtrl) {
+        const r = pa(radsCtrl[2]!);  const ci = parseInt(radsCtrl[3]!);  const ti = parseInt(radsCtrl[4]!)
+        if (radsCtrl[1] === 'rx') c = c.crx(r, ci, ti)
+        else if (radsCtrl[1] === 'ry') c = c.cry(r, ci, ti)
+        else c = c.crz(r, ci, ti)
+        continue
+      }
+
+      // cirq.rx(rads=E)(q[i])
+      const radsSingle = line.match(/^cirq\.(rx|ry|rz)\(rads=([^)]+)\)\(q\[(\d+)\]\)$/)
+      if (radsSingle) {
+        const r = pa(radsSingle[2]!);  const q = parseInt(radsSingle[3]!)
+        if (radsSingle[1] === 'rx') c = c.rx(r, q)
+        else if (radsSingle[1] === 'ry') c = c.ry(r, q)
+        else c = c.rz(r, q)
+        continue
+      }
+
+      // cirq.X**0.5(q[i]) or (cirq.X**-0.5)(q[i])
+      const xpow = line.match(/^\(?cirq\.X\*\*([^)(]+)\)?\(q\[(\d+)\]\)$/)
+      if (xpow) {
+        const exp = parseFloat(xpow[1]!.trim());  const q = parseInt(xpow[2]!)
+        if (Math.abs(exp - 0.5)  < 1e-9) c = c.v(q)
+        else if (Math.abs(exp + 0.5) < 1e-9) c = c.vi(q)
+        else throw new TypeError(`fromCirq: unsupported X**${exp}`)
+        continue
+      }
+
+      // cirq.GATE.controlled()(q[c], q[t])
+      const namedCtrl = line.match(/^cirq\.(\w+)\.controlled\(\)\(q\[(\d+)\],\s*q\[(\d+)\]\)$/)
+      if (namedCtrl) {
+        const ci = parseInt(namedCtrl[2]!);  const ti = parseInt(namedCtrl[3]!)
+        switch (namedCtrl[1]!) {
+          case 'Y': c = c.cy(ci, ti); break
+          case 'H': c = c.ch(ci, ti); break
+          default:  throw new TypeError(`fromCirq: unknown controlled gate '${namedCtrl[1]}'`)
+        }
+        continue
+      }
+
+      // cirq.GATE(q[i], ...)
+      const simple = line.match(/^cirq\.(\w+)\((.+)\)$/)
+      if (simple) {
+        const qs = qis(simple[2]!)
+        switch (simple[1]!) {
+          case 'I':     c = c.id(qs[0]!);                       break
+          case 'H':     c = c.h(qs[0]!);                        break
+          case 'X':     c = c.x(qs[0]!);                        break
+          case 'Y':     c = c.y(qs[0]!);                        break
+          case 'Z':     c = c.z(qs[0]!);                        break
+          case 'S':     c = c.s(qs[0]!);                        break
+          case 'T':     c = c.t(qs[0]!);                        break
+          case 'CNOT':  c = c.cnot(qs[0]!, qs[1]!);            break
+          case 'CX':    c = c.cnot(qs[0]!, qs[1]!);            break
+          case 'CZ':    c = c.cz(qs[0]!, qs[1]!);              break
+          case 'SWAP':  c = c.swap(qs[0]!, qs[1]!);            break
+          case 'CCNOT': c = c.ccx(qs[0]!, qs[1]!, qs[2]!);    break
+          case 'CSWAP': c = c.cswap(qs[0]!, qs[1]!, qs[2]!);  break
+          default:      throw new TypeError(`fromCirq: unknown gate '${simple[1]}'`)
+        }
+        continue
+      }
+    }
+    return c
+  }
+
   // ── Export targets ───────────────────────────────────────────────────────
 
   /**

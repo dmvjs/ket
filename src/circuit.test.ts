@@ -4898,3 +4898,111 @@ h q[0];
     expect(Circuit.fromQASM(src).qubits).toBe(1)
   })
 })
+
+// ─── Circuit.fromQiskit() ─────────────────────────────────────────────────────
+
+function qiskitRoundTrip(c: Circuit): Circuit { return Circuit.fromQiskit(c.toQiskit()) }
+
+describe('Circuit.fromQiskit()', () => {
+  it('round-trips Bell state', () => {
+    const orig = new Circuit(2).h(0).cnot(0, 1)
+    expect(svFidelity(orig, qiskitRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips single-qubit gates', () => {
+    const orig = new Circuit(4)
+      .h(0).x(1).y(2).z(3)
+      .s(0).si(1).t(2).ti(3)
+      .v(0).vi(1).id(2)
+      .rx(Math.PI / 3, 0).ry(Math.PI / 5, 1).rz(Math.PI / 7, 2)
+      .u1(Math.PI / 4, 0).u2(Math.PI / 4, Math.PI / 3, 1).u3(Math.PI / 4, Math.PI / 3, Math.PI / 2, 2)
+    expect(svFidelity(orig, qiskitRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips two-qubit gates', () => {
+    const orig = new Circuit(3)
+      .cnot(0, 1).cy(0, 1).cz(0, 1).ch(0, 1)
+      .swap(0, 1)
+      .crx(Math.PI / 3, 0, 1).cry(Math.PI / 3, 0, 1).crz(Math.PI / 3, 0, 1)
+      .cu1(Math.PI / 3, 0, 1)
+    expect(svFidelity(orig, qiskitRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips three-qubit gates', () => {
+    const orig = new Circuit(3).h(0).h(1).ccx(0, 1, 2)
+    expect(svFidelity(orig, qiskitRoundTrip(orig))).toBeCloseTo(1, 8)
+    const orig2 = new Circuit(3).h(0).x(1).x(2).cswap(0, 1, 2)
+    expect(svFidelity(orig2, qiskitRoundTrip(orig2))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips Ising interaction gates', () => {
+    const orig = new Circuit(2).h(0).xx(Math.PI / 3, 0, 1)
+    expect(svFidelity(orig, qiskitRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('preserves qubit count', () => {
+    const c = Circuit.fromQiskit(new Circuit(5).h(0).toQiskit())
+    expect(c.qubits).toBe(5)
+  })
+
+  it('throws on unknown method', () => {
+    const src = `from qiskit import QuantumCircuit\nqc = QuantumCircuit(1)\nqc.unknownGate(0)`
+    expect(() => Circuit.fromQiskit(src)).toThrow(TypeError)
+  })
+
+  it('throws if QuantumCircuit(N) missing', () => {
+    expect(() => Circuit.fromQiskit('qc.h(0)')).toThrow(TypeError)
+  })
+})
+
+// ─── Circuit.fromCirq() ───────────────────────────────────────────────────────
+
+function cirqRoundTrip(c: Circuit): Circuit { return Circuit.fromCirq(c.toCirq()) }
+
+describe('Circuit.fromCirq()', () => {
+  it('round-trips Bell state', () => {
+    const orig = new Circuit(2).h(0).cnot(0, 1)
+    expect(svFidelity(orig, cirqRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips single-qubit gates', () => {
+    const orig = new Circuit(4)
+      .h(0).x(1).y(2).z(3)
+      .s(0).si(1).t(2).ti(3)
+      .v(0).vi(1).id(2)
+      .rx(Math.PI / 3, 0).ry(Math.PI / 5, 1).rz(Math.PI / 7, 2)
+      .u1(Math.PI / 4, 0)
+    expect(svFidelity(orig, cirqRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips two-qubit gates', () => {
+    const orig = new Circuit(3)
+      .cnot(0, 1).cy(0, 1).cz(0, 1).ch(0, 1)
+      .swap(0, 1)
+      .crx(Math.PI / 3, 0, 1).cry(Math.PI / 3, 0, 1).crz(Math.PI / 3, 0, 1)
+      .cu1(Math.PI / 3, 0, 1)
+      .cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1)
+    expect(svFidelity(orig, cirqRoundTrip(orig))).toBeCloseTo(1, 8)
+  })
+
+  it('round-trips three-qubit gates', () => {
+    const orig = new Circuit(3).h(0).h(1).ccx(0, 1, 2)
+    expect(svFidelity(orig, cirqRoundTrip(orig))).toBeCloseTo(1, 8)
+    const orig2 = new Circuit(3).h(0).x(1).x(2).cswap(0, 1, 2)
+    expect(svFidelity(orig2, cirqRoundTrip(orig2))).toBeCloseTo(1, 8)
+  })
+
+  it('preserves qubit count', () => {
+    const c = Circuit.fromCirq(new Circuit(5).h(0).toCirq())
+    expect(c.qubits).toBe(5)
+  })
+
+  it('throws on unknown gate', () => {
+    const src = `import cirq\nq = cirq.LineQubit.range(1)\ncircuit = cirq.Circuit([\n    cirq.UNKNOWN(q[0]),\n])`
+    expect(() => Circuit.fromCirq(src)).toThrow(TypeError)
+  })
+
+  it('throws if LineQubit.range(N) missing', () => {
+    expect(() => Circuit.fromCirq('cirq.H(q[0])')).toThrow(TypeError)
+  })
+})
