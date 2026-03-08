@@ -978,8 +978,8 @@ export class Circuit {
    * Result[q] is the probability of measuring qubit q as 1, summed over all other qubits.
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
    */
-  marginals(): number[] {
-    const sv  = this.statevector()
+  marginals({ initialState }: { initialState?: string } = {}): number[] {
+    const sv  = this.statevector(initialState !== undefined ? { initialState } : {})
     const out = new Array<number>(this.qubits).fill(0)
     for (const [idx, amp] of sv) {
       const p = amp.re * amp.re + amp.im * amp.im
@@ -998,8 +998,8 @@ export class Circuit {
    * Amplitudes with magnitude² < 1e-10 are omitted.
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
    */
-  stateAsString(): string {
-    const sv  = this.statevector()
+  stateAsString({ initialState }: { initialState?: string } = {}): string {
+    const sv  = this.statevector(initialState !== undefined ? { initialState } : {})
     const eps = 1e-10
     const n   = (x: number) => parseFloat(x.toPrecision(4)).toString()
 
@@ -2787,11 +2787,12 @@ export class Circuit {
    * Keys are IonQ bitstrings (q0 rightmost). Only non-negligible amplitudes are included.
    * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
    */
-  exactProbs(): Readonly<Record<string, number>> {
+  exactProbs({ initialState }: { initialState?: string } = {}): Readonly<Record<string, number>> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('exactProbs() requires a pure circuit — no measure, reset, or if ops')
     }
-    const sv = simulatePure(this.#ops, this.qubits)
+    const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
+    const sv = simulatePure(this.#ops, this.qubits, init)
     const out: Record<string, number> = {}
     for (const [idx, p] of probabilities(sv)) {
       out[idx.toString(2).padStart(this.qubits, '0')] = p
@@ -3095,8 +3096,8 @@ export class Circuit {
    *
    * @throws TypeError when called on circuits with measure/reset/if ops.
    */
-  blochAngles(q: number): { theta: number; phi: number } {
-    const sv  = this.statevector()
+  blochAngles(q: number, { initialState }: { initialState?: string } = {}): { theta: number; phi: number } {
+    const sv  = this.statevector(initialState !== undefined ? { initialState } : {})
     const mask = 1n << BigInt(q)
 
     // Reduced density matrix elements

@@ -28,7 +28,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle is 167kb unminified / ~20kb gzipped. No external dependencies.
+The ESM bundle is 172kb unminified / ~20kb gzipped. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
