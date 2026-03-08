@@ -355,7 +355,20 @@ Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 7 run
 
 | Circuit | Backend | Qubits | Time |
 |---|---|---|---|
-| — | — | — | run `workflow_dispatch` → Benchmark to populate |
+| Random depth-4 | Statevector | 8  | 1.1ms  |
+| Random depth-4 | Statevector | 12 | 11.4ms |
+| Random depth-4 | Statevector | 16 | 387.8ms |
+| Random depth-4 | Statevector | 20 | 13.23s |
+| QFT            | Statevector | 8  | 485µs     |
+| QFT            | Statevector | 12 | 4.1ms    |
+| QFT            | Statevector | 16 | 167.6ms    |
+| QFT            | Statevector | 20 | 6.32s    |
+| GHZ            | MPS χ=2     | 20 | 5.8ms   |
+| GHZ            | MPS χ=2     | 50 | 13.4ms   |
+| GHZ            | MPS χ=2     | 100| 28.0ms  |
+| Random depth-4 | MPS χ=8     | 20 | 3.8ms |
+| Random depth-4 | MPS χ=8     | 30 | 5.3ms |
+| Random depth-4 | MPS χ=8     | 50 | 8.9ms |
 
 <!-- benchmark:end -->
 
