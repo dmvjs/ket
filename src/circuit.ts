@@ -3471,7 +3471,7 @@ export class Circuit {
    * @throws TypeError for unsupported gates or unknown device names.
    */
   compile(device: string): Circuit {
-    const KNOWN_DEVICES = new Set(['aria-1', 'forte-1', 'harmony'])
+    const KNOWN_DEVICES = new Set(Object.keys(IONQ_DEVICES))
     if (!KNOWN_DEVICES.has(device)) {
       throw new TypeError(`compile: unknown device '${device}'. Known IonQ devices: ${[...KNOWN_DEVICES].join(', ')}`)
     }
@@ -3479,7 +3479,8 @@ export class Circuit {
     const PI  = Math.PI
     let result = new Circuit(this.qubits, [], this.#cregs, this.#gates)
 
-    // Helper: compile a CNOT(a→b) → native GPI2/MS/VZ sequence (found numerically).
+    // Helper: compile a CNOT(a→b) → native GPI2/MS/VZ sequence.
+    // Derived from MS(0,0) = XX(π/4) and the standard CX decomposition via Mølmer–Sørensen:
     // CNOT(ctrl=a, tgt=b) = GPI2(π/2, a) · GPI2(π, b) · MS(0,0, a,b) · GPI2(-π/2, a) · VZ(-π/2, a)
     const compileCnot = (c: Circuit, a: number, b: number): Circuit => {
       c = c.gpi2(PI / 2,  a)   // GPI2(π/2) on control

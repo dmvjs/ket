@@ -1,218 +1,275 @@
 /**
- * CHP (Aaronson-Gottesman 2004) Clifford stabilizer simulator.
+ * CHP (Aaronson-Gottesman 2004) Clifford stabilizer simulator — bit-packed.
  *
- * Maintains a (2n+1) × n binary tableau:
+ * Maintains a (2n+1) × ⌈n/32⌉ word tableau:
  *   Rows 0..n-1:   destabilizer generators
  *   Rows n..2n-1:  stabilizer generators
  *   Row 2n:        scratch row for deterministic measurement
  *
- * Each row has x[row*n..row*n+n-1], z[row*n..row*n+n-1], and r[row].
- * Phase bit r=0 means +, r=1 means -.
+ * 32 tableau bits are packed per Int32Array element.
+ * `rowmul` phase and XOR are both O(n/32) via vectorized popcount and word XOR.
+ * Single-qubit gates are O(n) over the 2n rows; measurement is O(n²) worst-case.
+ * `?? 0` guards on `_r` reads are required by noUncheckedIndexedAccess.
  */
+
+/** Hamming weight of a 32-bit integer (Knuth Vol. 4A §7.1.3). */
+function popcount32(v: number): number {
+  let x = v | 0
+  x = x - ((x >>> 1) & 0x55555555)
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333)
+  x = (x + (x >>> 4)) & 0x0f0f0f0f
+  return Math.imul(x, 0x01010101) >>> 24
+}
+
 export class CliffordSim {
   readonly n: number
-  // Using regular number arrays internally to avoid Uint8Array undefined indexing issues
-  private readonly _x: number[]  // (2n+1)*n
-  private readonly _z: number[]  // (2n+1)*n
-  private readonly _r: number[]  // 2n+1
+  private readonly W: number       // words per row = ⌈n/32⌉
+  private readonly _x: Int32Array  // (2n+1)×W packed x-bits
+  private readonly _z: Int32Array  // (2n+1)×W packed z-bits
+  private readonly _r: number[]    // 2n+1 phase bits
 
   constructor(n: number) {
-    this.n  = n
+    this.n = n
+    this.W = (n + 31) >> 5
+    const W = this.W
     const rows = 2 * n + 1
-    this._x = new Array<number>(rows * n).fill(0)
-    this._z = new Array<number>(rows * n).fill(0)
+    this._x = new Int32Array(rows * W)
+    this._z = new Int32Array(rows * W)
     this._r = new Array<number>(rows).fill(0)
-
-    // Initial state |0...0⟩:
-    //   destabilizer i: x[i*n+i] = 1  (X_i generator)
-    //   stabilizer i:   z[(i+n)*n+i] = 1  (Z_i generator)
+    // |0…0⟩: destabilizer i → X_i, stabilizer i → Z_i.
+    // Direct write — Int32Array zero-initializes and each qubit maps to a unique slot.
     for (let i = 0; i < n; i++) {
-      this._x[i * n + i]       = 1
-      this._z[(i + n) * n + i] = 1
+      this._x[i * W + (i >> 5)]       = 1 << (i & 31)
+      this._z[(i + n) * W + (i >> 5)] = 1 << (i & 31)
     }
   }
 
   /**
-   * Phase contribution function g(x1,z1, x2,z2) used in rowmul.
-   * Returns an integer in {-1, 0, 1} representing contributions to
-   * the exponent of i (so 0 mod 4 → phase 0, 2 mod 4 → phase -1).
-   */
-  private g(x1: number, z1: number, x2: number, z2: number): number {
-    if (x1 === 0 && z1 === 0) return 0
-    if (x1 === 1 && z1 === 1) return z2 - x2          // can be -1, 0, or 1
-    if (x1 === 1 && z1 === 0) return z2 * (2 * x2 - 1)  // 0 if x2=0 else z2*(2*0-1)=−z2... fix: z2*(2x2-1)
-    // x1=0, z1=1
-    return x2 * (1 - 2 * z2)
-  }
-
-  /**
-   * Multiply row i (in place) by row h: tableau row i ← row_i · row_h.
-   * Uses the phase function g to accumulate phase correctly.
+   * Tableau row multiply: row_i ← row_i · row_h.
+   * Phase accumulated via vectorized popcount on packed Pauli word pairs (O(n/32)):
+   *   +1 contributions: Y·Z, X·Y, Z·X
+   *   -1 contributions: Y·X, X·Z, Z·Y
+   * XOR update in the same pass to avoid re-reading words.
    */
   private rowmul(i: number, h: number): void {
-    const { n, _x, _z, _r } = this
-    let sum = 2 * ((_r[h] ?? 0) + (_r[i] ?? 0))
-    for (let j = 0; j < n; j++) {
-      sum += this.g(_x[h * n + j] ?? 0, _z[h * n + j] ?? 0, _x[i * n + j] ?? 0, _z[i * n + j] ?? 0)
+    const { W, _x, _z, _r } = this
+    const iW = i * W, hW = h * W
+    let pos = 0, neg = 0
+    for (let w = 0; w < W; w++) {
+      const xh = _x[hW + w] ?? 0,  zh = _z[hW + w] ?? 0
+      const xi = _x[iW + w] ?? 0,  zi = _z[iW + w] ?? 0
+      pos += popcount32((xh & zh & ~xi & zi) | (xh & ~zh & xi & zi) | (~xh & zh & xi & ~zi))
+      neg += popcount32((xh & zh & xi & ~zi) | (xh & ~zh & ~xi & zi) | (~xh & zh & xi &  zi))
+      _x[iW + w] = xi ^ xh
+      _z[iW + w] = zi ^ zh
     }
-    // sum mod 4: if 0 → r=0, if 2 → r=1 (sum is always even)
+    const sum = 2 * ((_r[h] ?? 0) + (_r[i] ?? 0)) + pos - neg
     _r[i] = ((((sum % 4) + 4) % 4) >> 1) & 1
-    for (let j = 0; j < n; j++) {
-      _x[i * n + j] = ((_x[i * n + j] ?? 0) ^ (_x[h * n + j] ?? 0)) & 1
-      _z[i * n + j] = ((_z[i * n + j] ?? 0) ^ (_z[h * n + j] ?? 0)) & 1
-    }
   }
 
   // ── Single-qubit gates ────────────────────────────────────────────────────
 
-  /** Hadamard gate on qubit a. */
+  /** H: swap x↔z for column a, r[i] ^= x[i,a] & z[i,a]. */
   h(a: number): void {
-    const { n, _x, _z, _r } = this
+    const { n, W, _x, _z, _r } = this
+    const w = a >> 5, sh = a & 31
     for (let i = 0; i < 2 * n; i++) {
-      const xi = _x[i * n + a] ?? 0
-      const zi = _z[i * n + a] ?? 0
+      const iW = i * W
+      const xv = _x[iW + w] ?? 0, zv = _z[iW + w] ?? 0
+      const xi = (xv >>> sh) & 1,  zi = (zv >>> sh) & 1
       _r[i] = ((_r[i] ?? 0) ^ (xi & zi)) & 1
-      _x[i * n + a] = zi
-      _z[i * n + a] = xi
+      const flip = (xi ^ zi) << sh  // branchless swap: flip both iff they differ
+      _x[iW + w] = xv ^ flip
+      _z[iW + w] = zv ^ flip
     }
   }
 
-  /** Phase gate S on qubit a. */
+  /** S: z[i,a] ^= x[i,a], r[i] ^= x[i,a] & z_old[i,a]. */
   s(a: number): void {
-    const { n, _x, _z, _r } = this
+    const { n, W, _x, _z, _r } = this
+    const w = a >> 5, sh = a & 31
     for (let i = 0; i < 2 * n; i++) {
-      const xi = _x[i * n + a] ?? 0
-      const zi = _z[i * n + a] ?? 0
-      _r[i]       = ((_r[i] ?? 0) ^ (xi & zi)) & 1
-      _z[i * n + a] = (zi ^ xi) & 1
+      const iW = i * W
+      const xv = _x[iW + w] ?? 0, zv = _z[iW + w] ?? 0
+      const xi = (xv >>> sh) & 1,  zi = (zv >>> sh) & 1
+      _r[i] = ((_r[i] ?? 0) ^ (xi & zi)) & 1
+      _z[iW + w] = zv ^ (xi << sh)
     }
   }
 
-  /** S† (inverse phase gate) on qubit a — applied as S three times. */
+  /** S†: same z update as S, but r[i] ^= x[i,a] & ~z_old[i,a]. */
   si(a: number): void {
-    this.s(a); this.s(a); this.s(a)
-  }
-
-  /** Pauli X gate on qubit a. */
-  x(a: number): void {
-    // X = H S² H
-    this.h(a); this.s(a); this.s(a); this.h(a)
-  }
-
-  /**
-   * Pauli Y gate on qubit a.
-   * Y anticommutes with X (x=1,z=0: r ^= 1) and Z (x=0,z=1: r ^= 1),
-   * commutes with Y itself (x=1,z=1: r ^= 0). So: r[i] ^= x[i,a] XOR z[i,a].
-   */
-  y(a: number): void {
-    const { n, _x, _z, _r } = this
+    const { n, W, _x, _z, _r } = this
+    const w = a >> 5, sh = a & 31
     for (let i = 0; i < 2 * n; i++) {
-      const xi = _x[i * n + a] ?? 0
-      const zi = _z[i * n + a] ?? 0
+      const iW = i * W
+      const xv = _x[iW + w] ?? 0, zv = _z[iW + w] ?? 0
+      const xi = (xv >>> sh) & 1,  zi = (zv >>> sh) & 1
+      _r[i] = ((_r[i] ?? 0) ^ (xi & (zi ^ 1))) & 1
+      _z[iW + w] = zv ^ (xi << sh)
+    }
+  }
+
+  /** X: r[i] ^= z[i,a]. (X anticommutes with Z, commutes with X.) */
+  x(a: number): void {
+    const { n, W, _z, _r } = this
+    const w = a >> 5, sh = a & 31
+    for (let i = 0; i < 2 * n; i++) {
+      const iW = i * W
+      _r[i] = ((_r[i] ?? 0) ^ (((_z[iW + w] ?? 0) >>> sh) & 1)) & 1
+    }
+  }
+
+  /** Y: r[i] ^= x[i,a] ^ z[i,a]. (Y anticommutes with X and Z, commutes with Y.) */
+  y(a: number): void {
+    const { n, W, _x, _z, _r } = this
+    const w = a >> 5, sh = a & 31
+    for (let i = 0; i < 2 * n; i++) {
+      const iW = i * W
+      const xi = ((_x[iW + w] ?? 0) >>> sh) & 1
+      const zi = ((_z[iW + w] ?? 0) >>> sh) & 1
       _r[i] = ((_r[i] ?? 0) ^ (xi ^ zi)) & 1
     }
   }
 
-  /** Pauli Z gate on qubit a. Z anticommutes with X, commutes with Z. */
+  /** Z: r[i] ^= x[i,a]. (Z anticommutes with X, commutes with Z.) */
   z(a: number): void {
-    const { n, _x, _r } = this
+    const { n, W, _x, _r } = this
+    const w = a >> 5, sh = a & 31
     for (let i = 0; i < 2 * n; i++) {
-      _r[i] = ((_r[i] ?? 0) ^ (_x[i * n + a] ?? 0)) & 1
+      const iW = i * W
+      _r[i] = ((_r[i] ?? 0) ^ (((_x[iW + w] ?? 0) >>> sh) & 1)) & 1
     }
   }
 
   // ── Two-qubit gates ───────────────────────────────────────────────────────
 
-  /** CNOT gate: control qubit a, target qubit b. */
+  /** CNOT: x[i,b] ^= x[i,a], z[i,a] ^= z[i,b], r update per CHP §3. */
   cnot(a: number, b: number): void {
-    const { n, _x, _z, _r } = this
+    const { n, W, _x, _z, _r } = this
+    const wA = a >> 5, shA = a & 31
+    const wB = b >> 5, shB = b & 31
     for (let i = 0; i < 2 * n; i++) {
-      const xa = _x[i * n + a] ?? 0
-      const xb = _x[i * n + b] ?? 0
-      const za = _z[i * n + a] ?? 0
-      const zb = _z[i * n + b] ?? 0
-      _r[i]       = ((_r[i] ?? 0) ^ (xa & zb & ((xb ^ za ^ 1) & 1))) & 1
-      _x[i * n + b] = (xb ^ xa) & 1
-      _z[i * n + a] = (za ^ zb) & 1
+      const iW = i * W
+      const xvA = _x[iW + wA] ?? 0, xvB = _x[iW + wB] ?? 0
+      const zvA = _z[iW + wA] ?? 0, zvB = _z[iW + wB] ?? 0
+      const xa = (xvA >>> shA) & 1, xb = (xvB >>> shB) & 1
+      const za = (zvA >>> shA) & 1, zb = (zvB >>> shB) & 1
+      _r[i] = ((_r[i] ?? 0) ^ (xa & zb & ((xb ^ za ^ 1) & 1))) & 1
+      _x[iW + wB] = xvB ^ (xa << shB)
+      _z[iW + wA] = zvA ^ (zb << shA)
     }
   }
 
-  /** Controlled-Z gate on qubits a and b. */
+  /**
+   * CZ: z[i,a] ^= x[i,b], z[i,b] ^= x[i,a], r[i] ^= x[i,a] & x[i,b] & (z[i,a] ^ z[i,b]).
+   * Derived from H_b · CNOT(a,b) · H_b.
+   * Same-word case (a and b share a 32-bit word) handled with a single combined write.
+   */
   cz(a: number, b: number): void {
-    this.h(b); this.cnot(a, b); this.h(b)
+    const { n, W, _x, _z, _r } = this
+    const wA = a >> 5, shA = a & 31
+    const wB = b >> 5, shB = b & 31
+    if (wA === wB) {
+      for (let i = 0; i < 2 * n; i++) {
+        const iW = i * W
+        const xv = _x[iW + wA] ?? 0, zv = _z[iW + wA] ?? 0
+        const xa = (xv >>> shA) & 1, xb = (xv >>> shB) & 1
+        const za = (zv >>> shA) & 1, zb = (zv >>> shB) & 1
+        _r[i] = ((_r[i] ?? 0) ^ (xa & xb & (za ^ zb))) & 1
+        _z[iW + wA] = zv ^ (xb << shA) ^ (xa << shB)
+      }
+    } else {
+      for (let i = 0; i < 2 * n; i++) {
+        const iW = i * W
+        const xvA = _x[iW + wA] ?? 0, xvB = _x[iW + wB] ?? 0
+        const zvA = _z[iW + wA] ?? 0, zvB = _z[iW + wB] ?? 0
+        const xa = (xvA >>> shA) & 1, xb = (xvB >>> shB) & 1
+        const za = (zvA >>> shA) & 1, zb = (zvB >>> shB) & 1
+        _r[i] = ((_r[i] ?? 0) ^ (xa & xb & (za ^ zb))) & 1
+        _z[iW + wA] = zvA ^ (xb << shA)
+        _z[iW + wB] = zvB ^ (xa << shB)
+      }
+    }
   }
 
-  /** Controlled-Y gate on qubits a (control) and b (target). */
-  cy(a: number, b: number): void {
-    this.si(b); this.cnot(a, b); this.s(b)
-  }
+  /** CY: S†_b · CNOT(a,b) · S_b. */
+  cy(a: number, b: number): void { this.si(b); this.cnot(a, b); this.s(b) }
 
-  /** SWAP gate on qubits a and b. */
+  /**
+   * SWAP: swap columns a and b in _x and _z. No phase change.
+   * XOR-swap trick handles both same-word and different-word cases correctly.
+   */
   swap(a: number, b: number): void {
-    this.cnot(a, b); this.cnot(b, a); this.cnot(a, b)
+    const { n, W, _x, _z } = this
+    const wA = a >> 5, shA = a & 31
+    const wB = b >> 5, shB = b & 31
+    if (wA === wB) {
+      // Bits are in the same word: one read, one write per array
+      for (let i = 0; i < 2 * n; i++) {
+        const iW = i * W
+        const xv = _x[iW + wA] ?? 0, zv = _z[iW + wA] ?? 0
+        const xd = ((xv >>> shA) ^ (xv >>> shB)) & 1
+        const zd = ((zv >>> shA) ^ (zv >>> shB)) & 1
+        _x[iW + wA] = xv ^ ((xd << shA) | (xd << shB))
+        _z[iW + wA] = zv ^ ((zd << shA) | (zd << shB))
+      }
+    } else {
+      for (let i = 0; i < 2 * n; i++) {
+        const iW = i * W
+        const xvA = _x[iW + wA] ?? 0, xvB = _x[iW + wB] ?? 0
+        const zvA = _z[iW + wA] ?? 0, zvB = _z[iW + wB] ?? 0
+        const xd = ((xvA >>> shA) ^ (xvB >>> shB)) & 1
+        const zd = ((zvA >>> shA) ^ (zvB >>> shB)) & 1
+        _x[iW + wA] = xvA ^ (xd << shA)
+        _x[iW + wB] = xvB ^ (xd << shB)
+        _z[iW + wA] = zvA ^ (zd << shA)
+        _z[iW + wB] = zvB ^ (zd << shB)
+      }
+    }
   }
 
   // ── Measurement ───────────────────────────────────────────────────────────
 
-  /**
-   * Measure qubit a. rand is a uniform random number in [0,1) used for random outcomes.
-   * Returns 0 or 1.
-   */
+  /** Measure qubit a. rand uniform in [0,1). Returns 0 or 1. */
   measure(a: number, rand: number): number {
-    const { n, _x, _z, _r } = this
+    const { n, W, _x, _z, _r } = this
+    const aw = a >> 5, ash = a & 31
 
-    // Find p in stabilizer rows (n..2n-1) with x[p,a] = 1 → random outcome
+    // Find p ∈ [n, 2n) with x[p, a] = 1 → random outcome
     let p = -1
     for (let i = n; i < 2 * n; i++) {
-      if ((_x[i * n + a] ?? 0) === 1) { p = i; break }
+      if (((_x[i * W + aw] ?? 0) >>> ash) & 1) { p = i; break }
     }
 
     if (p !== -1) {
-      // Random measurement outcome
-      // Update all rows i (except p) where x[i,a] = 1
       for (let i = 0; i < 2 * n; i++) {
-        if (i !== p && (_x[i * n + a] ?? 0) === 1) {
-          this.rowmul(i, p)
-        }
+        if (i !== p && ((_x[i * W + aw] ?? 0) >>> ash) & 1) this.rowmul(i, p)
       }
-
-      // Copy row p to row p-n (destabilizer gets old stabilizer)
-      const destRow = p - n
-      for (let j = 0; j < n; j++) {
-        _x[destRow * n + j] = _x[p * n + j] ?? 0
-        _z[destRow * n + j] = _z[p * n + j] ?? 0
+      // Copy row p → destabilizer row p-n
+      const d = (p - n) * W, pW = p * W
+      for (let w = 0; w < W; w++) {
+        _x[d + w] = _x[pW + w] ?? 0
+        _z[d + w] = _z[pW + w] ?? 0
       }
-      _r[destRow] = _r[p] ?? 0
-
-      // Set new stabilizer row p: all zero, z[p,a]=1, phase = measurement result
-      for (let j = 0; j < n; j++) {
-        _x[p * n + j] = 0
-        _z[p * n + j] = 0
-      }
-      _z[p * n + a] = 1
+      _r[p - n] = _r[p] ?? 0
+      // Set row p to Z_a
+      _x.fill(0, pW, pW + W)
+      _z.fill(0, pW, pW + W)
+      _z[pW + aw] = 1 << ash
       _r[p] = rand < 0.5 ? 0 : 1
-
       return _r[p] ?? 0
 
     } else {
-      // Deterministic measurement: use scratch row 2n
-      const scratch = 2 * n
-      // Initialize scratch row to zero
-      for (let j = 0; j < n; j++) {
-        _x[scratch * n + j] = 0
-        _z[scratch * n + j] = 0
-      }
-      _r[scratch] = 0
-
-      // For each destabilizer row i where x[i][a] = 1, multiply scratch by
-      // the corresponding stabilizer row i+n. This propagates the Z_a component.
+      // Deterministic: use scratch row 2n
+      const sW = 2 * n * W
+      _x.fill(0, sW, sW + W)
+      _z.fill(0, sW, sW + W)
+      _r[2 * n] = 0
       for (let i = 0; i < n; i++) {
-        if ((_x[i * n + a] ?? 0) === 1) {
-          this.rowmul(scratch, i + n)
-        }
+        if (((_x[i * W + aw] ?? 0) >>> ash) & 1) this.rowmul(2 * n, i + n)
       }
-
-      return _r[scratch] ?? 0
+      return _r[2 * n] ?? 0
     }
   }
 }

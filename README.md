@@ -1,13 +1,13 @@
 # ket
 
-TypeScript quantum circuit simulator. Immutable API, three backends, 14 import/export formats, zero dependencies.
+TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/export formats, zero dependencies.
 
 ## Why ket
 
 - **Immutable by design** — every gate method returns a new `Circuit`. Safe to compose, branch, and reuse.
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
-- **Three simulation backends** — statevector, MPS/tensor network, and exact density matrix in one library.
+- **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, and VQE ship with the core.
 
@@ -61,6 +61,28 @@ const result = bell
 // result.counts → { '00': ~500, '11': ~500 }
 ```
 
+### Clifford simulation
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+
+// runClifford accepts only Clifford gates: H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP
+let ghz = new Circuit(5).h(0)
+for (let i = 0; i < 4; i++) ghz = ghz.cnot(i, i + 1)
+ghz = ghz.creg('out', 5)
+for (let i = 0; i < 5; i++) ghz = ghz.measure(i, 'out', i)
+
+const result = ghz.runClifford({ shots: 1024, seed: 42 })
+// result.probs → { '00000': ~0.5, '11111': ~0.5 }
+```
+
+Non-Clifford gates throw at runtime:
+
+```typescript
+new Circuit(2).t(0).runClifford()
+// TypeError: runClifford: gate 't' is not a Clifford gate
+```
+
 ### Noise and density matrix
 
 ```typescript
@@ -84,8 +106,9 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 | Statevector | `circuit.run()` / `circuit.statevector()` | O(2ⁿ), sparse | Exact simulation, practical up to ~20 qubits |
 | MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²) | Low-entanglement circuits, 50+ qubits |
 | Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
+| Clifford stabilizer | `circuit.runClifford({ shots })` | O(n²) | Clifford-only circuits, exact sampling |
 
-The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12.
+The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
 
 All backends accept an `initialState` option to start from an arbitrary computational basis state instead of |0...0⟩:
 
@@ -365,9 +388,11 @@ The MPS backend represents state as a chain of tensors with a configurable bond 
 
 The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse map, applying exact per-gate depolarizing channels without Monte Carlo sampling. Noiseless circuits take the fast path — zero overhead compared to the statevector backend.
 
+The Clifford stabilizer backend implements the CHP algorithm (Aaronson & Gottesman 2004) with a bit-packed binary tableau. Each row stores 32 stabilizer bits per array element; row multiplication uses vectorized popcount for phase accumulation and word-level XOR for tableau update, both O(n/32). Gate application (H, S, CNOT, etc.) is O(n) over the 2n tableau rows. Measurement is O(n²) worst-case per qubit. The gate set is exactly the Clifford group — any non-Clifford gate raises a TypeError.
+
 ## Testing
 
-717 tests, ~200ms. Run with:
+778 tests, ~200ms. Run with:
 
 ```bash
 npm test
