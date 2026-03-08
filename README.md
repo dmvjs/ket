@@ -361,20 +361,20 @@ Statevector is exact but O(2ⁿ) — time and memory grow with the number of non
 
 | Circuit | Backend | Qubits | Time |
 |---|---|---|---|
-| Random depth-4 | Statevector | 8  | 1.1ms  |
-| Random depth-4 | Statevector | 12 | 11.4ms |
-| Random depth-4 | Statevector | 16 | 387.8ms |
-| Random depth-4 | Statevector | 20 | 13.23s |
-| QFT            | Statevector | 8  | 485µs     |
-| QFT            | Statevector | 12 | 4.1ms    |
-| QFT            | Statevector | 16 | 167.6ms    |
-| QFT            | Statevector | 20 | 6.32s    |
-| GHZ            | MPS χ=2     | 20 | 5.8ms   |
-| GHZ            | MPS χ=2     | 50 | 13.4ms   |
-| GHZ            | MPS χ=2     | 100| 28.0ms  |
-| Random depth-4 | MPS χ=8     | 20 | 3.8ms |
-| Random depth-4 | MPS χ=8     | 30 | 5.3ms |
-| Random depth-4 | MPS χ=8     | 50 | 8.9ms |
+| Random depth-4 | Statevector | 8  | 1.8ms  |
+| Random depth-4 | Statevector | 12 | 11.3ms |
+| Random depth-4 | Statevector | 16 | 462.3ms |
+| Random depth-4 | Statevector | 20 | 16.88s |
+| QFT            | Statevector | 8  | 491µs     |
+| QFT            | Statevector | 12 | 4.9ms    |
+| QFT            | Statevector | 16 | 185.6ms    |
+| QFT            | Statevector | 20 | 7.52s    |
+| GHZ            | MPS χ=2     | 20 | 6.9ms   |
+| GHZ            | MPS χ=2     | 50 | 15.6ms   |
+| GHZ            | MPS χ=2     | 100| 30.2ms  |
+| Random depth-4 | MPS χ=8     | 20 | 3.9ms |
+| Random depth-4 | MPS χ=8     | 30 | 5.9ms |
+| Random depth-4 | MPS χ=8     | 50 | 9.6ms |
 
 <!-- benchmark:end -->
 
