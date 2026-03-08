@@ -1,6 +1,6 @@
 # ket
 
-TypeScript quantum circuit simulator. Immutable API, three backends, 15 import/export formats, zero dependencies.
+TypeScript quantum circuit simulator. Immutable API, three backends, 13 import/export formats, zero dependencies.
 
 ## Why ket
 
@@ -8,27 +8,27 @@ TypeScript quantum circuit simulator. Immutable API, three backends, 15 import/e
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Three simulation backends** — statevector, MPS/tensor network, and exact density matrix in one library.
-- **15 import/export formats** — more than any comparable JavaScript quantum library.
+- **13 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, and VQE ship with the core.
 
 ## Install
 
 ```bash
-npm install ket
+npm install @kirkelliott/ket
 ```
 
 Or load directly in a browser:
 
 ```html
 <script type="module">
-  import { Circuit } from 'https://unpkg.com/ket/dist/ket.js'
+  import { Circuit } from 'https://unpkg.com/@kirkelliott/ket/dist/ket.js'
 
   const bell = new Circuit(2).h(0).cnot(0, 1)
   console.log(bell.stateAsString())  // 0.7071|00⟩ + 0.7071|11⟩
 </script>
 ```
 
-The ESM bundle is 154kb unminified / ~20kb gzipped. No external dependencies.
+The ESM bundle is 167kb unminified / ~20kb gzipped. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -314,7 +314,7 @@ All operation types are preserved: gates, measure, reset, if, and named sub-circ
 
 ## Testing
 
-653 tests, ~200ms. Run with:
+695 tests, ~200ms. Run with:
 
 ```bash
 npm test

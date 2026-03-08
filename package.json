@@ -1,9 +1,9 @@
 {
-  "name": "ket",
+  "name": "@kirkelliott/ket",
   "version": "0.1.0",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, three backends, 13 import/export formats, zero dependencies.",
-  "author": "dmvjs",
+  "author": "kirkelliott",
   "license": "MIT",
   "keywords": ["quantum", "quantum-computing", "quantum-circuit", "qasm", "qiskit", "ionq", "simulation", "typescript"],
   "exports": {
