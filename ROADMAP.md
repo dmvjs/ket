@@ -10,17 +10,20 @@
 - Shots-free exact probabilities via `exactProbs()`
 
 **Gates**
-- Full single-qubit set: H, X, Y, Z, S, T, V and inverses; Rx/Ry/Rz; U1/U2/U3; R2/R4/R8; VZ; identity
-- Two-qubit: CNOT, SWAP, CX/CY/CZ/CH, CRx/CRy/CRz, CR2/CR4/CR8, CU1/CU2/CU3, CS/CT/CS†/CT†, XX/YY/ZZ/XY, iSWAP, √iSWAP
+- Full single-qubit set: H, X, Y, Z, S/sdg, T/tdg, V/srn and inverses; Rx/Ry/Rz; U1/p, U2, U3; R2/R4/R8; VZ; identity
+- Two-qubit: CNOT, SWAP, CX/CY/CZ/CH, CRx/CRy/CRz, CR2/CR4/CR8, CU1/CU2/CU3, CS/CT/CS†/CT†/C√X, XX/YY/ZZ/XY, iSWAP, √iSWAP
 - Three-qubit: Toffoli (CCX), Fredkin (CSWAP), controlled-√SWAP
 - Native IonQ gates: GPI, GPI2, MS
+- Scheduling: barrier (no-op in simulation, emitted in QASM)
+- Aliases match quantum-circuit and Qiskit naming conventions throughout
 
 **Import / Export**
-- OpenQASM 2.0: import + export
+- OpenQASM 2.0 + 3.0: import + export (2.0); `fromQASM` auto-detects version
 - IonQ JSON: import + export
 - Quil 2.0: import + export
 - Native JSON: lossless versioned round-trip (import + export)
 - Export-only: Qiskit, Cirq, Q#, pyQuil, Amazon Braket, CudaQ, TensorFlow Quantum, Quirk JSON, LaTeX (quantikz)
+- Qiskit/Cirq import: not supported (neither is quantum-circuit; future moat)
 
 **Classical control**
 - Classical registers, measurement, reset
@@ -47,11 +50,9 @@
 
 ## Coming next
 
-1. **Browser bundle** ✓ — `dist/ket.js` ESM bundle built with esbuild; `unpkg` entry in package.json; ~20kb gzipped
-2. **npm publication** — publish as `ket` under semantic versioning from 0.1.0
-3. **Examples directory** — Node.js runnable scripts, browser demos, and a Jupyter notebook
-4. **OpenQASM 3.0 import** — parse the current QASM standard in addition to 2.0
-5. **First-class IonQ hardware DX** — device-aware circuit validation against hardware gate sets; calibration data integration for realistic noise parameters
+1. **npm publication** — publish as `ket` under semantic versioning from 0.1.0
+2. **Qiskit / Cirq import** — parse Python SDK output formats directly; both ket and quantum-circuit are export-only today, so this is an open moat
+3. **First-class IonQ hardware DX** — device-aware circuit validation against hardware gate sets; calibration data integration for realistic noise parameters
 
 ---
 
