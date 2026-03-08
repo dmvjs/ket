@@ -156,25 +156,20 @@ export function phaseEstimation(
  * Basis: X→H, Y→Rx(−π/2); Rz(2θ) on the last active qubit; reverse.
  */
 function pauliEvolution(c: Circuit, n: number, ops: string, theta: number): Circuit {
-  const active: number[] = []
+  const active: [q: number, p: string][] = []
   for (let q = 0; q < n; q++) {
-    if ((ops[n - 1 - q] ?? 'I') !== 'I') active.push(q)
+    const p = ops[n - 1 - q] ?? 'I'
+    if (p !== 'I') active.push([q, p])
   }
   if (active.length === 0) return c
-  // Forward basis rotations
-  for (const q of active) {
-    const p = ops[n - 1 - q] ?? 'I'
+  for (const [q, p] of active) {
     if (p === 'X') c = c.h(q)
     else if (p === 'Y') c = c.rx(-Math.PI / 2, q)
   }
-  // CNOT ladder to last active qubit
-  for (let i = 0; i < active.length - 1; i++) c = c.cnot(active[i]!, active[i + 1]!)
-  c = c.rz(2 * theta, active[active.length - 1]!)
-  // Reverse CNOT ladder
-  for (let i = active.length - 2; i >= 0; i--) c = c.cnot(active[i]!, active[i + 1]!)
-  // Inverse basis rotations
-  for (const q of active) {
-    const p = ops[n - 1 - q] ?? 'I'
+  for (let i = 0; i < active.length - 1; i++) c = c.cnot(active[i]![0], active[i + 1]![0])
+  c = c.rz(2 * theta, active[active.length - 1]![0])
+  for (let i = active.length - 2; i >= 0; i--) c = c.cnot(active[i]![0], active[i + 1]![0])
+  for (const [q, p] of active) {
     if (p === 'X') c = c.h(q)
     else if (p === 'Y') c = c.rx(Math.PI / 2, q)
   }
@@ -203,25 +198,21 @@ export function trotter(
   steps = 1,
   order: 1 | 2 = 1,
 ): Circuit {
+  for (const { ops } of hamiltonian) {
+    if (ops.length !== n) throw new TypeError(`ops '${ops}' length must equal n (${n})`)
+  }
   let c = new Circuit(n)
   const dt = t / steps
-
-  for (let s = 0; s < steps; s++) {
-    if (order === 1) {
-      for (const { coeff, ops } of hamiltonian) {
-        if (ops.length !== n) throw new TypeError(`ops '${ops}' length must equal n (${n})`)
+  if (order === 1) {
+    for (let s = 0; s < steps; s++)
+      for (const { coeff, ops } of hamiltonian)
         c = pauliEvolution(c, n, ops, coeff * dt)
-      }
-    } else {
-      // Second-order Suzuki: forward half-step + reverse half-step
-      for (const { coeff, ops } of hamiltonian) {
-        if (ops.length !== n) throw new TypeError(`ops '${ops}' length must equal n (${n})`)
-        c = pauliEvolution(c, n, ops, coeff * dt / 2)
-      }
-      for (let j = hamiltonian.length - 1; j >= 0; j--) {
-        const { coeff, ops } = hamiltonian[j]!
-        c = pauliEvolution(c, n, ops, coeff * dt / 2)
-      }
+  } else {
+    // Second-order Suzuki: forward half-step + reverse half-step
+    const rev = hamiltonian.toReversed()
+    for (let s = 0; s < steps; s++) {
+      for (const { coeff, ops } of hamiltonian) c = pauliEvolution(c, n, ops, coeff * dt / 2)
+      for (const { coeff, ops } of rev)         c = pauliEvolution(c, n, ops, coeff * dt / 2)
     }
   }
   return c
