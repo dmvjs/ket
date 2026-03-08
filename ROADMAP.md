@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (359 tests, ~190ms)**
+**Test suite (414 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -41,83 +41,58 @@ A living document charting the path from a correct, minimal core to a complete, 
 - Export targets: Qiskit, Cirq, Q#, pyQuil — gate name mapping, angle formatting, throw-on-unsupported
 - Noise models: depolarizing (p1/p2) + SPAM (pMeas); named device profiles; zero-overhead fast path preserved
 - MPS backend: GHZ-50, BV-40, product-state-50, non-adjacent gates, statevector cross-check
+- Algorithms: QFT n=2..4, IQFT round-trip, Grover n=2/3/4, QPE (T/S gate), VQE single/multi-qubit Hamiltonians
+- `id` gate: no-op simulation, round-trip QASM, per-target export, `barrier` silently skipped in fromQASM
+- `marginals()`: per-qubit P(q=1) from statevector; tested against known states and Bell/GHZ
+- `cu2(φ,λ)`: completes cu1/cu2/cu3 family; QASM round-trip, Qiskit export with params
+- `stateAsString()`: human-readable amplitude listing; handles real/imaginary/complex, omits near-zero terms
 
 ---
 
-## Phase 1 — Gate completeness
-
-Fill out the standard gate set so any published circuit can be expressed.
+## Phase 1 — Gate completeness ✓
 
 ### 1a. Phase rotation gates ✓
 `r2` (Rz(π/2) = S), `r4` (Rz(π/4) = T), `r8` (Rz(π/8))
-Already expressible as `rz(Math.PI/N)` — add named aliases for readability and IonQ JSON compatibility.
 
 ### 1b. Parameterized unitaries ✓
 `u1(λ)`, `u2(φ, λ)`, `u3(θ, φ, λ)` — OpenQASM basis gates used by IBM circuits.
 
 ### 1c. Two-qubit interaction gates ✓
-`xx(θ)`, `yy(θ)`, `zz(θ)` — IonQ's native all-to-all interaction gates, fundamental to trapped-ion hardware.
-`iswap`, `srswap` — common in superconducting and trapped-ion literature.
-`xy(θ)` — XY interaction, used in quantum chemistry and QAOA.
+`xx(θ)`, `yy(θ)`, `zz(θ)`, `xy(θ)`, `iswap`, `srswap`
 
 ### 1d. Controlled single-qubit gates ✓
-`cx`/`cy`/`cz`/`ch` — the standard controlled family.
-`crx(θ)`, `cry(θ)`, `crz(θ)` — parameterized controlled rotations.
-`cu1`, `cu3` — controlled parameterized unitaries.
-`cs`, `ct`, `csdg`, `ctdg` — controlled phase gates.
+`cx`/`cy`/`cz`/`ch`, `crx`/`cry`/`crz`, `cu1`/`cu3`, `cs`/`ct`/`csdg`/`ctdg`, `cr2`/`cr4`/`cr8`
 
 ### 1e. Three-qubit gates ✓
-`ccx` (Toffoli) — universal for classical reversible computation.
-`cswap` (Fredkin) — controlled swap.
+`ccx` (Toffoli), `cswap` (Fredkin)
 
 ### 1f. Native IonQ gates ✓
-`gpi(φ)`, `gpi2(φ)` — IonQ's hardware-native single-qubit gates.
-`ms(φ₀, φ₁)` — Mølmer-Sørensen entangling gate, the native two-qubit operation on IonQ hardware.
-These express circuits more compactly when targeting real IonQ devices.
-
-Tests: unitarity (U†U = I), known analytic outputs (GPI(0)=X, Ramsey fringe, GPI2² = X), relationship to existing gates (MS(0,0) = XX(π/2), MS(π/2,π/2) = YY(π/2)).
+`gpi(φ)`, `gpi2(φ)`, `ms(φ₀, φ₁)`
 
 ---
 
-## Phase 2 — Measurement and classical control
-
-Today's `Distribution` is purely statistical (post-run probabilities). Real quantum programs need mid-circuit measurement.
+## Phase 2 — Measurement and classical control ✓
 
 ### 2a. Classical registers ✓
-`Circuit.creg(name, size)` — declare a classical register.
-`Circuit.measure(qubit, creg, bit)` — collapse a qubit, store result classically.
-`Circuit.reset(qubit)` — reset qubit to |0⟩ post-measurement.
+`Circuit.creg(name, size)`, `Circuit.measure(qubit, creg, bit)`, `Circuit.reset(qubit)`
 
 ### 2b. Conditional gates ✓
-`Circuit.if(creg, value, build)` — apply a gate (or sequence) only if a classical register holds a value.
-Required for teleportation, error correction, and mid-circuit feedback.
+`Circuit.if(creg, value, build)` — apply a gate sequence only if a classical register holds a value.
 
 ### 2c. Statevector inspection API ✓
-`circuit.statevector()` — return the full sparse amplitude map after execution.
-`circuit.amplitude(bitstring)` — return the complex amplitude for a specific basis state.
-`circuit.probability(bitstring)` — return |amplitude|².
-Needed for algorithms where you want exact amplitudes, not sampled counts.
+`circuit.statevector()`, `circuit.amplitude(bitstring)`, `circuit.probability(bitstring)`
 
 ---
 
-## Phase 3 — Import and export
-
-A circuit library only reaches its potential when it speaks other languages.
+## Phase 3 — Import and export ✓
 
 ### 3a. IonQ JSON (import + export) ✓
-The IonQ native circuit format (`ionq.circuit.v0`) — the format used by qsim and IonQ Cloud.
-`Circuit.fromIonQ(json)` — parse an IonQ JSON object into a `Circuit`.
-`circuit.toIonQ()` — serialize to IonQ JSON.
-This closes the loop: write a circuit in ket, run it locally, submit the exact same JSON to IonQ hardware.
+`Circuit.fromIonQ(json)`, `circuit.toIonQ()`
 
 ### 3b. OpenQASM 2.0 (import + export) ✓
-The lingua franca of quantum circuits. All major platforms accept QASM.
-`Circuit.fromQASM(string)` — parse OpenQASM 2.0.
-`circuit.toQASM()` — emit valid OpenQASM 2.0.
-Round-trip test: parse → emit → parse → compare unitary matrices.
+`Circuit.fromQASM(string)`, `circuit.toQASM()`
 
 ### 3c. Export targets ✓
-Each target is a serializer; the core simulation is unaffected.
 | Target | Method | Use case |
 |---|---|---|
 | Qiskit (Python) | `circuit.toQiskit()` | IBM Quantum, Aer simulator |
@@ -148,40 +123,85 @@ q1: ────X──
 
 ---
 
-## Phase 5 — Advanced simulation
+## Phase 5 — Advanced simulation ✓
 
 ### 5a. Noise models ✓
 Depolarizing channel and SPAM readout errors matching IonQ's published characterization methodology.
 `circuit.run({ noise: 'aria-1' | 'forte-1' | 'harmony' | NoiseParams })` — opt-in per run.
 Named device profiles: `aria-1` (p1=0.03%, p2=0.5%, pMeas=0.4%), `forte-1`, `harmony`.
-Custom `NoiseParams` for any combination of p1 / p2 / pMeas.
-Pure circuits without noise use the fast path (simulate once, sample N times) — zero overhead.
 
 ### 5b. Tensor network simulation ✓
-For circuits with bounded entanglement (Bernstein-Vazirani, QAOA with low depth, product-state preparations), a matrix-product-state simulator can handle 50+ qubits in kilobytes.
 `circuit.runMps({ shots, seed, maxBond? })` — MPS backend with configurable bond dimension χ (default 64).
-`src/mps.ts` — standalone MPS engine: `mpsInit`, `mpsApply1`, `mpsApply2` (SWAP network for non-adjacent), `mpsSample`, `qrMGS` (Modified Gram-Schmidt with implicit column pivoting).
 Memory: O(n·χ²·2) vs O(2ⁿ) — GHZ-50 and BV-40 run in milliseconds with χ=2.
 
 ### 5c. Shots-free exact probabilities ✓
-`circuit.exactProbs()` — returns `Readonly<Record<string, number>>` directly from the statevector; no sampling, no variance. Keys are IonQ bitstrings (q0 rightmost); only non-negligible amplitudes included. Throws for circuits with mid-circuit measure/reset/if.
+`circuit.exactProbs()` — returns `Readonly<Record<string, number>>` directly from the statevector; no sampling, no variance.
 
 ---
 
 ## Phase 6 — Ecosystem
 
-### 6a. Quantum algorithms library
-Standard algorithms as composable circuit builders:
-- `grover(oracle, n)` — Grover's search
-- `qft(n)` — Quantum Fourier Transform
-- `phaseEstimation(unitary, precision)` — Quantum Phase Estimation
-- `vqe(ansatz, hamiltonian)` — Variational Quantum Eigensolver primitive
+### 6a. Quantum algorithms library ✓
+- `qft(n)` / `iqft(n)` — n-qubit Quantum Fourier Transform and its inverse
+- `grover(n, oracle, iterations?)` — Grover's search; ancilla-free for n ≤ 3, Barenco staircase for n ≥ 4
+- `phaseEstimation(precision, unitary, targetQubits?)` — Quantum Phase Estimation
+- `vqe(ansatz, hamiltonian)` — Variational Quantum Eigensolver; exact expectation via Pauli-string rotations
 
 ### 6b. npm publication
 Publish as `ket` (or `@dmvjs/ket`). Semantic versioning from 0.1.0.
 
 ### 6c. Browser bundle
 `dist/ket.min.js` — UMD bundle for direct `<script>` inclusion, built with esbuild.
+
+---
+
+## Phase 7 — Gate and API parity
+
+Gaps identified against quantum-circuit (the leading JS quantum simulator), ordered by impact.
+
+### 7a. Missing gates
+
+**`id` — identity gate ✓**
+Named no-op that survives round-trips through all import/export formats. `fromQASM` also silently skips `barrier` statements.
+
+**`vz(θ)` — VirtualZ**
+A named Rz alias common in superconducting hardware native gate sets (IBM, Rigetti). Functionally identical to `rz` but carries distinct semantics for hardware compilation passes and should be preserved by name through import/export.
+
+**`cu2(φ, λ)` — controlled U2 ✓**
+Completes the `cu1`/`cu2`/`cu3` family. Appears in IBM circuit exports.
+
+**`csrswap` — controlled √SWAP**
+Completes the three-qubit gate set alongside `ccx` and `cswap`. Niche but present in quantum-circuit's reference implementation.
+
+### 7b. Per-qubit marginal probabilities ✓
+
+`circuit.marginals()` — returns `number[]` where `result[q]` is `P(qubit q = |1⟩)`, summed over all basis states. Shares the pure-circuit restriction of `statevector()`.
+
+### 7c. Reset to |1⟩
+
+`Circuit.reset(qubit)` currently only resets to |0⟩. quantum-circuit's `resetQubit(q, value)` supports resetting to either |0⟩ or |1⟩. The |1⟩ case is trivially `reset(q).x(q)` but users expect a first-class API.
+
+### 7d. Statevector pretty-print ✓
+
+`circuit.stateAsString()` — human-readable amplitude listing, e.g. `0.7071|00⟩ + 0.7071|11⟩`.
+Handles real, imaginary, and complex coefficients; omits near-zero terms; correct sign joining.
+
+### 7e. Additional export targets
+
+| Target | Method | Use case |
+|---|---|---|
+| Quil | `circuit.toQuil()` | Rigetti native format (import also) |
+| Amazon Braket | `circuit.toBraket()` | AWS quantum hardware |
+| CudaQ | `circuit.toCudaQ()` | NVIDIA GPU-accelerated simulation |
+| TensorFlow Quantum | `circuit.toTFQ()` | Hybrid quantum-classical ML |
+| Quirk JSON | `circuit.toQuirk()` | Browser-based circuit visualizer |
+
+### 7f. Named sub-circuit gates
+
+`Circuit.registerGate(name, subcircuit)` — define a reusable named gate from a `Circuit`.
+`circuit.decompose()` — inline all user-defined gates back to primitives.
+
+This is architecturally the largest gap. quantum-circuit allows circuits to be used as gates inside other circuits, which is essential for modular algorithm design (e.g., encoding a QFT as a black-box gate in QPE rather than inlining it). Would require extending the `Op` type and all serializers.
 
 ---
 

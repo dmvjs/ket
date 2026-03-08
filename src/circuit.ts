@@ -262,6 +262,8 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
   const [a, b, d] = qs
   const [p0, p1, p2] = params
   switch (name) {
+    case 'id':      return c.id(a!)
+    case 'barrier': return c           // scheduling hint — no simulation effect
     case 'h':     return c.h(a!)
     case 'x':     return c.x(a!)
     case 'y':     return c.y(a!)
@@ -286,6 +288,7 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
     case 'cry':   return c.cry(p0!, a!, b!)
     case 'crz':   return c.crz(p0!, a!, b!)
     case 'cu1':   return c.cu1(p0!, a!, b!)
+    case 'cu2':   return c.cu2(p0!, p1!, a!, b!)
     case 'cu3':   return c.cu3(p0!, p1!, p2!, a!, b!)
     case 'swap':  return c.swap(a!, b!)
     case 'ccx':   return c.ccx(a!, b!, d!)
@@ -417,6 +420,9 @@ export class Circuit {
 
   // ── IonQ single-qubit gates ──────────────────────────────────────────────
 
+  /** Identity gate — no-op on the statevector; preserved by name through import/export. */
+  id(q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Id, meta: { name: 'id' } }) }
+
   h(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.H,  meta: { name: 'h'  } }) }
   x(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.X,  meta: { name: 'x'  } }) }
   y(q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Y,  meta: { name: 'y'  } }) }
@@ -516,6 +522,11 @@ export class Circuit {
   /** CU1(λ) — controlled phase gate; CU1(π) = CZ. */
   cu1(lambda: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.U1(lambda), { name: 'cu1', params: [lambda] }) }
 
+  /** CU2(φ,λ) = CU3(π/2,φ,λ) — controlled equatorial gate. */
+  cu2(phi: number, lambda: number, control: number, target: number): Circuit {
+    return this.#ctrl(control, target, G.U2(phi, lambda), { name: 'cu2', params: [phi, lambda] })
+  }
+
   /** CU3(θ,φ,λ) — controlled general unitary; CU3(π,0,π) = CX. */
   cu3(theta: number, phi: number, lambda: number, control: number, target: number): Circuit {
     return this.#ctrl(control, target, G.U3(theta, phi, lambda), { name: 'cu3', params: [theta, phi, lambda] })
@@ -578,6 +589,63 @@ export class Circuit {
   probability(bitstring: string): number {
     const { re, im } = this.amplitude(bitstring)
     return re * re + im * im
+  }
+
+  /**
+   * Return the marginal probability P(qubit q = |1⟩) for each qubit.
+   * Result[q] is the probability of measuring qubit q as 1, summed over all other qubits.
+   * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   */
+  marginals(): number[] {
+    const sv  = this.statevector()
+    const out = new Array<number>(this.qubits).fill(0)
+    for (const [idx, amp] of sv) {
+      const p = amp.re * amp.re + amp.im * amp.im
+      for (let q = 0; q < this.qubits; q++) {
+        if ((idx >> BigInt(q)) & 1n) out[q] += p
+      }
+    }
+    return out
+  }
+
+  /**
+   * Return a human-readable representation of the statevector, e.g.:
+   *   `0.7071|00⟩ + 0.7071|11⟩`
+   *   `0.5|00⟩ + (0.5+0.5i)|01⟩ - 0.5i|10⟩`
+   *
+   * Amplitudes with magnitude² < 1e-10 are omitted.
+   * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   */
+  stateAsString(): string {
+    const sv  = this.statevector()
+    const eps = 1e-10
+    const n   = (x: number) => parseFloat(x.toPrecision(4)).toString()
+
+    const fmtAmp = ({ re, im }: Complex): string => {
+      const rz = Math.abs(re) < eps, iz = Math.abs(im) < eps
+      if (rz && iz) return '0'
+      if (iz) return n(re)
+      if (rz) return `${n(im)}i`
+      const sign = im < 0 ? '' : '+'
+      return `(${n(re)}${sign}${n(im)}i)`
+    }
+
+    const entries = [...sv.entries()]
+      .filter(([, { re, im }]) => re * re + im * im > eps * eps)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+
+    if (entries.length === 0) return '0'
+
+    const terms = entries.map(([idx, amp]) =>
+      `${fmtAmp(amp)}|${idx.toString(2).padStart(this.qubits, '0')}⟩`
+    )
+
+    let result = terms[0]!
+    for (let i = 1; i < terms.length; i++) {
+      const t = terms[i]!
+      result += t.startsWith('-') ? ` - ${t.slice(1)}` : ` + ${t}`
+    }
+    return result
   }
 
   // ── Classical registers and mid-circuit measurement ──────────────────────
@@ -685,6 +753,8 @@ export class Circuit {
         circuit.push({ gate: 'cnot', control: op.control, target: op.target })
       } else if (op.kind === 'swap') {
         circuit.push({ gate: 'swap', targets: [op.a, op.b] })
+      } else if (op.kind === 'single' && op.meta?.name === 'id') {
+        // Identity gate has no IonQ JSON representation; omit (no effect on state)
       } else if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) {
         const { name, params } = op.meta
         const g: IonQGate = { gate: name, target: op.q }
@@ -894,6 +964,7 @@ export class Circuit {
             case 'cry':  lines.push(`qc.cry(${angle()}, ${c}, ${t})`);                         break
             case 'crz':  lines.push(`qc.crz(${angle()}, ${c}, ${t})`);                         break
             case 'cu1':  lines.push(`qc.cu1(${angle()}, ${c}, ${t})`);                         break
+            case 'cu2':  lines.push(`qc.cu2(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${c}, ${t})`);                    break
             case 'cu3':  lines.push(`qc.cu3(${pyAngle(p![0]!)}, ${pyAngle(p![1]!)}, ${pyAngle(p![2]!)}, ${c}, ${t})`); break
             default:     lines.push(`qc.${n}(${c}, ${t})`)
           }
@@ -935,6 +1006,7 @@ export class Circuit {
           const { name: n, params: p } = op.meta
           const q = op.q
           switch (n) {
+            case 'id':  ops.push(gateOp('cirq.I', [q]));                         break
             case 'h':   ops.push(gateOp('cirq.H', [q]));                         break
             case 'x':   ops.push(gateOp('cirq.X', [q]));                         break
             case 'y':   ops.push(gateOp('cirq.Y', [q]));                         break
@@ -1039,6 +1111,7 @@ export class Circuit {
           const q = op.q
           const ang = () => qsharpAngle(p![0]!)
           switch (n) {
+            case 'id':  body.push(`        I(q[${q}]);`);                                   break
             case 'h':   body.push(`        H(q[${q}]);`);                                   break
             case 'x':   body.push(`        X(q[${q}]);`);                                   break
             case 'y':   body.push(`        Y(q[${q}]);`);                                   break
@@ -1134,6 +1207,7 @@ export class Circuit {
           const q = op.q
           const ang = (i = 0) => pyAngle(p![i]!)
           switch (n) {
+            case 'id':  used.add('I');   body.push(`p += I(${q})`);              break
             case 'h':   used.add('H');   body.push(`p += H(${q})`);              break
             case 'x':   used.add('X');   body.push(`p += X(${q})`);              break
             case 'y':   used.add('Y');   body.push(`p += Y(${q})`);              break

@@ -10,6 +10,7 @@ import { Gate2x2, Gate4x4 } from './statevector.js'
 
 const sq2 = 1 / Math.sqrt(2) // 1/√2
 
+export const Id: Gate2x2 = [[ONE,  ZERO],        [ZERO,   ONE]]   // identity
 export const H:  Gate2x2 = [[c(sq2), c(sq2)],  [c(sq2), c(-sq2)]]
 export const X:  Gate2x2 = [[ZERO, ONE],        [ONE,    ZERO]]
 export const Y:  Gate2x2 = [[ZERO, c(0,-1)],    [c(0,1), ZERO]]
