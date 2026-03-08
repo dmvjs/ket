@@ -5,7 +5,24 @@
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, three backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
   "license": "MIT",
-  "keywords": ["quantum", "quantum-computing", "quantum-circuit", "qasm", "qiskit", "ionq", "simulation", "typescript"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dmvjs/ket.git"
+  },
+  "homepage": "https://github.com/dmvjs/ket#readme",
+  "bugs": {
+    "url": "https://github.com/dmvjs/ket/issues"
+  },
+  "keywords": [
+    "quantum",
+    "quantum-computing",
+    "quantum-circuit",
+    "qasm",
+    "qiskit",
+    "ionq",
+    "simulation",
+    "typescript"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,14 +33,19 @@
   "types": "dist/index.d.ts",
   "unpkg": "dist/ket.js",
   "module": "dist/ket.js",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js",
     "test": "vitest run",
     "dev": "vitest"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
+    "esbuild": "^0.21.5",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   }
