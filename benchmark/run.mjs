@@ -41,8 +41,8 @@ function ghz(n) {
 
 const results = {}
 
-// Statevector: random depth-4 circuits
-for (const n of [8, 12, 16, 20, 24]) {
+// Statevector: random depth-4 circuits (statevector caps out ~20q; 24q takes minutes)
+for (const n of [8, 12, 16, 20]) {
   const c = randomCircuit(n, 4)
   results[`sv_random_${n}q`] = bench(() => c.statevector())
 }

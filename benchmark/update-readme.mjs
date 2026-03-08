@@ -25,7 +25,6 @@ process.stdin.on('end', () => {
     `| Random depth-4 | Statevector | 12 | ${fmt(r.sv_random_12q)} |`,
     `| Random depth-4 | Statevector | 16 | ${fmt(r.sv_random_16q)} |`,
     `| Random depth-4 | Statevector | 20 | ${fmt(r.sv_random_20q)} |`,
-    `| Random depth-4 | Statevector | 24 | ${fmt(r.sv_random_24q)} |`,
     `| QFT            | Statevector | 8  | ${fmt(r.sv_qft_8q)}     |`,
     `| QFT            | Statevector | 12 | ${fmt(r.sv_qft_12q)}    |`,
     `| QFT            | Statevector | 16 | ${fmt(r.sv_qft_16q)}    |`,
