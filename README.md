@@ -298,9 +298,9 @@ circuit.exactProbs()
 
 `qaoa(n, edges, gamma, beta)` builds the QAOA circuit (Farhi et al. 2014) for the Max-Cut problem. Each layer applies a cost unitary (ZZ rotation per edge) and a mixer unitary (Rx per qubit). `maxCutHamiltonian(n, edges)` returns the corresponding Pauli-string Hamiltonian for `vqe` to evaluate the expected cut value exactly.
 
-QAOA p=1 circuit for a 4-cycle:
+QAOA p=1 on a 4-cycle — the two optimal bipartitions tower over all 16 possible outcomes:
 
-![QAOA circuit](examples/svg/qaoa.svg)
+![QAOA Max-Cut result](examples/svg/maxcut.svg)
 
 ## Visualization
 
