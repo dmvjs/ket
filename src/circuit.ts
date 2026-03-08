@@ -176,12 +176,28 @@ export interface NoiseParams {
   pMeas?: number
 }
 
-/** Published IonQ device noise characteristics (conservative, from public benchmarks). */
-const DEVICE_NOISE: Readonly<Record<string, NoiseParams>> = {
-  'aria-1':  { p1: 0.0003,  p2: 0.005,  pMeas: 0.004  },
-  'forte-1': { p1: 0.0001,  p2: 0.002,  pMeas: 0.002  },
-  'harmony': { p1: 0.001,   p2: 0.015,  pMeas: 0.01   },
+/** Per-device specs: qubit capacity, hardware-native gate set, and published noise figures. */
+export interface IonQDeviceInfo {
+  /** Maximum number of qubits the device supports. */
+  readonly qubits:      number
+  /** Gates that run directly on hardware without compiler translation. */
+  readonly nativeGates: readonly string[]
+  /** Published depolarizing + readout noise parameters (conservative estimates). */
+  readonly noise:       Readonly<NoiseParams>
 }
+
+/**
+ * Published IonQ device specifications.
+ * Keys match the strings accepted by `run({ noise })`, `dm({ noise })`, and `checkDevice()`.
+ */
+export const IONQ_DEVICES: Readonly<Record<string, IonQDeviceInfo>> = {
+  'aria-1':  { qubits: 25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],        noise: { p1: 0.0003, p2: 0.005,  pMeas: 0.004 } },
+  'forte-1': { qubits: 36, nativeGates: ['gpi', 'gpi2', 'ms', 'vz', 'zz'],  noise: { p1: 0.0001, p2: 0.002,  pMeas: 0.002 } },
+  'harmony': { qubits: 11, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],         noise: { p1: 0.001,  p2: 0.015,  pMeas: 0.01  } },
+}
+
+const DEVICE_NOISE: Readonly<Record<string, NoiseParams>> =
+  Object.fromEntries(Object.entries(IONQ_DEVICES).map(([k, v]) => [k, v.noise]))
 
 // 15 non-identity two-qubit Paulis for depolarizing channel: {I,X,Y,Z}⊗{I,X,Y,Z} \ {II}
 const TWO_PAULI: readonly (readonly [Gate2x2 | null, Gate2x2 | null])[] = [
@@ -1130,6 +1146,49 @@ export class Circuit {
    */
   decompose(): Circuit {
     return new Circuit(this.qubits, flattenOps(this.#ops), this.#cregs, this.#gates)
+  }
+
+  // ── IonQ device targeting ────────────────────────────────────────────────
+
+  /**
+   * Return the published specs for a named IonQ device.
+   * Throws if the device name is not recognised.
+   */
+  static ionqDevice(name: string): IonQDeviceInfo {
+    const info = IONQ_DEVICES[name]
+    if (!info) throw new TypeError(`Unknown IonQ device '${name}'. Known: ${Object.keys(IONQ_DEVICES).join(', ')}`)
+    return info
+  }
+
+  /**
+   * Validate that this circuit can be submitted to the named IonQ device.
+   * Throws a `TypeError` listing every issue found:
+   *   - qubit count exceeds device capacity
+   *   - gates that have no IonQ JSON representation (use `decompose()` or replace them)
+   *
+   * Call this before `toIonQ()` to get a complete error report rather than a
+   * first-failure throw.
+   */
+  checkDevice(name: string): void {
+    const info = Circuit.ionqDevice(name)
+    const issues: string[] = []
+
+    if (this.qubits > info.qubits)
+      issues.push(`circuit uses ${this.qubits} qubits; ${name} supports at most ${info.qubits}`)
+
+    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','t','ti','v','vi','rx','ry','rz','r2','r4','r8','gpi','gpi2','vz','id'])
+    const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
+    const seen = new Set<string>()
+
+    for (const op of flattenOps(this.#ops)) {
+      if (op.kind === 'cnot' || op.kind === 'swap' || op.kind === 'barrier') continue
+      if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) continue
+      if (op.kind === 'two'    && op.meta && IONQ_TWO.has(op.meta.name))    continue
+      const label = (op as { meta?: GateMeta }).meta?.name ?? op.kind
+      if (!seen.has(label)) { seen.add(label); issues.push(`gate '${label}' is not supported on ${name}`) }
+    }
+
+    if (issues.length) throw new TypeError(`Circuit is not compatible with ${name}:\n  - ${issues.join('\n  - ')}`)
   }
 
   // ── IonQ JSON import / export ────────────────────────────────────────────

@@ -28,7 +28,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle is 172kb unminified / ~20kb gzipped. No external dependencies.
+The ESM bundle is 174kb unminified / ~20kb gzipped. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -177,6 +177,39 @@ circuit.statevector({ initialState: '110' })
 | GPI2 | `gpi2(φ, q)` | Half-angle GPI |
 | MS | `ms(φ₀, φ₁, q0, q1)` | Mølmer-Sørensen entangling gate |
 
+## IonQ device targeting
+
+ket models IonQ hardware devices with qubit capacity, native gate sets, and published noise figures in one place.
+
+```typescript
+import { IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
+
+// Query device specs
+const aria = IONQ_DEVICES['aria-1']
+// { qubits: 25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'], noise: { p1, p2, pMeas } }
+
+// Validate a circuit before submitting
+const circuit = new Circuit(2).h(0).cnot(0, 1)
+circuit.checkDevice('aria-1')   // passes — h and cnot are in the IonQ abstract gate set
+circuit.toIonQ()                // safe to call
+
+// checkDevice throws with all issues at once
+new Circuit(30).cu1(Math.PI / 4, 0, 1).checkDevice('harmony')
+// TypeError: Circuit is not compatible with harmony:
+//   - circuit uses 30 qubits; harmony supports at most 11
+//   - gate 'cu1' is not supported on harmony
+
+// Run simulation with device noise
+circuit.run({ shots: 1000, noise: 'forte-1' })
+circuit.dm({ noise: 'aria-1' })
+```
+
+| Device | Qubits | Native gates | p1 (1Q) | p2 (2Q) | pMeas |
+|---|---|---|---|---|---|
+| `aria-1` | 25 | GPI, GPI2, MS, VZ | 0.03% | 0.50% | 0.40% |
+| `forte-1` | 36 | GPI, GPI2, MS, VZ, ZZ | 0.01% | 0.20% | 0.20% |
+| `harmony` | 11 | GPI, GPI2, MS, VZ | 0.10% | 1.50% | 1.00% |
+
 ## Import / Export
 
 | Format | Import | Export | Method(s) |
@@ -299,15 +332,7 @@ circuit.run({ shots: 1000, noise: 'harmony' })
 circuit.run({ noise: { p1: 0.001, p2: 0.005, pMeas: 0.004 } })
 ```
 
-Named profiles:
-
-| Profile | p1 (1Q) | p2 (2Q) | pMeas |
-|---|---|---|---|
-| `aria-1` | 0.03% | 0.50% | 0.40% |
-| `forte-1` | 0.01% | 0.20% | 0.20% |
-| `harmony` | 0.10% | 1.50% | 1.00% |
-
-The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
+Named profiles match the device table in [IonQ device targeting](#ionq-device-targeting). The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
 
 ## Serialization
 
@@ -344,7 +369,7 @@ The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse 
 
 ## Testing
 
-695 tests, ~200ms. Run with:
+717 tests, ~200ms. Run with:
 
 ```bash
 npm test

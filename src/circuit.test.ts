@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Circuit } from './circuit.js'
+import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit } from './circuit.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
@@ -5105,5 +5105,72 @@ describe('Circuit.fromQobj()', () => {
 
   it('throws when experiments array is empty', () => {
     expect(() => Circuit.fromQobj({ experiments: [] })).toThrow(TypeError)
+  })
+})
+
+// ─── IonQ device targeting ────────────────────────────────────────────────────
+
+describe('IONQ_DEVICES', () => {
+  it('exposes aria-1, forte-1, harmony', () => {
+    expect(Object.keys(IONQ_DEVICES)).toEqual(expect.arrayContaining(['aria-1', 'forte-1', 'harmony']))
+  })
+
+  it('aria-1 has correct qubit count and noise', () => {
+    expect(IONQ_DEVICES['aria-1']!.qubits).toBe(25)
+    expect(IONQ_DEVICES['aria-1']!.noise.p2).toBeCloseTo(0.005)
+  })
+
+  it('forte-1 includes zz in native gates', () => {
+    expect(IONQ_DEVICES['forte-1']!.nativeGates).toContain('zz')
+  })
+})
+
+describe('Circuit.ionqDevice()', () => {
+  it('returns device info for known device', () => {
+    const info = Circuit.ionqDevice('aria-1')
+    expect(info.qubits).toBe(25)
+    expect(info.nativeGates).toContain('gpi')
+  })
+
+  it('throws for unknown device', () => {
+    expect(() => Circuit.ionqDevice('fake-9')).toThrow(TypeError)
+  })
+})
+
+describe('circuit.checkDevice()', () => {
+  it('passes for a compatible circuit', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1).gpi(0, 0).ms(0, 0, 0, 1)
+    expect(() => c.checkDevice('aria-1')).not.toThrow()
+  })
+
+  it('throws when qubit count exceeds device', () => {
+    const c = new Circuit(30).h(0)
+    expect(() => c.checkDevice('harmony')).toThrow(/11/)
+  })
+
+  it('throws listing unsupported gates', () => {
+    const c = new Circuit(2).cu1(Math.PI / 4, 0, 1)
+    expect(() => c.checkDevice('aria-1')).toThrow(/cu1/)
+  })
+
+  it('deduplicates repeated unsupported gates in error', () => {
+    const c = new Circuit(3).cu1(Math.PI / 4, 0, 1).cu1(Math.PI / 4, 1, 2)
+    try { c.checkDevice('aria-1') } catch (e) {
+      expect((e as Error).message.match(/cu1/g)?.length).toBe(1)
+    }
+  })
+
+  it('throws for unknown device name', () => {
+    expect(() => new Circuit(1).h(0).checkDevice('fake-9')).toThrow(TypeError)
+  })
+
+  it('reports multiple issues at once', () => {
+    const c = new Circuit(30).cu1(Math.PI / 4, 0, 1).iswap(2, 3)
+    try { c.checkDevice('harmony') } catch (e) {
+      const msg = (e as Error).message
+      expect(msg).toMatch(/30/)    // qubit count
+      expect(msg).toMatch(/cu1/)   // unsupported gate
+      expect(msg).toMatch(/iswap/) // unsupported gate
+    }
   })
 })
