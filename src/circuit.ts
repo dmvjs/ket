@@ -1337,6 +1337,102 @@ export class Circuit {
     return lines.join('\n')
   }
 
+  /**
+   * Emit Python code for Amazon Braket's `Circuit` API.
+   *
+   * Gate coverage: full single-qubit set, rx/ry/rz, phaseshift (u1), xx/yy/zz/xy,
+   * cnot/cy/cz/swap/iswap, ccnot/cswap, controlled family via control= kwarg.
+   * Throws for gates with no Braket representation: gpi/gpi2/ms/srswap/u2/u3/cu2/cu3/measure/reset/if.
+   */
+  toBraket(): string {
+    const lines: string[] = []
+    const a = (r: number) => pyAngle(r)
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    lines.push(`circ.cnot(${op.control}, ${op.target})`);           break
+        case 'swap':    lines.push(`circ.swap(${op.a}, ${op.b})`);                      break
+        case 'toffoli': lines.push(`circ.ccnot(${op.c1}, ${op.c2}, ${op.target})`);    break
+        case 'cswap':   lines.push(`circ.cswap(${op.control}, ${op.a}, ${op.b})`);     break
+        case 'measure': throw new TypeError('measure ops cannot be serialized to Braket via toBraket()')
+        case 'reset':   throw new TypeError('reset ops cannot be serialized to Braket via toBraket()')
+        case 'if':      throw new TypeError('if ops cannot be serialized to Braket')
+        case 'two': {
+          const n = op.meta?.name
+          const [qa, qb] = [op.a, op.b]
+          if (n === 'xx')    { lines.push(`circ.xx(${qa}, ${qb}, ${a(op.meta!.params![0]!)})`);    break }
+          if (n === 'yy')    { lines.push(`circ.yy(${qa}, ${qb}, ${a(op.meta!.params![0]!)})`);    break }
+          if (n === 'zz')    { lines.push(`circ.zz(${qa}, ${qb}, ${a(op.meta!.params![0]!)})`);    break }
+          if (n === 'xy')    { lines.push(`circ.xy(${qa}, ${qb}, ${a(op.meta!.params![0]!)})`);    break }
+          if (n === 'iswap') { lines.push(`circ.iswap(${qa}, ${qb})`);                             break }
+          throw new TypeError(`Gate '${n ?? 'two'}' has no Braket representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          switch (n) {
+            case 'id':  lines.push(`circ.i(${q})`);                             break
+            case 'h':   lines.push(`circ.h(${q})`);                             break
+            case 'x':   lines.push(`circ.x(${q})`);                             break
+            case 'y':   lines.push(`circ.y(${q})`);                             break
+            case 'z':   lines.push(`circ.z(${q})`);                             break
+            case 's':   lines.push(`circ.s(${q})`);                             break
+            case 'si':  lines.push(`circ.si(${q})`);                            break
+            case 't':   lines.push(`circ.t(${q})`);                             break
+            case 'ti':  lines.push(`circ.ti(${q})`);                            break
+            case 'v':   lines.push(`circ.v(${q})`);                             break
+            case 'vi':  lines.push(`circ.vi(${q})`);                            break
+            case 'r2':  lines.push(`circ.rz(${q}, math.pi/2)`);                 break
+            case 'r4':  lines.push(`circ.rz(${q}, math.pi/4)`);                 break
+            case 'r8':  lines.push(`circ.rz(${q}, math.pi/8)`);                 break
+            case 'rx':  lines.push(`circ.rx(${q}, ${a(p![0]!)})`);              break
+            case 'ry':  lines.push(`circ.ry(${q}, ${a(p![0]!)})`);              break
+            case 'rz':  lines.push(`circ.rz(${q}, ${a(p![0]!)})`);              break
+            case 'u1':  lines.push(`circ.phaseshift(${q}, ${a(p![0]!)})`);      break
+            case 'gpi': case 'gpi2':
+              throw new TypeError(`Gate '${n}' has no Braket representation`)
+            default:
+              throw new TypeError(`Gate '${n}' has no Braket representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          switch (n) {
+            case 'cy':   lines.push(`circ.cy(${c}, ${t})`);                                          break
+            case 'cz':   lines.push(`circ.cz(${c}, ${t})`);                                          break
+            case 'ch':   lines.push(`circ.h(${t}, control=${c})`);                                   break
+            case 'crx':  lines.push(`circ.rx(${t}, ${a(p![0]!)}, control=${c})`);                    break
+            case 'cry':  lines.push(`circ.ry(${t}, ${a(p![0]!)}, control=${c})`);                    break
+            case 'crz':  lines.push(`circ.rz(${t}, ${a(p![0]!)}, control=${c})`);                    break
+            case 'cr2':  lines.push(`circ.rz(${t}, math.pi/2, control=${c})`);                       break
+            case 'cr4':  lines.push(`circ.rz(${t}, math.pi/4, control=${c})`);                       break
+            case 'cr8':  lines.push(`circ.rz(${t}, math.pi/8, control=${c})`);                       break
+            case 'cu1':  lines.push(`circ.phaseshift(${t}, ${a(p![0]!)}, control=${c})`);            break
+            case 'cs':   lines.push(`circ.phaseshift(${t}, math.pi/2, control=${c})`);               break
+            case 'ct':   lines.push(`circ.phaseshift(${t}, math.pi/4, control=${c})`);               break
+            case 'csdg': lines.push(`circ.phaseshift(${t}, -math.pi/2, control=${c})`);              break
+            case 'ctdg': lines.push(`circ.phaseshift(${t}, -math.pi/4, control=${c})`);              break
+            default:
+              throw new TypeError(`Gate '${n}' has no Braket representation`)
+          }
+          break
+        }
+      }
+    }
+
+    return [
+      'import math',
+      'from braket.circuits import Circuit',
+      '',
+      'circ = Circuit()',
+      ...lines,
+    ].join('\n')
+  }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */

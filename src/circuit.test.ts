@@ -2542,6 +2542,137 @@ describe('toQuil()', () => {
   })
 })
 
+// ─── toBraket ─────────────────────────────────────────────────────────────────
+
+describe('toBraket()', () => {
+  it('emits valid header', () => {
+    const src = new Circuit(2).h(0).toBraket()
+    expect(src).toContain('from braket.circuits import Circuit')
+    expect(src).toContain('circ = Circuit()')
+    expect(src).toContain('import math')
+  })
+
+  it('H + CNOT', () => {
+    const src = new Circuit(2).h(0).cnot(0, 1).toBraket()
+    expect(src).toContain('circ.h(0)')
+    expect(src).toContain('circ.cnot(0, 1)')
+  })
+
+  it('full single-qubit set', () => {
+    const src = new Circuit(1).x(0).y(0).z(0).s(0).si(0).t(0).ti(0).v(0).vi(0).id(0).toBraket()
+    expect(src).toContain('circ.x(0)')
+    expect(src).toContain('circ.y(0)')
+    expect(src).toContain('circ.z(0)')
+    expect(src).toContain('circ.s(0)')
+    expect(src).toContain('circ.si(0)')
+    expect(src).toContain('circ.t(0)')
+    expect(src).toContain('circ.ti(0)')
+    expect(src).toContain('circ.v(0)')
+    expect(src).toContain('circ.vi(0)')
+    expect(src).toContain('circ.i(0)')
+  })
+
+  it('rx/ry/rz with math.pi angle (qubit first)', () => {
+    const src = new Circuit(1).rx(Math.PI / 2, 0).ry(Math.PI / 4, 0).rz(Math.PI / 3, 0).toBraket()
+    expect(src).toContain('circ.rx(0, math.pi/2)')
+    expect(src).toContain('circ.ry(0, math.pi/4)')
+    expect(src).toContain('circ.rz(0, math.pi/3)')
+  })
+
+  it('r2/r4/r8 → rz with pi fractions', () => {
+    const src = new Circuit(1).r2(0).r4(0).r8(0).toBraket()
+    expect(src).toContain('circ.rz(0, math.pi/2)')
+    expect(src).toContain('circ.rz(0, math.pi/4)')
+    expect(src).toContain('circ.rz(0, math.pi/8)')
+  })
+
+  it('u1 → phaseshift', () => {
+    expect(new Circuit(1).u1(Math.PI / 3, 0).toBraket()).toContain('circ.phaseshift(0, math.pi/3)')
+  })
+
+  it('swap → circ.swap, iswap → circ.iswap', () => {
+    const src = new Circuit(2).swap(0, 1).iswap(0, 1).toBraket()
+    expect(src).toContain('circ.swap(0, 1)')
+    expect(src).toContain('circ.iswap(0, 1)')
+  })
+
+  it('xx/yy/zz/xy with angle (Braket native)', () => {
+    const src = new Circuit(2)
+      .xx(Math.PI / 4, 0, 1)
+      .yy(Math.PI / 4, 0, 1)
+      .zz(Math.PI / 4, 0, 1)
+      .xy(Math.PI / 2, 0, 1)
+      .toBraket()
+    expect(src).toContain('circ.xx(0, 1, math.pi/4)')
+    expect(src).toContain('circ.yy(0, 1, math.pi/4)')
+    expect(src).toContain('circ.zz(0, 1, math.pi/4)')
+    expect(src).toContain('circ.xy(0, 1, math.pi/2)')
+  })
+
+  it('ccnot → circ.ccnot, cswap → circ.cswap', () => {
+    const src = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).toBraket()
+    expect(src).toContain('circ.ccnot(0, 1, 2)')
+    expect(src).toContain('circ.cswap(0, 1, 2)')
+  })
+
+  it('cy → circ.cy, cz → circ.cz', () => {
+    const src = new Circuit(2).cy(0, 1).cz(0, 1).toBraket()
+    expect(src).toContain('circ.cy(0, 1)')
+    expect(src).toContain('circ.cz(0, 1)')
+  })
+
+  it('ch → circ.h(target, control=control)', () => {
+    expect(new Circuit(2).ch(0, 1).toBraket()).toContain('circ.h(1, control=0)')
+  })
+
+  it('crx/cry/crz via control= kwarg', () => {
+    const src = new Circuit(2).crx(Math.PI / 2, 0, 1).cry(Math.PI / 4, 0, 1).crz(Math.PI / 3, 0, 1).toBraket()
+    expect(src).toContain('circ.rx(1, math.pi/2, control=0)')
+    expect(src).toContain('circ.ry(1, math.pi/4, control=0)')
+    expect(src).toContain('circ.rz(1, math.pi/3, control=0)')
+  })
+
+  it('cu1/cs/ct/csdg/ctdg → phaseshift via control= kwarg', () => {
+    const src = new Circuit(2).cu1(Math.PI / 3, 0, 1).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1).toBraket()
+    expect(src).toContain('circ.phaseshift(1, math.pi/3, control=0)')
+    expect(src).toContain('circ.phaseshift(1, math.pi/2, control=0)')
+    expect(src).toContain('circ.phaseshift(1, math.pi/4, control=0)')
+    expect(src).toContain('circ.phaseshift(1, -math.pi/2, control=0)')
+    expect(src).toContain('circ.phaseshift(1, -math.pi/4, control=0)')
+  })
+
+  it('cr2/cr4/cr8 → rz via control= kwarg', () => {
+    const src = new Circuit(2).cr2(0, 1).cr4(0, 1).cr8(0, 1).toBraket()
+    expect(src).toContain('circ.rz(1, math.pi/2, control=0)')
+    expect(src).toContain('circ.rz(1, math.pi/4, control=0)')
+    expect(src).toContain('circ.rz(1, math.pi/8, control=0)')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toBraket()).toThrow(TypeError)
+  })
+
+  it('throws for ms', () => {
+    expect(() => new Circuit(2).ms(0, 0, 0, 1).toBraket()).toThrow(TypeError)
+  })
+
+  it('throws for srswap (no matching Braket gate)', () => {
+    expect(() => new Circuit(2).srswap(0, 1).toBraket()).toThrow(TypeError)
+  })
+
+  it('throws for measure ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).toBraket()
+    ).toThrow(TypeError)
+  })
+
+  it('throws for if ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toBraket()
+    ).toThrow(TypeError)
+  })
+})
+
 // ─── exactProbs ───────────────────────────────────────────────────────────────
 
 describe('exactProbs()', () => {
