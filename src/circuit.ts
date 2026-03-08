@@ -1250,6 +1250,93 @@ export class Circuit {
     ].filter((l, i) => l !== '' || i > 3).join('\n')  // collapse leading blank lines
   }
 
+  /**
+   * Emit a Quil (Quantum Instruction Language) program for Rigetti hardware.
+   *
+   * Gate coverage: I/H/X/Y/Z/S/T and daggers, RX/RY/RZ, PHASE,
+   * CNOT/CZ/SWAP/ISWAP/CCNOT/CSWAP, controlled family via CONTROLLED/CPHASE.
+   * Throws for gates with no Quil representation: gpi/gpi2/ms/xx/yy/zz/xy/srswap/u2/u3/cu2/cu3/if.
+   */
+  toQuil(): string {
+    const lines: string[] = []
+    const ang  = (r: number) => fmtAngle(r, 'pi')
+
+    for (const [name, size] of this.#cregs) lines.push(`DECLARE ${name} BIT[${size}]`)
+    if (this.#cregs.size) lines.push('')
+
+    for (const op of this.#ops) {
+      switch (op.kind) {
+        case 'cnot':    lines.push(`CNOT ${op.control} ${op.target}`);              break
+        case 'swap':    lines.push(`SWAP ${op.a} ${op.b}`);                         break
+        case 'toffoli': lines.push(`CCNOT ${op.c1} ${op.c2} ${op.target}`);        break
+        case 'cswap':   lines.push(`CSWAP ${op.control} ${op.a} ${op.b}`);         break
+        case 'measure': lines.push(`MEASURE ${op.q} ${op.creg}[${op.bit}]`);       break
+        case 'reset':   lines.push(`RESET ${op.q}`);                                break
+        case 'if':      throw new TypeError('if ops cannot be serialized to Quil')
+        case 'two': {
+          const n = op.meta?.name
+          if (n === 'iswap') { lines.push(`ISWAP ${op.a} ${op.b}`); break }
+          throw new TypeError(`Gate '${n ?? 'two'}' has no Quil representation`)
+        }
+        case 'single': {
+          if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const q = op.q
+          switch (n) {
+            case 'id':  lines.push(`I ${q}`);                     break
+            case 'h':   lines.push(`H ${q}`);                     break
+            case 'x':   lines.push(`X ${q}`);                     break
+            case 'y':   lines.push(`Y ${q}`);                     break
+            case 'z':   lines.push(`Z ${q}`);                     break
+            case 's':   lines.push(`S ${q}`);                     break
+            case 'si':  lines.push(`DAGGER S ${q}`);              break
+            case 't':   lines.push(`T ${q}`);                     break
+            case 'ti':  lines.push(`DAGGER T ${q}`);              break
+            case 'v':   lines.push(`RX(pi/2) ${q}`);              break  // √X up to global phase
+            case 'vi':  lines.push(`RX(-pi/2) ${q}`);             break
+            case 'r2':  lines.push(`RZ(pi/2) ${q}`);              break
+            case 'r4':  lines.push(`RZ(pi/4) ${q}`);              break
+            case 'r8':  lines.push(`RZ(pi/8) ${q}`);              break
+            case 'rx':  lines.push(`RX(${ang(p![0]!)}) ${q}`);    break
+            case 'ry':  lines.push(`RY(${ang(p![0]!)}) ${q}`);    break
+            case 'rz':  lines.push(`RZ(${ang(p![0]!)}) ${q}`);    break
+            case 'u1':  lines.push(`PHASE(${ang(p![0]!)}) ${q}`); break
+            case 'gpi': case 'gpi2':
+              throw new TypeError(`Gate '${n}' has no Quil representation`)
+            default:
+              throw new TypeError(`Gate '${n}' has no Quil representation`)
+          }
+          break
+        }
+        case 'controlled': {
+          if (!op.meta) throw new TypeError('Controlled op missing serialization meta')
+          const { name: n, params: p } = op.meta
+          const [c, t] = [op.control, op.target]
+          switch (n) {
+            case 'cy':   lines.push(`CONTROLLED Y ${c} ${t}`);                     break
+            case 'cz':   lines.push(`CZ ${c} ${t}`);                               break
+            case 'ch':   lines.push(`CONTROLLED H ${c} ${t}`);                     break
+            case 'crx':  lines.push(`CONTROLLED RX(${ang(p![0]!)}) ${c} ${t}`);   break
+            case 'cry':  lines.push(`CONTROLLED RY(${ang(p![0]!)}) ${c} ${t}`);   break
+            case 'crz':  lines.push(`CONTROLLED RZ(${ang(p![0]!)}) ${c} ${t}`);   break
+            case 'cu1':  lines.push(`CPHASE(${ang(p![0]!)}) ${c} ${t}`);          break
+            case 'cs':   lines.push(`CPHASE(pi/2) ${c} ${t}`);                    break
+            case 'ct':   lines.push(`CPHASE(pi/4) ${c} ${t}`);                    break
+            case 'csdg': lines.push(`CPHASE(-pi/2) ${c} ${t}`);                   break
+            case 'ctdg': lines.push(`CPHASE(-pi/4) ${c} ${t}`);                   break
+            case 'cr2':  lines.push(`CPHASE(pi/2) ${c} ${t}`);                    break
+            case 'cr4':  lines.push(`CPHASE(pi/4) ${c} ${t}`);                    break
+            case 'cr8':  lines.push(`CPHASE(pi/8) ${c} ${t}`);                    break
+            default:
+              throw new TypeError(`Gate '${n}' has no Quil representation`)
+          }
+          break
+        }
+      }
+    }
+    return lines.join('\n')
+  }
+
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */

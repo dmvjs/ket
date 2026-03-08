@@ -2412,6 +2412,136 @@ describe('toPyQuil()', () => {
   })
 })
 
+// ─── toQuil ───────────────────────────────────────────────────────────────────
+
+describe('toQuil()', () => {
+  it('H + CNOT → correct Quil instructions', () => {
+    const q = new Circuit(2).h(0).cnot(0, 1).toQuil()
+    expect(q).toBe('H 0\nCNOT 0 1')
+  })
+
+  it('single-qubit Pauli and phase gates', () => {
+    const q = new Circuit(1).x(0).y(0).z(0).s(0).t(0).toQuil()
+    expect(q).toContain('X 0')
+    expect(q).toContain('Y 0')
+    expect(q).toContain('Z 0')
+    expect(q).toContain('S 0')
+    expect(q).toContain('T 0')
+  })
+
+  it('si → DAGGER S, ti → DAGGER T', () => {
+    const q = new Circuit(1).si(0).ti(0).toQuil()
+    expect(q).toContain('DAGGER S 0')
+    expect(q).toContain('DAGGER T 0')
+  })
+
+  it('id → I', () => {
+    expect(new Circuit(1).id(0).toQuil()).toBe('I 0')
+  })
+
+  it('v → RX(pi/2), vi → RX(-pi/2)', () => {
+    const q = new Circuit(1).v(0).vi(0).toQuil()
+    expect(q).toContain('RX(pi/2) 0')
+    expect(q).toContain('RX(-pi/2) 0')
+  })
+
+  it('r2/r4/r8 → RZ with pi fractions', () => {
+    const q = new Circuit(1).r2(0).r4(0).r8(0).toQuil()
+    expect(q).toContain('RZ(pi/2) 0')
+    expect(q).toContain('RZ(pi/4) 0')
+    expect(q).toContain('RZ(pi/8) 0')
+  })
+
+  it('rx/ry/rz with angle', () => {
+    const q = new Circuit(1).rx(Math.PI / 3, 0).ry(Math.PI / 4, 0).rz(Math.PI / 6, 0).toQuil()
+    expect(q).toContain('RX(pi/3) 0')
+    expect(q).toContain('RY(pi/4) 0')
+    expect(q).toContain('RZ(pi/6) 0')
+  })
+
+  it('u1 → PHASE', () => {
+    const q = new Circuit(1).u1(Math.PI / 2, 0).toQuil()
+    expect(q).toContain('PHASE(pi/2) 0')
+  })
+
+  it('swap → SWAP, iswap → ISWAP', () => {
+    const q = new Circuit(2).swap(0, 1).iswap(0, 1).toQuil()
+    expect(q).toContain('SWAP 0 1')
+    expect(q).toContain('ISWAP 0 1')
+  })
+
+  it('ccx → CCNOT, cswap → CSWAP', () => {
+    const q = new Circuit(3).ccx(0, 1, 2).cswap(0, 1, 2).toQuil()
+    expect(q).toContain('CCNOT 0 1 2')
+    expect(q).toContain('CSWAP 0 1 2')
+  })
+
+  it('cz → CZ, cy → CONTROLLED Y, ch → CONTROLLED H', () => {
+    const q = new Circuit(2).cz(0, 1).cy(0, 1).ch(0, 1).toQuil()
+    expect(q).toContain('CZ 0 1')
+    expect(q).toContain('CONTROLLED Y 0 1')
+    expect(q).toContain('CONTROLLED H 0 1')
+  })
+
+  it('crx/cry/crz → CONTROLLED RX/RY/RZ with angle', () => {
+    const q = new Circuit(2).crx(Math.PI / 2, 0, 1).cry(Math.PI / 4, 0, 1).crz(Math.PI / 3, 0, 1).toQuil()
+    expect(q).toContain('CONTROLLED RX(pi/2) 0 1')
+    expect(q).toContain('CONTROLLED RY(pi/4) 0 1')
+    expect(q).toContain('CONTROLLED RZ(pi/3) 0 1')
+  })
+
+  it('cu1 → CPHASE, cs/ct/csdg/ctdg → CPHASE with fixed angles', () => {
+    const q = new Circuit(2).cu1(Math.PI / 3, 0, 1).cs(0, 1).ct(0, 1).csdg(0, 1).ctdg(0, 1).toQuil()
+    expect(q).toContain('CPHASE(pi/3) 0 1')
+    expect(q).toContain('CPHASE(pi/2) 0 1')
+    expect(q).toContain('CPHASE(pi/4) 0 1')
+    expect(q).toContain('CPHASE(-pi/2) 0 1')
+    expect(q).toContain('CPHASE(-pi/4) 0 1')
+  })
+
+  it('cr2/cr4/cr8 → CPHASE with pi fractions', () => {
+    const q = new Circuit(2).cr2(0, 1).cr4(0, 1).cr8(0, 1).toQuil()
+    expect(q).toContain('CPHASE(pi/2) 0 1')
+    expect(q).toContain('CPHASE(pi/4) 0 1')
+    expect(q).toContain('CPHASE(pi/8) 0 1')
+  })
+
+  it('classical registers: DECLARE + MEASURE + RESET', () => {
+    const q = new Circuit(2)
+      .creg('ro', 2)
+      .measure(0, 'ro', 0)
+      .measure(1, 'ro', 1)
+      .reset(0)
+      .toQuil()
+    expect(q).toContain('DECLARE ro BIT[2]')
+    expect(q).toContain('MEASURE 0 ro[0]')
+    expect(q).toContain('MEASURE 1 ro[1]')
+    expect(q).toContain('RESET 0')
+  })
+
+  it('throws for gpi', () => {
+    expect(() => new Circuit(1).gpi(0, 0).toQuil()).toThrow(TypeError)
+  })
+
+  it('throws for xx (no standard Quil gate)', () => {
+    expect(() => new Circuit(2).xx(Math.PI / 4, 0, 1).toQuil()).toThrow(TypeError)
+  })
+
+  it('throws for u2 (no standard Quil gate)', () => {
+    expect(() => new Circuit(1).u2(0, Math.PI, 0).toQuil()).toThrow(TypeError)
+  })
+
+  it('throws for if ops', () => {
+    expect(() =>
+      new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.x(0)).toQuil()
+    ).toThrow(TypeError)
+  })
+
+  it('empty circuit produces empty string', () => {
+    expect(new Circuit(2).toQuil()).toBe('')
+  })
+})
+
 // ─── exactProbs ───────────────────────────────────────────────────────────────
 
 describe('exactProbs()', () => {

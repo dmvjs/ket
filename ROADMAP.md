@@ -22,7 +22,7 @@ A living document charting the path from a correct, minimal core to a complete, 
 `ccx` `cswap`
 `gpi` `gpi2` `ms`
 
-**Test suite (414 tests, ~200ms)**
+**Test suite (434 tests, ~200ms)**
 - All single-qubit gates and their inverses
 - All four Bell states
 - Deutsch-Jozsa (constant and balanced oracle)
@@ -190,7 +190,7 @@ Handles real, imaginary, and complex coefficients; omits near-zero terms; correc
 
 | Target | Method | Use case |
 |---|---|---|
-| Quil | `circuit.toQuil()` | Rigetti native format (import also) |
+| Quil | `circuit.toQuil()` ✓ | Rigetti native format |
 | Amazon Braket | `circuit.toBraket()` | AWS quantum hardware |
 | CudaQ | `circuit.toCudaQ()` | NVIDIA GPU-accelerated simulation |
 | TensorFlow Quantum | `circuit.toTFQ()` | Hybrid quantum-classical ML |
