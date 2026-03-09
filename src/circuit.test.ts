@@ -6356,3 +6356,58 @@ describe('circuit.unitary() — error paths', () => {
     expect(() => new Circuit(1).unitary(H, 0).creg('c',1).measure(0,'c',0).runClifford()).toThrow(/unitary/)
   })
 })
+
+// ─── circuit.unitary() — serializer coverage ──────────────────────────────────
+//
+// Each export serializer must throw (not silently skip) when it encounters a
+// custom unitary op.  This suite acts as a regression guard: if a new op type
+// is added without being wired into a serializer, the analogous test here will
+// catch it.
+
+describe('circuit.unitary() — export serializer throws', () => {
+  const H = [[1 / Math.sqrt(2), 1 / Math.sqrt(2)], [1 / Math.sqrt(2), -1 / Math.sqrt(2)]]
+  const circ = () => new Circuit(1).unitary(H, 0)
+
+  it('toQASM() throws for unitary op',   () => expect(() => circ().toQASM()).toThrow(TypeError))
+  it('toIonQ() throws for unitary op',   () => expect(() => circ().toIonQ()).toThrow(TypeError))
+  it('toQiskit() throws for unitary op', () => expect(() => circ().toQiskit()).toThrow(TypeError))
+  it('toCirq() throws for unitary op',   () => expect(() => circ().toCirq()).toThrow(TypeError))
+  it('toTFQ() throws for unitary op',    () => expect(() => circ().toTFQ()).toThrow(TypeError))
+  it('toQSharp() throws for unitary op', () => expect(() => circ().toQSharp()).toThrow(TypeError))
+  it('toPyQuil() throws for unitary op', () => expect(() => circ().toPyQuil()).toThrow(TypeError))
+  it('toQuil() throws for unitary op',   () => expect(() => circ().toQuil()).toThrow(TypeError))
+  it('toBraket() throws for unitary op', () => expect(() => circ().toBraket()).toThrow(TypeError))
+  it('toCudaQ() throws for unitary op',  () => expect(() => circ().toCudaQ()).toThrow(TypeError))
+  it('toQuirk() throws for unitary op',  () => expect(() => circ().toQuirk()).toThrow(TypeError))
+  it('compile() throws for unitary op',  () => expect(() => circ().compile('aria-1')).toThrow(TypeError))
+  it('checkDevice() throws for unitary op', () => expect(() => circ().checkDevice('aria-1')).toThrow(TypeError))
+})
+
+describe('circuit.unitary() — depth() and toLatex()', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  const H = [[sq2, sq2], [sq2, -sq2]]
+
+  it('depth() counts a 1-qubit unitary as depth 1', () => {
+    expect(new Circuit(1).unitary(H, 0).depth()).toBe(1)
+  })
+
+  it('depth() counts a 2-qubit unitary as depth 1', () => {
+    const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+    expect(new Circuit(2).unitary(SWAP, 0, 1).depth()).toBe(1)
+  })
+
+  it('depth() serializes correctly with surrounding gates', () => {
+    // h(0) || h(1)  →  unitary(q0,q1)  →  depth 2
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    expect(new Circuit(2).h(0).h(1).unitary(CNOT, 0, 1).depth()).toBe(2)
+  })
+
+  it('toLatex() contains \\\\gate{U} for a 1-qubit unitary', () => {
+    expect(new Circuit(1).unitary(H, 0).toLatex()).toContain('\\gate{U}')
+  })
+
+  it('toLatex() contains \\\\gate[2]{U} for a 2-qubit unitary', () => {
+    const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+    expect(new Circuit(2).unitary(SWAP, 0, 1).toLatex()).toContain('\\gate[2]{U}')
+  })
+})
