@@ -6,6 +6,16 @@
 
 TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/export formats, zero dependencies.
 
+## Bitstring convention
+
+All bitstrings in ket use **q0 leftmost** (standard convention, matching Qiskit, Cirq, and textbooks):
+
+- `'10'` → q0=1, q1=0
+- `amplitude('10')`, `exactProbs()['10']`, `Distribution.probs['10']` all use q0 leftmost
+- `initialState: '10'` starts the circuit with q0=1, q1=0
+
+This matches the convention used by every major quantum computing library and paper. q0 is the first (leftmost) character, just as the first qubit in a ket |q0 q1 q2⟩ is written leftmost.
+
 ## Why ket
 
 - **Immutable by design** — every gate method returns a new `Circuit`. Safe to compose, branch, and reuse.
@@ -122,7 +132,7 @@ The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density 
 All backends accept an `initialState` option to start from an arbitrary computational basis state instead of |0...0⟩:
 
 ```typescript
-// Start from |110⟩ (q0=0, q1=1, q2=1)
+// Start from |110⟩ (q0=1, q1=1, q2=0)
 circuit.run({ initialState: '110' })
 circuit.runMps({ shots: 1000, initialState: '110' })
 circuit.statevector({ initialState: '110' })
@@ -195,6 +205,30 @@ circuit.statevector({ initialState: '110' })
 | CSWAP | `cswap(c, q0, q1)` | Fredkin |
 | C√SWAP | `csrswap(c, q0, q1)` | Controlled-√SWAP |
 
+### Custom unitary gate
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+import type { Complex } from '@kirkelliott/ket'
+
+// Real matrix (number[][])
+const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+circuit.unitary(SWAP, 0, 1)
+
+// Complex matrix ({ re, im }[][])
+const S: Complex[][] = [
+  [{ re: 1, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 1 }],
+]
+circuit.unitary(S, 0)
+```
+
+`matrix` must be 2^N × 2^N where N is the number of qubits. The first qubit in the argument list is the MSB of the local state index — matching the convention of all other multi-qubit gates. Entries can be plain `number` (real part only) or `Complex` objects.
+
+Supported in all backends: statevector, density matrix, and MPS (1 and 2-qubit only). Throws `TypeError` in `runClifford` (the simulator cannot verify Clifford membership from an arbitrary matrix).
+
+JSON round-trip is lossless — the matrix is stored as `[[re, im], ...][]` in the serialized format.
+
 ### Scheduling
 
 | Method | Description |
@@ -246,7 +280,7 @@ circuit.dm({ noise: 'aria-1' })
 
 | Format | Import | Export | Method(s) |
 |---|---|---|---|
-| OpenQASM 2.0 / 3.0 | ✓ | ✓ (2.0) | `Circuit.fromQASM(s)` / `circuit.toQASM()` |
+| OpenQASM 2.0 / 3.0 | ✓ | ✓ | `Circuit.fromQASM(s)` / `circuit.toQASM()` |
 | IonQ JSON | ✓ | ✓ | `Circuit.fromIonQ(json)` / `circuit.toIonQ()` |
 | Quil 2.0 | ✓ | ✓ | `Circuit.fromQuil(s)` / `circuit.toQuil()` |
 | JSON (native) | ✓ | ✓ | `Circuit.fromJSON(json)` / `circuit.toJSON()` |
@@ -279,9 +313,16 @@ const search = grover(2, oracle)
 // precision=3 counting qubits (q0–q2) + 1 target qubit (q3)
 const qpe = phaseEstimation(3,
   (c, ctrl, pow, tgts) => c.cu1(Math.PI * pow / 4, ctrl, tgts[0]!), 1)
-// Initialise target qubit (q3) to eigenstate |1⟩ via initialState
-const result = qpe.run({ shots: 1000, seed: 42, initialState: '1000' })
-// Phase φ=1/8 → counting register = |001⟩ → dominant bitstring '1001'
+// Initialise target qubit (q3) to eigenstate |1⟩ via initialState (q0 leftmost → q3=1 at position 3)
+const result = qpe.run({ shots: 1000, seed: 42, initialState: '0001' })
+// Phase φ=1/8 → counting register = |001⟩ (q0=1) → dominant bitstring '1001'
+
+// Pauli expectation value — ⟨ψ|P|ψ⟩ for a single Pauli string
+// pauli[q] acts on qubit q (q0 leftmost). X → H rotation, Y → Rx(π/2), Z → identity.
+new Circuit(1).h(0).expectation('X')                        // 1   (|+⟩ eigenstate of X)
+new Circuit(2).h(0).cnot(0, 1).expectation('ZZ')           // 1   (Bell state ⟨ZZ⟩)
+new Circuit(2).h(0).cnot(0, 1).expectation('XX')           // 1   (Bell state ⟨XX⟩)
+new Circuit(2).h(0).cnot(0, 1).expectation('YY')           // -1  (Bell state ⟨YY⟩)
 
 // Variational Quantum Eigensolver
 const ansatz = new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1)
@@ -364,6 +405,7 @@ circuit.exactProbs()            // { '00': 0.5, '11': 0.5 } — no sampling, no 
 circuit.marginals()             // [P(q0=1), P(q1=1)]
 circuit.stateAsString()         // '0.7071|00⟩ + 0.7071|11⟩'
 circuit.blochAngles(0)          // { theta, phi } via partial trace
+circuit.expectation('ZZ')       // number — ⟨ψ|P|ψ⟩ for a Pauli string P
 ```
 
 ## Classical control and named gates
@@ -486,10 +528,10 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-858 tests, ~300ms. Run with:
+1252 tests, ~600ms. Run with:
 
 ```bash
 npm test
 ```
 
-The suite covers: analytic correctness (known complex amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), math primitive unit tests (`add`, `mul`, `conj`, `norm2`, etc.), qubit index bounds checking, algorithm output correctness (QFT phase amplitudes, Grover, QPE via the `phaseEstimation` API, VQE), BigInt correctness at qubit indices 30/31/40, Clifford word-boundary correctness at n=33, 191 error-path assertions, and full import/export round-trips for all 14 supported formats.
+The suite covers: analytic correctness (known complex amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), math primitive unit tests (`add`, `mul`, `conj`, `norm2`, etc.), qubit index bounds checking, algorithm output correctness (QFT phase amplitudes, Grover, QPE, VQE, Pauli expectation values), BigInt correctness at qubit indices 30/31/40, Clifford word-boundary correctness at n=33, probability normalization invariants, backend consistency (statevector vs density matrix), JSON round-trips for all 13 op kinds, serializer contract matrix (every op kind × every export format), and full import/export round-trips for all 14 supported formats.

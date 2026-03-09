@@ -129,6 +129,58 @@ function applyPerm(dm: DM, n: number, f: (i: bigint) => bigint): DM {
   return next
 }
 
+/** ρ → U ρ U†  — N-qubit unitary on qubits `qs` (qs[0] = MSB of local index). */
+function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonly (readonly Complex[])[]): DM {
+  const next: DM = new Map()
+  const shift    = BigInt(n)
+  const dimMask  = (1n << shift) - 1n
+  const localDim = 1 << qs.length
+  const masks    = qs.map(q => 1n << BigInt(q))
+  const allMask  = masks.reduce((a, b) => a | b, 0n)
+  const seen     = new Set<bigint>()
+
+  // Expand a base index (with qubit bits zeroed) into all 2^N local variants.
+  // qs[0] is MSB of the local index i, matching the matrix convention.
+  const buildBases = (base: bigint): bigint[] =>
+    Array.from({ length: localDim }, (_, i) => {
+      let b = base
+      for (let bit = 0; bit < qs.length; bit++) {
+        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
+      }
+      return b
+    })
+
+  for (const key of dm.keys()) {
+    const ctx = key & ~(allMask << shift) & ~allMask
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    const rowBases = buildBases(ctx >> shift)
+    const colBases = buildBases(ctx & dimMask)
+
+    const p: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
+      Array.from({ length: localDim }, (_, ci) => dmGet(dm, shift, rowBases[ri]!, colBases[ci]!))
+    )
+    // Left multiply: t = U · p
+    const t: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
+      Array.from({ length: localDim }, (_, ci) => {
+        let v = ZERO
+        for (let j = 0; j < localDim; j++) v = add(v, mul(matrix[ri]![j]!, p[j]![ci]!))
+        return v
+      })
+    )
+    // Right multiply by U†: result = t · U†
+    for (let ri = 0; ri < localDim; ri++) {
+      for (let ci = 0; ci < localDim; ci++) {
+        let v = ZERO
+        for (let j = 0; j < localDim; j++) v = add(v, mul(t[ri]![j]!, conj(matrix[ci]![j]!)))
+        dmSet(next, shift, rowBases[ri]!, colBases[ci]!, v)
+      }
+    }
+  }
+  return next
+}
+
 // ─── Noise channels ────────────────────────────────────────────────────────
 
 /**
@@ -217,7 +269,7 @@ function depolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
  * For n qubits the state space has 4ⁿ entries in the worst case.
  * In practice, near-pure states and modest noise keep the DM very sparse.
  *
- * All bitstring keys follow the IonQ convention: qubit 0 is the LSB (rightmost).
+ * All bitstring keys follow the standard convention: qubit 0 is the leftmost character.
  */
 export class DensityMatrix {
   readonly qubits: number
@@ -241,14 +293,14 @@ export class DensityMatrix {
   /**
    * Diagonal probabilities: P(bitstring) = ρ[bs][bs].
    *
-   * Keys are IonQ bitstrings (q0 rightmost).  Only non-negligible values
+   * Keys are standard bitstrings (q0 leftmost).  Only non-negligible values
    * (> 1e-14) are included.
    */
   probabilities(): Readonly<Record<string, number>> {
     const out: Record<string, number> = {}
     for (const [k, v] of this.#dm) {
       const r = k >> this.#shift, c = k & this.#dimMask
-      if (r === c && v.re > 1e-14) out[r.toString(2).padStart(this.qubits, '0')] = v.re
+      if (r === c && v.re > 1e-14) out[r.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = v.re
     }
     return Object.freeze(out)
   }
@@ -414,6 +466,7 @@ export type DmOp =
   | { kind: 'toffoli';    c1: number;      c2: number;    target: number }
   | { kind: 'cswap';      control: number; a: number;     b: number }
   | { kind: 'csrswap';    control: number; a: number;     b: number }
+  | { kind: 'unitary';    qubits: readonly number[];      matrix: readonly (readonly Complex[])[] }
 
 /**
  * Simulate `ops` on the |0…0⟩⟨0…0| initial state and return the exact
@@ -524,6 +577,10 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
         dm = dmNext
         break
       }
+      case 'unitary':
+        dm = applyUnitaryN(dm, n, op.qubits, op.matrix)
+        break
+      default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
 

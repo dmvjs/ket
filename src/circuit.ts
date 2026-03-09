@@ -6,7 +6,7 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
 import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
@@ -32,7 +32,12 @@ type IfOp         = { kind: 'if';         creg: string; value: number; ops: read
 type SubcircuitOp = { kind: 'subcircuit'; name: string; qubits: readonly number[]; def: readonly Op[] }
 /** Scheduling/grouping hint — no effect on the statevector; emitted as `barrier` in QASM. */
 type BarrierOp    = { kind: 'barrier';    qubits: readonly number[] }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp
+/** Arbitrary N-qubit unitary gate defined by its 2^N × 2^N matrix. */
+type UnitaryOp    = { kind: 'unitary';    qubits: readonly number[]; matrix: readonly (readonly Complex[])[] }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp | UnitaryOp
+
+/** Op after subcircuits have been expanded by flattenOps. */
+export type FlatOp = Exclude<Op, SubcircuitOp>
 
 // ─── Mid-circuit measurement helpers ─────────────────────────────────────────
 
@@ -81,7 +86,15 @@ function remapOp(op: Op, qmap: readonly number[]): Op {
     case 'cswap':      return { ...op, control: q(op.control), a: q(op.a), b: q(op.b) }
     case 'csrswap':    return { ...op, control: q(op.control), a: q(op.a), b: q(op.b) }
     case 'subcircuit': return { ...op, qubits: op.qubits.map(i => q(i)) }
-    default:           return op  // measure/reset/if: validated at defineGate time
+    case 'unitary':    return { ...op, qubits: op.qubits.map(i => q(i)) }
+    case 'barrier':    return { ...op, qubits: op.qubits.map(i => q(i)) }
+    case 'measure':    return op  // measure/reset/if are forbidden inside defineGate bodies
+    case 'reset':      return op
+    case 'if':         return op
+    default: {
+      const _exhaustive: never = op
+      return _exhaustive
+    }
   }
 }
 
@@ -89,12 +102,12 @@ function remapOp(op: Op, qmap: readonly number[]): Op {
  * Recursively expand all SubcircuitOps into their constituent primitive ops,
  * remapping qubit indices at each level. Returns a flat array with no subcircuit ops.
  */
-function flattenOps(ops: readonly Op[]): readonly Op[] {
+function flattenOps(ops: readonly Op[]): readonly FlatOp[] {
   let hasSubcircuit = false
   for (const op of ops) if (op.kind === 'subcircuit') { hasSubcircuit = true; break }
-  if (!hasSubcircuit) return ops  // fast path — no allocation for pure-primitive circuits
+  if (!hasSubcircuit) return ops as readonly FlatOp[]  // fast path — no allocation for pure-primitive circuits
 
-  const result: Op[] = []
+  const result: FlatOp[] = []
   for (const op of ops) {
     if (op.kind === 'subcircuit') {
       result.push(...flattenOps(op.def.map(inner => remapOp(inner, op.qubits))))
@@ -105,25 +118,30 @@ function flattenOps(ops: readonly Op[]): readonly Op[] {
   return result
 }
 
-/** Build a computational-basis statevector from a bitstring (q0 rightmost, IonQ convention). */
+/** Build a computational-basis statevector from a bitstring (q0 leftmost, standard convention). */
 function svFromBitstring(s: string, qubits: number): StateVector {
   if (s.length !== qubits || !/^[01]+$/.test(s))
     throw new TypeError(`initialState '${s}' must be a ${qubits}-character binary string`)
-  return new Map([[BigInt('0b' + s), { re: 1, im: 0 }]])
+  return new Map([[BigInt('0b' + [...s].reverse().join('')), { re: 1, im: 0 }]])
 }
 
 /** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
 function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
   let sv: StateVector = init ?? zero(qubits)
   for (const op of flattenOps(ops)) {
-    if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
-    else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
-    else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
-    else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
-    else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
-    else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'csrswap')    sv = applyCsrSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
+    switch (op.kind) {
+      case 'single':     sv = applySingle(sv, op.q, op.gate); break
+      case 'cnot':       sv = applyCNOT(sv, op.control, op.target); break
+      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate); break
+      case 'swap':       sv = applySWAP(sv, op.a, op.b); break
+      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
+      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
+      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
+      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate); break
+      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'barrier': case 'measure': case 'reset': case 'if': break
+      default: { const _exhaustive: never = op; void _exhaustive }
+    }
   }
   return sv
 }
@@ -140,26 +158,35 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
   const p2 = noise?.p2 ?? 0
   const pM = noise?.pMeas ?? 0
   for (const op of flattenOps(ops)) {
-    if      (op.kind === 'single')     { sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()) }
-    else if (op.kind === 'cnot')       { sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
-    else if (op.kind === 'controlled') { sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
-    else if (op.kind === 'swap')       { sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
-    else if (op.kind === 'toffoli')      sv = applyToffoli(sv, op.c1, op.c2, op.target)
-    else if (op.kind === 'cswap')        sv = applyCSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'csrswap')      sv = applyCsrSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'two')        { sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
-    else if (op.kind === 'measure') {
-      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
-      const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
-      sv = next
-      const reg = shotCregs.get(op.creg)
-      if (reg) reg[op.bit] = reported === 1
-    } else if (op.kind === 'reset') {
-      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
-      sv = next
-      if (outcome === 1) sv = applySingle(sv, op.q, G.X)
-    } else if (op.kind === 'if') {
-      if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
+    switch (op.kind) {
+      case 'single':     sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()); break
+      case 'cnot':       sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
+      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
+      case 'swap':       sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
+      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
+      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
+      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'measure': {
+        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+        const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
+        sv = next
+        const reg = shotCregs.get(op.creg)
+        if (reg) reg[op.bit] = reported === 1
+        break
+      }
+      case 'reset': {
+        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+        sv = next
+        if (outcome === 1) sv = applySingle(sv, op.q, G.X)
+        break
+      }
+      case 'if':
+        if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
+        break
+      case 'barrier': break
+      default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
   return sv
@@ -482,6 +509,11 @@ function opsFromJSON(raw: readonly unknown[]): Op[] {
         return { kind: 'subcircuit', name: o['name'] as string, qubits: o['qubits'] as number[], def: opsFromJSON(o['def'] as unknown[]) } satisfies SubcircuitOp
       case 'barrier':
         return { kind: 'barrier', qubits: o['qubits'] as number[] } satisfies BarrierOp
+      case 'unitary': {
+        const rawMatrix = o['matrix'] as [number, number][][]
+        const matrix: Complex[][] = rawMatrix.map(row => row.map(([re, im]) => ({ re, im })))
+        return { kind: 'unitary', qubits: o['qubits'] as number[], matrix } satisfies UnitaryOp
+      }
       default:
         throw new TypeError(`fromJSON: unknown op kind '${kind}'`)
     }
@@ -505,6 +537,11 @@ function opsToJSON(ops: readonly Op[]): unknown[] {
       case 'if':         return { kind: 'if', creg: op.creg, value: op.value, ops: opsToJSON(op.ops) }
       case 'subcircuit': return { kind: 'subcircuit', name: op.name, qubits: [...op.qubits], def: opsToJSON(op.def) }
       case 'barrier':    return { kind: 'barrier', qubits: [...op.qubits] }
+      case 'unitary':    return { kind: 'unitary', qubits: [...op.qubits], matrix: op.matrix.map(row => row.map(({ re, im }) => [re, im])) }
+      default: {
+        const _exhaustive: never = op
+        return _exhaustive
+      }
     }
   })
 }
@@ -592,7 +629,9 @@ function opQubits(op: Op): number[] {
     case 'reset':      return [op.q]
     case 'barrier':    return [...op.qubits]
     case 'subcircuit': return [...op.qubits]
-    default:           return []
+    case 'unitary':    return [...op.qubits]
+    case 'if':         return []
+    default: { const _exhaustive: never = op; return [] }
   }
 }
 
@@ -648,7 +687,9 @@ function opLabel(op: Op, q: number): string {
     case 'reset':      return '|0⟩'
     case 'barrier':    return '░'
     case 'subcircuit': return op.name
-    default:           return '?'
+    case 'unitary':    return 'U'
+    case 'if':         return '?'
+    default: { const _exhaustive: never = op; return '?' }
   }
 }
 
@@ -668,7 +709,7 @@ export interface RunOptions {
   seed?: number
   /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
   noise?: string | NoiseParams
-  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
 }
 
@@ -677,14 +718,14 @@ export interface MpsRunOptions {
   seed?: number
   /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
   maxBond?: number
-  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
 }
 
 /**
  * Measurement result — the output of running a circuit.
  *
- * `probs` keys are IonQ bitstrings: q0 is the rightmost character.
+ * `probs` keys are standard bitstrings: q0 is the leftmost character.
  * `histogram` keys are decimal integers (IonQ API convention).
  */
 export class Distribution {
@@ -709,7 +750,7 @@ export class Distribution {
 
     for (const [idx, count] of counts) {
       const prob      = count / shots
-      const bitstring = idx.toString(2).padStart(qubits, '0')
+      const bitstring = idx.toString(2).padStart(qubits, '0').split('').reverse().join('')
       probs[bitstring]         = prob
       histogram[String(idx)]   = prob
     }
@@ -798,6 +839,14 @@ export class Circuit {
       case 'measure':    q(op.q); break
       case 'reset':      q(op.q); break
       case 'barrier':    op.qubits.forEach(q); break
+      case 'unitary': {
+        if (op.qubits.length === 0) throw new TypeError('unitary: qubits must be non-empty')
+        const expected = 1 << op.qubits.length
+        if (op.matrix.length !== expected || op.matrix.some(row => row.length !== expected))
+          throw new TypeError(`unitary: matrix must be ${expected}×${expected} for ${op.qubits.length} qubit(s), got ${op.matrix.length}×${op.matrix[0]?.length ?? 0}`)
+        op.qubits.forEach(q)
+        break
+      }
     }
   }
 
@@ -989,13 +1038,38 @@ export class Circuit {
     return this.#add({ kind: 'barrier', qubits: qs })
   }
 
+  // ── Custom unitary gate ──────────────────────────────────────────────────
+
+  /**
+   * Apply a custom N-qubit unitary gate defined by its 2^N × 2^N matrix.
+   *
+   * `matrix` must be 2^N × 2^N where N = qubits.length. Entries may be
+   * `Complex` objects `{ re, im }` or plain `number` (treated as real).
+   * The qubit ordering matches all other multi-qubit gates: `qubits[0]` is the
+   * MSB of the local state index.
+   *
+   * @example
+   * // Real matrix
+   * circuit.unitary([[1,0],[0,1]], 0)
+   *
+   * // Complex matrix
+   * const S = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:0,im:1}]]
+   * circuit.unitary(S, 0)
+   */
+  unitary(matrix: readonly (readonly (number | Complex)[])[], ...qubits: number[]): Circuit {
+    const normalized: Complex[][] = matrix.map(row =>
+      row.map(v => typeof v === 'number' ? { re: v, im: 0 } : v)
+    )
+    return this.#add({ kind: 'unitary', qubits, matrix: normalized })
+  }
+
   // ── Statevector inspection ────────────────────────────────────────────────
 
   /**
    * Simulate the circuit and return the full sparse amplitude map.
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
    *
-   * @param initialState Optional starting computational basis state as a bitstring (q0 rightmost).
+   * @param initialState Optional starting computational basis state as a bitstring (q0 leftmost).
    */
   statevector({ initialState }: { initialState?: string } = {}): Map<bigint, Complex> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
@@ -1006,11 +1080,57 @@ export class Circuit {
   }
 
   /**
+   * Return the 2^n × 2^n unitary matrix of the circuit.
+   *
+   * `matrix[row][col]` is the amplitude of basis state `|row⟩` after starting
+   * from `|col⟩`. Row and column indices use **standard convention**: q0 is the
+   * MSB, so the ordering is |00…0⟩, |00…1⟩, …, |11…1⟩ with the first qubit
+   * varying slowest. This matches the convention of `unitary()`, textbooks, and
+   * most quantum computing libraries.
+   *
+   * Note: the column/row index ordering here uses q0 as MSB of the integer index,
+   * which differs from the public bitstring API where q0 is the leftmost character.
+   *
+   * Throws `TypeError` for circuits with mid-circuit measurement, reset, or
+   * conditional ops. Throws `RangeError` for circuits wider than 12 qubits
+   * (matrix would be 4096×4096 = 16M entries).
+   *
+   * @example
+   * new Circuit(2).cnot(0, 1).circuitMatrix()
+   * // [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]  — standard CNOT matrix
+   */
+  circuitMatrix(): Complex[][] {
+    if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError('circuitMatrix() requires a pure circuit — remove measure/reset/if ops')
+    }
+    const n = this.qubits
+    const dim = 1 << n
+    if (n > 12) {
+      throw new RangeError(`circuitMatrix(): circuit too large (${n} qubits = ${dim}×${dim} matrix)`)
+    }
+    // Convert between standard index (q0=MSB) and global IonQ index (q0=LSB)
+    // by reversing the n-bit representation. Bit reversal is its own inverse.
+    const flip = (i: number): number => {
+      let r = 0
+      for (let b = 0; b < n; b++) if (i & (1 << b)) r |= 1 << (n - 1 - b)
+      return r
+    }
+    const matrix: Complex[][] = Array.from({ length: dim }, () => new Array<Complex>(dim).fill(ZERO))
+    for (let col = 0; col < dim; col++) {
+      const sv = simulatePure(this.#ops, this.qubits, new Map([[BigInt(flip(col)), { re: 1, im: 0 }]]))
+      for (const [idx, amp] of sv) matrix[flip(Number(idx))]![col] = amp
+    }
+    return matrix
+  }
+
+  /**
    * Return the complex amplitude for the basis state identified by `bitstring`.
-   * Bitstring format: q0 is the rightmost character (IonQ convention), e.g. `'01'` = q0=1, q1=0.
+   * Bitstring format: q0 is the leftmost character (standard convention), e.g. `'10'` = q0=1, q1=0.
    */
   amplitude(bitstring: string): Complex {
-    return this.statevector().get(BigInt('0b' + bitstring)) ?? ZERO
+    if (bitstring.length !== this.qubits || !/^[01]+$/.test(bitstring))
+      throw new TypeError(`bitstring '${bitstring}' must be a ${this.qubits}-character binary string`)
+    return this.statevector().get(BigInt('0b' + [...bitstring].reverse().join(''))) ?? ZERO
   }
 
   /** Return the measurement probability (|amplitude|²) for the given basis state bitstring. */
@@ -1065,7 +1185,7 @@ export class Circuit {
     if (entries.length === 0) return '0'
 
     const terms = entries.map(([idx, amp]) =>
-      `${fmtAmp(amp)}|${idx.toString(2).padStart(this.qubits, '0')}⟩`
+      `${fmtAmp(amp)}|${idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')}⟩`
     )
 
     let result = terms[0]!
@@ -1282,36 +1402,68 @@ export class Circuit {
     const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
     const circuit: IonQGate[] = []
     for (const op of flattenOps(this.#ops)) {
-      if (op.kind === 'cnot') {
-        circuit.push({ gate: 'cnot', control: op.control, target: op.target })
-      } else if (op.kind === 'swap') {
-        circuit.push({ gate: 'swap', targets: [op.a, op.b] })
-      } else if (op.kind === 'csrswap') {
-        throw new TypeError(`Gate 'csrswap' is not serializable to IonQ JSON`)
-      } else if (op.kind === 'single' && op.meta?.name === 'id') {
-        // Identity gate has no IonQ JSON representation; omit (no effect on state)
-      } else if (op.kind === 'single' && op.meta?.name === 'vz') {
-        // VirtualZ = Rz; IonQ has no vz gate, emit as rz
-        circuit.push({ gate: 'rz', target: op.q, rotation: op.meta.params![0]! / Math.PI })
-      } else if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) {
-        const { name, params } = op.meta
-        const g: IonQGate = { gate: name, target: op.q }
-        if (params) {
-          if (name === 'gpi' || name === 'gpi2') g.phase    = params[0]! / (2 * Math.PI)
-          else                                   g.rotation = params[0]! / Math.PI
+      switch (op.kind) {
+        case 'cnot':
+          circuit.push({ gate: 'cnot', control: op.control, target: op.target })
+          break
+        case 'swap':
+          circuit.push({ gate: 'swap', targets: [op.a, op.b] })
+          break
+        case 'csrswap':
+          throw new TypeError(`Gate 'csrswap' is not serializable to IonQ JSON`)
+        case 'single': {
+          if (op.meta?.name === 'id') {
+            // Identity gate has no IonQ JSON representation; omit (no effect on state)
+          } else if (op.meta?.name === 'vz') {
+            // VirtualZ = Rz; IonQ has no vz gate, emit as rz
+            circuit.push({ gate: 'rz', target: op.q, rotation: op.meta.params![0]! / Math.PI })
+          } else if (op.meta && IONQ_SINGLE.has(op.meta.name)) {
+            const { name, params } = op.meta
+            const g: IonQGate = { gate: name, target: op.q }
+            if (params) {
+              if (name === 'gpi' || name === 'gpi2') g.phase    = params[0]! / (2 * Math.PI)
+              else                                   g.rotation = params[0]! / Math.PI
+            }
+            circuit.push(g)
+          } else {
+            const n = op.meta?.name ?? 'single'
+            throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
+          }
+          break
         }
-        circuit.push(g)
-      } else if (op.kind === 'two' && op.meta && IONQ_TWO.has(op.meta.name)) {
-        const { name, params } = op.meta
-        const g: IonQGate = { gate: name, targets: [op.a, op.b] }
-        if (params) {
-          if (name === 'ms') g.phases   = [params[0]! / (2 * Math.PI), params[1]! / (2 * Math.PI)]
-          else               g.rotation = params[0]! / Math.PI
+        case 'two': {
+          if (op.meta && IONQ_TWO.has(op.meta.name)) {
+            const { name, params } = op.meta
+            const g: IonQGate = { gate: name, targets: [op.a, op.b] }
+            if (params) {
+              if (name === 'ms') g.phases   = [params[0]! / (2 * Math.PI), params[1]! / (2 * Math.PI)]
+              else               g.rotation = params[0]! / Math.PI
+            }
+            circuit.push(g)
+          } else {
+            const n = op.meta?.name ?? 'two'
+            throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
+          }
+          break
         }
-        circuit.push(g)
-      } else {
-        const n = (op as { meta?: GateMeta }).meta?.name ?? op.kind
-        throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
+        case 'controlled': {
+          const n = op.meta?.name ?? 'controlled'
+          throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
+        }
+        case 'toffoli':
+          throw new TypeError(`Gate 'toffoli' is not serializable to IonQ JSON`)
+        case 'cswap':
+          throw new TypeError(`Gate 'cswap' is not serializable to IonQ JSON`)
+        case 'measure':
+          throw new TypeError(`Gate 'measure' is not serializable to IonQ JSON`)
+        case 'reset':
+          throw new TypeError(`Gate 'reset' is not serializable to IonQ JSON`)
+        case 'if':
+          throw new TypeError(`Gate 'if' is not serializable to IonQ JSON`)
+        case 'unitary':
+          throw new TypeError("Gate 'unitary' is not serializable to IonQ JSON")
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
     return { format: 'ionq.circuit.v0', qubits: this.qubits, circuit }
@@ -1363,10 +1515,9 @@ export class Circuit {
           lines.push(`${qname}${ps} q[${op.control}],q[${op.target}];`)
           break
         }
-        case 'two': {
-          const n = op.meta?.name ?? 'two'
-          throw new TypeError(`Gate '${n}' has no OpenQASM 2.0 representation`)
-        }
+        case 'two':     throw new TypeError(`Gate '${op.meta?.name ?? 'two'}' has no OpenQASM 2.0 representation`)
+        case 'unitary': throw new TypeError("Gate 'unitary' has no OpenQASM 2.0 representation")
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
     return lines.join('\n')
@@ -1869,6 +2020,7 @@ export class Circuit {
           if (n === 'iswap') { lines.push(`qc.iswap(${op.a}, ${op.b})`); break }
           throw new TypeError(`Gate '${n ?? 'two'}' has no Qiskit representation`)
         }
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Qiskit representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -1917,6 +2069,12 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': {
+          const qs = op.qubits
+          lines.push(`qc.barrier(${qs.join(', ')})`)
+          break
+        }
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
     return [...imports, ...lines].join('\n')
@@ -1939,10 +2097,8 @@ export class Circuit {
         case 'measure': throw new TypeError('measure ops cannot be serialized to Cirq via toCirq(); use cirq.measure() manually')
         case 'reset':   throw new TypeError('reset ops cannot be serialized to Cirq via toCirq()')
         case 'if':      throw new TypeError('if ops cannot be serialized to Cirq')
-        case 'two': {
-          const n = op.meta?.name
-          throw new TypeError(`Gate '${n ?? 'two'}' has no Cirq representation`)
-        }
+        case 'two':     throw new TypeError(`Gate '${op.meta?.name ?? 'two'}' has no Cirq representation`)
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Cirq representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -1996,6 +2152,8 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
     return ops
@@ -2088,6 +2246,7 @@ export class Circuit {
         case 'reset':   body.push(`        Reset(q[${op.q}]);`);                                                               break
         case 'if':      throw new TypeError('if ops cannot be serialized to Q#')
         case 'two':     throw new TypeError(`Gate '${op.meta?.name ?? 'two'}' has no Q# representation`)
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Q# representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -2142,6 +2301,8 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2186,6 +2347,7 @@ export class Circuit {
           if (n === 'iswap') { used.add('ISWAP'); body.push(`p += ISWAP(${op.a}, ${op.b})`); break }
           throw new TypeError(`Gate '${n ?? 'two'}' has no pyQuil representation`)
         }
+        case 'unitary': throw new TypeError("Gate 'unitary' has no pyQuil representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -2217,6 +2379,8 @@ export class Circuit {
         }
         case 'controlled':
           throw new TypeError(`Gate '${op.meta?.name ?? 'controlled'}' has no standard pyQuil representation`)
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2265,6 +2429,7 @@ export class Circuit {
           if (n === 'iswap') { lines.push(`ISWAP ${op.a} ${op.b}`); break }
           throw new TypeError(`Gate '${n ?? 'two'}' has no Quil representation`)
         }
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Quil representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -2320,6 +2485,8 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
     return lines.join('\n')
@@ -2351,7 +2518,7 @@ export class Circuit {
 
     // Column assignment (same greedy algorithm as draw() / toSVG())
     const colOf = new Array<number>(n).fill(0)
-    type PlacedOp = { op: Op; col: number }
+    type PlacedOp = { op: FlatOp; col: number }
     const placed: PlacedOp[] = []
     for (const op of ops) {
       const qs = opQubits(op)
@@ -2413,12 +2580,21 @@ export class Circuit {
           for (let q = minQ + 1; q <= maxQ; q++) cell[q]![col] = ''
           break
         }
+        case 'unitary': {
+          const span = maxQ - minQ + 1
+          cell[minQ]![col] = span === 1 ? `\\gate{U}` : `\\gate[${span}]{U}`
+          for (let q = minQ + 1; q <= maxQ; q++) cell[q]![col] = ''
+          break
+        }
         case 'measure':
           cell[op.q]![col] = '\\meter{}'
           break
         case 'reset':
           cell[op.q]![col] = '\\gate{\\ket{0}}'
           break
+        case 'barrier': break
+        case 'if': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2461,6 +2637,7 @@ export class Circuit {
           if (n === 'iswap') { lines.push(`circ.iswap(${qa}, ${qb})`);                             break }
           throw new TypeError(`Gate '${n ?? 'two'}' has no Braket representation`)
         }
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Braket representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -2516,6 +2693,8 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2560,10 +2739,8 @@ export class Circuit {
         case 'measure': throw new TypeError('measure ops cannot be serialized to CudaQ via toCudaQ()')
         case 'reset':   throw new TypeError('reset ops cannot be serialized to CudaQ via toCudaQ()')
         case 'if':      throw new TypeError('if ops cannot be serialized to CudaQ via toCudaQ()')
-        case 'two': {
-          const n = op.meta?.name
-          throw new TypeError(`Gate '${n ?? 'two'}' has no CudaQ representation`)
-        }
+        case 'two':     throw new TypeError(`Gate '${op.meta?.name ?? 'two'}' has no CudaQ representation`)
+        case 'unitary': throw new TypeError("Gate 'unitary' has no CudaQ representation")
         case 'single': {
           if (!op.meta) throw new TypeError('Single-qubit op missing serialization meta')
           const { name: n, params: p } = op.meta
@@ -2621,6 +2798,8 @@ export class Circuit {
           }
           break
         }
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2733,6 +2912,9 @@ export class Circuit {
           col({ [c]: '•', [t]: g })
           break
         }
+        case 'unitary': throw new TypeError("Gate 'unitary' has no Quirk representation")
+        case 'barrier': break
+        default: { const _exhaustive: never = op; void _exhaustive }
       }
     }
 
@@ -2837,9 +3019,9 @@ export class Circuit {
     let state = mpsInit(this.qubits)
     if (initialState !== undefined) {
       svFromBitstring(initialState, this.qubits) // validate
-      const rev = initialState.split('').reverse() // rev[q] = bit for qubit q
+      const bits = initialState.split('') // bits[q] = bit for qubit q (q0 leftmost)
       for (let q = 0; q < this.qubits; q++) {
-        if (rev[q] === '1') state = mpsApply1(state, q, G.X)
+        if (bits[q] === '1') state = mpsApply1(state, q, G.X)
       }
     }
 
@@ -2853,8 +3035,17 @@ export class Circuit {
         case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
         case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
         case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
+        case 'unitary': {
+          const n = op.qubits.length
+          if (n === 1)      state = mpsApply1(state, op.qubits[0]!, op.matrix as Gate2x2)
+          else if (n === 2) state = mpsApply2(state, op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4, maxBond)
+          else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
+          break
+        }
         case 'measure': case 'reset': case 'if':
           throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+        case 'barrier': break
+        default: { const _exhaustive: never = op; break }
       }
     }
 
@@ -2873,7 +3064,7 @@ export class Circuit {
   /**
    * Return exact floating-point probabilities from the statevector — no sampling variance.
    *
-   * Keys are IonQ bitstrings (q0 rightmost). Only non-negligible amplitudes are included.
+   * Keys are standard bitstrings (q0 leftmost). Only non-negligible amplitudes are included.
    * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
    */
   exactProbs({ initialState }: { initialState?: string } = {}): Readonly<Record<string, number>> {
@@ -2884,9 +3075,51 @@ export class Circuit {
     const sv = simulatePure(this.#ops, this.qubits, init)
     const out: Record<string, number> = {}
     for (const [idx, p] of probabilities(sv)) {
-      out[idx.toString(2).padStart(this.qubits, '0')] = p
+      out[idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = p
     }
     return Object.freeze(out)
+  }
+
+  /**
+   * Compute the Pauli expectation value ⟨ψ|P|ψ⟩ for a tensor-product Pauli operator P.
+   *
+   * `pauli` is a string of length `qubits` over {I, X, Y, Z} (case-insensitive).
+   * `pauli[q]` specifies the Pauli acting on qubit q (q0 leftmost, matching bitstring convention).
+   *
+   * Basis rotations: X → H, Y → Rx(π/2), Z/I → identity.
+   * Throws `TypeError` for circuits with mid-circuit measure, reset, or if ops.
+   *
+   * @example
+   * new Circuit(1).expectation('Z')              // 1   (|0⟩ is +1 eigenstate of Z)
+   * new Circuit(1).x(0).expectation('Z')         // -1  (|1⟩ is −1 eigenstate of Z)
+   * new Circuit(1).h(0).expectation('X')         // 1   (|+⟩ is +1 eigenstate of X)
+   * new Circuit(2).h(0).cnot(0,1).expectation('ZZ')  // 1   (Bell state)
+   */
+  expectation(pauli: string): number {
+    const n = this.qubits
+    pauli = pauli.toUpperCase()
+    if (pauli.length !== n) throw new TypeError(`pauli '${pauli}' length must equal qubits (${n})`)
+    if (!/^[IXYZ]+$/.test(pauli)) throw new TypeError(`pauli must contain only I, X, Y, Z`)
+    if (!/[XYZ]/.test(pauli)) return 1
+
+    // Rotate each qubit to the Z basis for its Pauli operator
+    let rot: Circuit = this
+    for (let q = 0; q < n; q++) {
+      if (pauli[q] === 'X') rot = rot.h(q)
+      else if (pauli[q] === 'Y') rot = rot.rx(Math.PI / 2, q)
+    }
+
+    // ⟨P⟩ = Σ_b (-1)^{parity(b)} · Pr(b)  where parity = XOR of bits at non-I positions
+    const probs = rot.exactProbs()
+    let exp = 0
+    for (const [bs, prob] of Object.entries(probs)) {
+      let parity = 0
+      for (let q = 0; q < n; q++) {
+        if (pauli[q] !== 'I' && bs[q] === '1') parity ^= 1
+      }
+      exp += (parity === 0 ? 1 : -1) * prob
+    }
+    return exp
   }
 
   // ── JSON save / load ─────────────────────────────────────────────────────
@@ -3247,8 +3480,8 @@ export class Circuit {
           case 'csrswap': qubits = [op.control, op.a, op.b];            break
           case 'measure': qubits = [op.q];                               break
           case 'reset':   qubits = [op.q];                               break
-          case 'subcircuit': qubits = [...op.qubits];                    break
-          default:        qubits = [];                                   break
+          case 'unitary': qubits = [...op.qubits];                       break
+          default: { const _exhaustive: never = op; qubits = []; break }
         }
 
         if (qubits.length === 0) continue

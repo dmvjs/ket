@@ -324,8 +324,8 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
     for (const [bs, prob] of Object.entries(probs)) {
       let parity = 0
       for (let q = 0; q < n; q++) {
-        const pauli = ops[n - 1 - q]!
-        if (pauli !== 'I' && bs[n - 1 - q] === '1') parity ^= 1
+        const pauli = ops[n - 1 - q]!  // PauliTerm: ops[n-1-q] acts on qubit q
+        if (pauli !== 'I' && bs[q] === '1') parity ^= 1  // bs[q] = qubit q's bit (q0 leftmost)
       }
       exp += (parity === 0 ? 1 : -1) * prob
     }

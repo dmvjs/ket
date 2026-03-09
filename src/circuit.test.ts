@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
-import type { IonQCircuit } from './circuit.js'
+import type { IonQCircuit, FlatOp } from './circuit.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
@@ -247,21 +247,21 @@ describe('CNOT gate', () => {
 
   it('CNOT·CNOT = I', () => {
     const r = new Circuit(2).x(0).cnot(0, 1).cnot(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10) // back to |10⟩ (q0=1)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10) // back to |q0=1,q1=0⟩
   })
 })
 
 describe('SWAP gate', () => {
   it('swaps |10⟩ to |01⟩', () => {
-    // x(0) sets q0=1 → bitstring "01" (q0 is rightmost)
-    // swap(0,1) → q1=1 → bitstring "10"
+    // x(0) sets q0=1 → bitstring "10" (q0 is leftmost)
+    // swap(0,1) → q1=1 → bitstring "01"
     const r = new Circuit(2).x(0).swap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
   })
 
   it('SWAP·SWAP = I', () => {
     const r = new Circuit(2).x(0).swap(0, 1).swap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -292,10 +292,10 @@ describe('Bell states', () => {
     expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
   })
 
-  it('|Ψ+⟩: H(0)·CNOT(0,1)·X(0) produces ~50/50 |01⟩ and |10⟩', () => {
+  it('|Ψ+⟩: H(0)·CNOT(0,1)·X(0) produces ~50/50 |10⟩ and |01⟩', () => {
     const r = new Circuit(2).h(0).cnot(0, 1).x(0).run({ shots: 10000, seed: 42 })
-    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
     expect(near(r.probs['10'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
   })
 })
 
@@ -328,8 +328,8 @@ describe('Deutsch-Jozsa', () => {
     // Input qubits 0,1 should both be 0 (constant function)
     // ancilla qubit 2 may be anything; check input bits
     for (const [bs] of Object.entries(r.probs)) {
-      expect(bs[bs.length - 1]).toBe('0') // q0 = 0
-      expect(bs[bs.length - 2]).toBe('0') // q1 = 0
+      expect(bs[0]).toBe('0') // q0 = 0 (leftmost)
+      expect(bs[1]).toBe('0') // q1 = 0
     }
   })
 
@@ -343,8 +343,8 @@ describe('Deutsch-Jozsa', () => {
       .run({ shots: 100, seed: 1 })
     // Input register should NOT be |00⟩ (balanced function)
     for (const [bs] of Object.entries(r.probs)) {
-      // q0 bit (rightmost) should be 1 for the balanced oracle
-      expect(bs[bs.length - 1]).toBe('1')
+      // q0 bit (leftmost) should be 1 for the balanced oracle
+      expect(bs[0]).toBe('1')
     }
   })
 })
@@ -361,9 +361,9 @@ describe('Bernstein-Vazirani', () => {
       .h(0).h(1).h(2)            // H input
       .run({ shots: 100, seed: 1 })
     // Input register (qubits 0,1,2) should all be in state |101⟩
-    // In our bitstring: q0=1, q1=0, q2=1 → rightmost 3 bits = '101'
+    // In q0-leftmost bitstring: q0=1, q1=0, q2=1 → first 3 chars = '101'
     for (const [bs] of Object.entries(r.probs)) {
-      const inputBits = bs.slice(-3) // last 3 chars = q2q1q0
+      const inputBits = bs.slice(0, 3) // first 3 chars = q0q1q2
       expect(inputBits).toBe('101')
     }
   })
@@ -431,7 +431,7 @@ describe('BigInt state indices (no 32-bit overflow)', () => {
     const r = new Circuit(31).h(0).cnot(0, 30).run({ shots: 256, seed: 42 })
     expect(Object.keys(r.probs)).toHaveLength(2)
     const zeros = '0'.repeat(31)
-    const ones  = '1' + '0'.repeat(29) + '1' // q30=1, q0=1, rest 0
+    const ones  = '1' + '0'.repeat(29) + '1' // q0=1 (leftmost), q30=1 (rightmost)
     expect((r.probs[zeros] ?? 0) + (r.probs[ones] ?? 0)).toBeCloseTo(1.0, 1)
   })
 
@@ -443,8 +443,8 @@ describe('BigInt state indices (no 32-bit overflow)', () => {
   it('qubit 40 works correctly', () => {
     const r = new Circuit(41).x(40).run({ shots: 10, seed: 1 })
     expect(Object.keys(r.probs)).toHaveLength(1)
-    // bitstring: q40=1, all others 0 → '1' followed by 40 '0's
-    expect(r.probs['1' + '0'.repeat(40)]).toBeCloseTo(1.0, 10)
+    // bitstring: q40=1, all others 0 → 40 '0's followed by '1' (q0 leftmost, q40 rightmost)
+    expect(r.probs['0'.repeat(40) + '1']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -689,9 +689,9 @@ describe('u3(θ, φ, λ) — general single-qubit unitary', () => {
 //   • Deterministic circuit identities for iSWAP and srSWAP
 
 describe('xx(θ) — Ising-XX interaction', () => {
-  it('xx(0) = I: no effect on |01⟩', () => {
+  it('xx(0) = I: no effect on |10⟩', () => {
     const r = new Circuit(2).x(0).xx(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // XX(π/2)|00⟩ = (1/√2)|00⟩ − (i/√2)|11⟩ → Bell-like pair
@@ -718,9 +718,9 @@ describe('xx(θ) — Ising-XX interaction', () => {
 })
 
 describe('yy(θ) — Ising-YY interaction', () => {
-  it('yy(0) = I: no effect on |01⟩', () => {
+  it('yy(0) = I: no effect on |10⟩', () => {
     const r = new Circuit(2).x(0).yy(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // YY(π/2)|00⟩ = (1/√2)|00⟩ + (i/√2)|11⟩ — entangled, |00⟩/|11⟩ only
@@ -741,7 +741,7 @@ describe('yy(θ) — Ising-YY interaction', () => {
 describe('zz(θ) — Ising-ZZ interaction', () => {
   it('zz(0) = I: no effect', () => {
     const r = new Circuit(2).x(0).zz(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // ZZ(θ) = CNOT·(I⊗Rz(θ))·CNOT — verified via interference
@@ -760,14 +760,14 @@ describe('zz(θ) — Ising-ZZ interaction', () => {
 })
 
 describe('iswap — iSWAP gate (= XY(π))', () => {
-  it('iswap|01⟩ → |10⟩ (swaps qubits, phase is unobservable)', () => {
+  it('iswap|10⟩ → |01⟩ (swaps qubits, phase is unobservable)', () => {
     const r = new Circuit(2).x(0).iswap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
   })
 
-  it('iswap|10⟩ → |01⟩', () => {
+  it('iswap|01⟩ → |10⟩', () => {
     const r = new Circuit(2).x(1).iswap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   it('iswap|00⟩ = |00⟩ and iswap|11⟩ = |11⟩ (no swap when same)', () => {
@@ -775,23 +775,23 @@ describe('iswap — iSWAP gate (= XY(π))', () => {
     expect(new Circuit(2).x(0).x(1).iswap(0, 1).run({ shots: 100, seed: 1 }).probs['11']).toBeCloseTo(1.0, 10)
   })
 
-  // iSWAP⁴ = I in the full gate (iSWAP² = −I on |01⟩/|10⟩ subspace)
+  // iSWAP⁴ = I in the full gate (iSWAP² = −I on |10⟩/|01⟩ subspace)
   it('iswap⁴ = I: four applications restore the state', () => {
     const r = new Circuit(2).x(0).iswap(0, 1).iswap(0, 1).iswap(0, 1).iswap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
 describe('srswap — √iSWAP (= XY(π/2))', () => {
-  it('srswap|01⟩ → 50% |01⟩ / 50% |10⟩ (superposition)', () => {
+  it('srswap|10⟩ → 50% |10⟩ / 50% |01⟩ (superposition)', () => {
     const r = new Circuit(2).x(0).srswap(0, 1).run({ shots: 10000, seed: 42 })
-    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
     expect(near(r.probs['10'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
   })
 
-  it('srswap² = iswap: srswap·srswap|01⟩ → |10⟩', () => {
+  it('srswap² = iswap: srswap·srswap|10⟩ → |01⟩', () => {
     const r = new Circuit(2).x(0).srswap(0, 1).srswap(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
   })
 
   it('srswap|00⟩ = |00⟩ (no mixing outside |01⟩/|10⟩ subspace)', () => {
@@ -803,17 +803,17 @@ describe('srswap — √iSWAP (= XY(π/2))', () => {
 describe('xy(θ) — XY interaction (root gate for iswap/srswap)', () => {
   it('xy(0) = I', () => {
     const r = new Circuit(2).x(0).xy(0, 0, 1).run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+  })
+
+  it('xy(π) = iswap: xy(π)|10⟩ → |01⟩', () => {
+    const r = new Circuit(2).x(0).xy(Math.PI, 0, 1).run({ shots: 100, seed: 1 })
     expect(r.probs['01']).toBeCloseTo(1.0, 10)
   })
 
-  it('xy(π) = iswap: xy(π)|01⟩ → |10⟩', () => {
-    const r = new Circuit(2).x(0).xy(Math.PI, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)
-  })
-
-  it('xy(π/2) = srswap: xy(π/2)² |01⟩ → |10⟩', () => {
+  it('xy(π/2) = srswap: xy(π/2)² |10⟩ → |01⟩', () => {
     const r = new Circuit(2).x(0).xy(Math.PI / 2, 0, 1).xy(Math.PI / 2, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -830,7 +830,7 @@ describe('xy(θ) — XY interaction (root gate for iswap/srswap)', () => {
 //   ct⁴ = cz                      cu1(π) = cz  (U1(π) = Z)
 //   cu3(π,0,π) = cx  (U3(π,0,π) = X)
 //
-// Bitstring convention: q0 is rightmost, so x(0) → '01' in a 2-qubit system.
+// Bitstring convention: q0 is leftmost, so x(0) → '10' in a 2-qubit system.
 
 describe('cx (= cnot alias)', () => {
   it('cx(control=0) leaves |00⟩ unchanged', () => {
@@ -860,7 +860,7 @@ describe('cy — controlled-Y', () => {
   // Y² = -I (global phase unobservable) → double application restores state
   it('cy² restores target: x(0)·cy·cy returns to |10⟩', () => {
     const r = new Circuit(2).x(0).cy(0, 1).cy(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // H(0)·cy(0,1)|00⟩: cy fires half the time → |00⟩ or i|11⟩, each with p=½
@@ -880,7 +880,7 @@ describe('cz — controlled-Z', () => {
 
   it('x(0)·cz(0,1): Z|0⟩ = |0⟩ → state unchanged (phase unobservable)', () => {
     const r = new Circuit(2).x(0).cz(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // H(t)·CZ·H(t) = CNOT: canonical identity
@@ -903,24 +903,24 @@ describe('ch — controlled-H', () => {
     expect(r.probs['00']).toBeCloseTo(1.0, 10)
   })
 
-  // H fires on q1 → superposition of |01⟩ and |11⟩ (q0=1 throughout)
-  it('x(0)·ch(0,1): H|0⟩ produces 50/50 over |01⟩/|11⟩', () => {
+  // H fires on q1 → superposition of |10⟩ and |11⟩ (q0=1 throughout)
+  it('x(0)·ch(0,1): H|0⟩ produces 50/50 over |10⟩/|11⟩', () => {
     const r = new Circuit(2).x(0).ch(0, 1).run({ shots: 10000, seed: 42 })
-    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['10'] ?? 0, 0.5)).toBe(true)
     expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
   })
 
   // H² = I: two CH applications with control=1 restore the state
   it('ch² = I: x(0)·ch·ch returns to |10⟩', () => {
     const r = new Circuit(2).x(0).ch(0, 1).ch(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
 describe('crx(θ) — controlled-Rx', () => {
   it('crx(0) = I', () => {
     const r = new Circuit(2).x(0).crx(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // Rx(π) = X up to global phase → CRx(π) = CX
@@ -931,21 +931,21 @@ describe('crx(θ) — controlled-Rx', () => {
 
   it('crx(π/2) produces 50/50 superposition on target (control=1)', () => {
     const r = new Circuit(2).x(0).crx(Math.PI / 2, 0, 1).run({ shots: 10000, seed: 42 })
-    expect(near(r.probs['01'] ?? 0, 0.5)).toBe(true)
+    expect(near(r.probs['10'] ?? 0, 0.5)).toBe(true)
     expect(near(r.probs['11'] ?? 0, 0.5)).toBe(true)
   })
 
   it('crx(θ)·crx(-θ) = I on activated subspace', () => {
     const θ = 0.7
     const r = new Circuit(2).x(0).crx(θ, 0, 1).crx(-θ, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
 describe('cry(θ) — controlled-Ry', () => {
   it('cry(0) = I', () => {
     const r = new Circuit(2).x(0).cry(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // Ry(π) flips |0⟩ → |1⟩
@@ -957,14 +957,14 @@ describe('cry(θ) — controlled-Ry', () => {
   it('cry(θ)·cry(-θ) = I on activated subspace', () => {
     const θ = 0.7
     const r = new Circuit(2).x(0).cry(θ, 0, 1).cry(-θ, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
 describe('crz(θ) — controlled-Rz', () => {
   it('crz(0) = I', () => {
     const r = new Circuit(2).x(0).crz(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // Rz(π)|+⟩ = i|-⟩; H·i|-⟩ = i|1⟩ → deterministic |1⟩ on target
@@ -976,14 +976,14 @@ describe('crz(θ) — controlled-Rz', () => {
   it('crz(θ)·crz(-θ) = I on activated subspace', () => {
     const θ = 0.7
     const r = new Circuit(2).x(0).crz(θ, 0, 1).crz(-θ, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
 describe('cu1(λ) — controlled phase gate', () => {
   it('cu1(0) = I', () => {
     const r = new Circuit(2).x(0).cu1(0, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // U1(π) = Z → CU1(π) = CZ → H(t)·CU1(π)·H(t) = CNOT
@@ -993,10 +993,10 @@ describe('cu1(λ) — controlled phase gate', () => {
   })
 
   // Ramsey fringe: H·U1(λ)·H|0⟩ → p(|0⟩) = (1+cosλ)/2
-  it('Ramsey: x(0)·h(1)·cu1(π/4)·h(1) → p(|01⟩) ≈ 0.854', () => {
+  it('Ramsey: x(0)·h(1)·cu1(π/4)·h(1) → p(|10⟩) ≈ 0.854', () => {
     const expected = (1 + Math.cos(Math.PI / 4)) / 2
     const r = new Circuit(2).x(0).h(1).cu1(Math.PI / 4, 0, 1).h(1).run({ shots: 50000, seed: 42 })
-    expect(near(r.probs['01'] ?? 0, expected, 0.01)).toBe(true)
+    expect(near(r.probs['10'] ?? 0, expected, 0.01)).toBe(true)
   })
 })
 
@@ -1008,9 +1008,9 @@ describe('cr2/cr4/cr8 — controlled phase rotations', () => {
 
   it('cr2·cr2† = I: inverse pair restores state', () => {
     // x(0)→q0=|1⟩, h(1)→q1=|+⟩; cr2·crz(-π/2) = R2·R2† = I on q1; h(1)→q1=|0⟩
-    // q0=|1⟩, q1=|0⟩ → bitstring '01' (q0 rightmost)
+    // q0=|1⟩, q1=|0⟩ → bitstring '10' (q0 leftmost)
     const r = new Circuit(2).x(0).h(1).cr2(0, 1).crz(-Math.PI / 2, 0, 1).h(1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   it('cr4 leaves |00⟩ unchanged', () => {
@@ -1048,7 +1048,7 @@ describe('cu3(θ,φ,λ) — controlled general unitary', () => {
   it('unitarity: x(0)·cu3(θ,φ,λ)·cu3(-θ,-λ,-φ) restores |10⟩', () => {
     const [θ, φ, λ] = [1.1, 0.7, 0.3]
     const r = new Circuit(2).x(0).cu3(θ, φ, λ, 0, 1).cu3(-θ, -λ, -φ, 0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -1060,7 +1060,7 @@ describe('cs — controlled-S', () => {
 
   it('cs·csdg = I: x(0)·cs·csdg restores |10⟩', () => {
     const r = new Circuit(2).x(0).cs(0, 1).csdg(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // S² = Z → cs² = cz (tested via Hadamard-basis equivalence)
@@ -1079,7 +1079,7 @@ describe('csdg — controlled-S†', () => {
 
   it('csdg·cs = I: x(0)·csdg·cs restores |10⟩', () => {
     const r = new Circuit(2).x(0).csdg(0, 1).cs(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -1091,7 +1091,7 @@ describe('ct — controlled-T', () => {
 
   it('ct·ctdg = I: x(0)·ct·ctdg restores |10⟩', () => {
     const r = new Circuit(2).x(0).ct(0, 1).ctdg(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 
   // T⁴ = Z → ct⁴ = cz (tested via Hadamard-basis equivalence)
@@ -1110,7 +1110,7 @@ describe('ctdg — controlled-T†', () => {
 
   it('ctdg·ct = I: x(0)·ctdg·ct restores |10⟩', () => {
     const r = new Circuit(2).x(0).ctdg(0, 1).ct(0, 1).run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -1155,20 +1155,20 @@ describe('Quantum Fourier Transform (2-qubit)', () => {
     for (const p of Object.values(r.probs)) expect(near(p, 0.25, 0.02)).toBe(true)
   })
 
-  it('QFT|01⟩ (q0=1) also produces uniform distribution', () => {
+  it('QFT|10⟩ (q0=1) also produces uniform distribution', () => {
     const r = qft2(new Circuit(2).x(0)).run({ shots: 20000, seed: 42 })
     expect(Object.keys(r.probs)).toHaveLength(4)
     for (const p of Object.values(r.probs)) expect(near(p, 0.25, 0.02)).toBe(true)
   })
 
   // IQFT · QFT = I: SWAP · H(q0) · CU1(−π/2, q0, q1) · H(q1) is QFT†
-  it('IQFT · QFT = I: round-trip recovers |01⟩', () => {
+  it('IQFT · QFT = I: round-trip recovers |10⟩', () => {
     const r = new Circuit(2)
       .x(0)
       .h(1).cu1(Math.PI / 2, 0, 1).h(0).swap(0, 1)          // QFT
       .swap(0, 1).h(0).cu1(-Math.PI / 2, 0, 1).h(1)          // QFT†
       .run({ shots: 100, seed: 1 })
-    expect(r.probs['01']).toBeCloseTo(1.0, 10)
+    expect(r.probs['10']).toBeCloseTo(1.0, 10)
   })
 })
 
@@ -1217,11 +1217,11 @@ describe('Multi-gate integration', () => {
 // index remapping — making them O(|ψ|) in the number of non-zero amplitudes.
 //
 // Helper: build a circuit with the given bitstring pre-loaded as a basis state.
-// Bitstring convention: q0 is rightmost (e.g. '011' → q0=1, q1=1, q2=0).
+// Bitstring convention: q0 is leftmost (e.g. '110' → q0=1, q1=1, q2=0).
 function basis(bitstring: string): Circuit {
   let c = new Circuit(bitstring.length)
   for (let i = 0; i < bitstring.length; i++) {
-    if (bitstring[bitstring.length - 1 - i] === '1') c = c.x(i)
+    if (bitstring[i] === '1') c = c.x(i)
   }
   return c
 }
@@ -1229,39 +1229,40 @@ function basis(bitstring: string): Circuit {
 describe('ccx — Toffoli gate', () => {
   // ── Classical truth table ──
   // ccx(0,1,2): c1=q0, c2=q1, target=q2.  Flip target iff c1=c2=1.
+  // Bitstrings use standard convention: q0 leftmost.
   it.each([
     ['000', '000'],  // both controls 0 — identity
     ['010', '010'],  // only q1=1     — identity
-    ['001', '001'],  // only q0=1     — identity
-    ['011', '111'],  // q0=q1=1       — flip q2
+    ['100', '100'],  // only q0=1     — identity
+    ['110', '111'],  // q0=q1=1       — flip q2
   ] as [string, string][])('|%s⟩ → |%s⟩', (input, expected) => {
     const r = basis(input).ccx(0, 1, 2).run({ shots: 100, seed: 1 })
     expect(r.probs[expected]).toBeCloseTo(1.0, 10)
   })
 
   // ── Self-inverse ──
-  it('ccx² = I: |011⟩ → |111⟩ → |011⟩', () => {
-    const r = basis('011').ccx(0, 1, 2).ccx(0, 1, 2).run({ shots: 100, seed: 1 })
-    expect(r.probs['011']).toBeCloseTo(1.0, 10)
+  it('ccx² = I: |110⟩ → |111⟩ → |110⟩', () => {
+    const r = basis('110').ccx(0, 1, 2).ccx(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['110']).toBeCloseTo(1.0, 10)
   })
 
   // ── Control qubit symmetry ──
   // The Toffoli is symmetric in its two control qubits.
   it('ccx(c1,c2,t) ≡ ccx(c2,c1,t): controls are interchangeable', () => {
-    const r1 = basis('011').ccx(0, 1, 2).run({ shots: 100, seed: 1 })
-    const r2 = basis('011').ccx(1, 0, 2).run({ shots: 100, seed: 1 })
+    const r1 = basis('110').ccx(0, 1, 2).run({ shots: 100, seed: 1 })
+    const r2 = basis('110').ccx(1, 0, 2).run({ shots: 100, seed: 1 })
     expect(r1.probs['111']).toBeCloseTo(r2.probs['111'] ?? 0, 10)
   })
 
   // ── Superposition: genuinely 3-qubit entangled state ──
   // H(0)·H(1) puts controls in (1/2)(|00⟩+|01⟩+|10⟩+|11⟩).
   // CCX flips target only for |11⟩ control component.
-  // Result: (1/2)(|000⟩ + |001⟩ + |010⟩ + |111⟩) — 25% each.
-  it('H(0)·H(1)·ccx creates (|000⟩+|001⟩+|010⟩+|111⟩)/2: 25% each', () => {
+  // Result: (1/2)(|000⟩ + |100⟩ + |010⟩ + |111⟩) — 25% each.
+  it('H(0)·H(1)·ccx creates (|000⟩+|100⟩+|010⟩+|111⟩)/2: 25% each', () => {
     const r = new Circuit(3).h(0).h(1).ccx(0, 1, 2).run({ shots: 20000, seed: 42 })
     expect(Object.keys(r.probs)).toHaveLength(4)
     expect(near(r.probs['000'] ?? 0, 0.25, 0.02)).toBe(true)
-    expect(near(r.probs['001'] ?? 0, 0.25, 0.02)).toBe(true)
+    expect(near(r.probs['100'] ?? 0, 0.25, 0.02)).toBe(true)
     expect(near(r.probs['010'] ?? 0, 0.25, 0.02)).toBe(true)
     expect(near(r.probs['111'] ?? 0, 0.25, 0.02)).toBe(true)
   })
@@ -1288,21 +1289,22 @@ describe('ccx — Toffoli gate', () => {
 describe('cswap — Fredkin gate', () => {
   // ── Classical truth table ──
   // cswap(0,1,2): control=q0, swap q1 and q2.
+  // Bitstrings use standard convention: q0 leftmost.
   it.each([
     ['000', '000'],  // control=0: identity
     ['010', '010'],  // control=0: no swap (q1=1 stays)
-    ['001', '001'],  // control=1, q1=q2=0: bits equal, no visible change
-    ['011', '101'],  // control=1: q1=1,q2=0 → swap → q1=0,q2=1
-    ['101', '011'],  // control=1: q2=1,q1=0 → swap → q2=0,q1=1
+    ['100', '100'],  // control=1, q1=q2=0: bits equal, no visible change
+    ['110', '101'],  // control=1: q1=1,q2=0 → swap → q1=0,q2=1
+    ['101', '110'],  // control=1: q2=1,q1=0 → swap → q2=0,q1=1
   ] as [string, string][])('|%s⟩ → |%s⟩', (input, expected) => {
     const r = basis(input).cswap(0, 1, 2).run({ shots: 100, seed: 1 })
     expect(r.probs[expected]).toBeCloseTo(1.0, 10)
   })
 
   // ── Self-inverse ──
-  it('cswap² = I: |011⟩ → |101⟩ → |011⟩', () => {
-    const r = basis('011').cswap(0, 1, 2).cswap(0, 1, 2).run({ shots: 100, seed: 1 })
-    expect(r.probs['011']).toBeCloseTo(1.0, 10)
+  it('cswap² = I: |110⟩ → |101⟩ → |110⟩', () => {
+    const r = basis('110').cswap(0, 1, 2).cswap(0, 1, 2).run({ shots: 100, seed: 1 })
+    expect(r.probs['110']).toBeCloseTo(1.0, 10)
   })
 
   // ── Swap test (quantum algorithm) ──────────────────────────────────────────
@@ -1315,7 +1317,7 @@ describe('cswap — Fredkin gate', () => {
     // control=q0, ψ=q1=|0⟩, φ=q2=|0⟩
     const r = new Circuit(3).h(0).cswap(0, 1, 2).h(0).run({ shots: 100, seed: 1 })
     const p0 = Object.entries(r.probs)
-      .filter(([bs]) => bs[bs.length - 1] === '0') // q0=0 (control measured 0)
+      .filter(([bs]) => bs[0] === '0') // q0=0 (control measured 0, q0 leftmost)
       .reduce((sum, [, p]) => sum + p, 0)
     expect(p0).toBeCloseTo(1.0, 10)
   })
@@ -1324,7 +1326,7 @@ describe('cswap — Fredkin gate', () => {
     // x(2) prepares φ=|1⟩ on q2; ψ=q1 stays |0⟩
     const r = new Circuit(3).x(2).h(0).cswap(0, 1, 2).h(0).run({ shots: 20000, seed: 42 })
     const p0 = Object.entries(r.probs)
-      .filter(([bs]) => bs[bs.length - 1] === '0')
+      .filter(([bs]) => bs[0] === '0')
       .reduce((sum, [, p]) => sum + p, 0)
     expect(near(p0, 0.5)).toBe(true)
   })
@@ -1333,7 +1335,7 @@ describe('cswap — Fredkin gate', () => {
     // h(1) and h(2) both prepare |+⟩; identical states → p=1
     const r = new Circuit(3).h(1).h(2).h(0).cswap(0, 1, 2).h(0).run({ shots: 10000, seed: 42 })
     const p0 = Object.entries(r.probs)
-      .filter(([bs]) => bs[bs.length - 1] === '0')
+      .filter(([bs]) => bs[0] === '0')
       .reduce((sum, [, p]) => sum + p, 0)
     expect(near(p0, 1.0, 0.01)).toBe(true)
   })
@@ -1342,7 +1344,7 @@ describe('cswap — Fredkin gate', () => {
   it('cswap(0,2,4) on 5 qubits: swaps non-adjacent target qubits', () => {
     // control=q0=1, q2=1 → cswap swaps q2↔q4 → q4=1, q2=0
     const r = new Circuit(5).x(0).x(2).cswap(0, 2, 4).run({ shots: 100, seed: 1 })
-    // q0=1(bit0), q4=1(bit4) → index=17 → bitstring '10001'
+    // q0=1 (leftmost), q4=1 (rightmost) → bitstring '10001'
     expect(r.probs['10001']).toBeCloseTo(1.0, 10)
   })
 })
@@ -1359,7 +1361,7 @@ describe('csrswap — C-√iSWAP gate', () => {
   it('control=1, a=b=0: diagonal — |100⟩ unchanged', () => {
     // control=q0=1, a=q1=0, b=q2=0 → SrSwap diagonal entry → unchanged
     const r = new Circuit(3).x(0).csrswap(0, 1, 2).run({ shots: 100, seed: 1 })
-    expect(r.probs['001']).toBeCloseTo(1.0, 10)  // q0=1 is rightmost: '001'
+    expect(r.probs['100']).toBeCloseTo(1.0, 10)  // q0=1 is leftmost: '100'
   })
 
   it('control=1: csrswap² = cswap (√iSWAP composed twice = iSWAP; on |01⟩ subspace iSWAP = swap up to phase)', () => {
@@ -1524,10 +1526,10 @@ describe('Quantum teleportation', () => {
 
   it('teleports |0⟩: q2 measures as |0⟩', () => {
     const r = teleport(c => c).run({ shots: 1000, seed: 1 })
-    // q2 (bit 2) should be 0 — only bitstrings with bit2=0 (xxx where x[0]=0)
+    // q2 (bit 2) should be 0 — in q0-leftmost bitstring, q2 is at index 2
     let p0 = 0
     for (const [bs, p] of Object.entries(r.probs)) {
-      if (bs[0] === '0') p0 += p  // bit2 is MSB of 3-qubit string
+      if (bs[2] === '0') p0 += p  // q2 is at index 2 in q0-leftmost convention
     }
     expect(p0).toBeCloseTo(1.0, 10)
   })
@@ -1536,7 +1538,7 @@ describe('Quantum teleportation', () => {
     const r = teleport(c => c.x(0)).run({ shots: 1000, seed: 1 })
     let p1 = 0
     for (const [bs, p] of Object.entries(r.probs)) {
-      if (bs[0] === '1') p1 += p
+      if (bs[2] === '1') p1 += p
     }
     expect(p1).toBeCloseTo(1.0, 10)
   })
@@ -1545,7 +1547,7 @@ describe('Quantum teleportation', () => {
     const r = teleport(c => c.h(0)).run({ shots: 8000, seed: 2 })
     let p0 = 0, p1 = 0
     for (const [bs, p] of Object.entries(r.probs)) {
-      if (bs[0] === '0') p0 += p
+      if (bs[2] === '0') p0 += p
       else               p1 += p
     }
     expect(near(p0, 0.5)).toBe(true)
@@ -1558,7 +1560,7 @@ describe('Quantum teleportation', () => {
     const r = teleport(c => c.rx(Math.PI / 3, 0)).run({ shots: 20000, seed: 3 })
     let p0 = 0
     for (const [bs, p] of Object.entries(r.probs)) {
-      if (bs[0] === '0') p0 += p
+      if (bs[2] === '0') p0 += p
     }
     expect(p0).toBeCloseTo(expected0, 1)
   })
@@ -1661,7 +1663,7 @@ describe('probability(bitstring)', () => {
     const c = new Circuit(3).h(0).cnot(0, 1).rx(0.7, 2)
     const sv = c.statevector()
     let total = 0
-    for (const bs of sv.keys()) total += c.probability(bs.toString(2).padStart(3, '0'))
+    for (const bs of sv.keys()) total += c.probability(bs.toString(2).padStart(3, '0').split('').reverse().join(''))
     expect(total).toBeCloseTo(1, 10)
   })
 })
@@ -1779,8 +1781,8 @@ describe('reset', () => {
   it('reset after entanglement restores target qubit to |0⟩', () => {
     // Bell pair on q0/q1; reset q0 → q0 always |0⟩, q1 collapses to definite state
     const r = new Circuit(2).h(0).cnot(0, 1).reset(0).run({ shots: 100, seed: 1 })
-    // Rightmost character in bitstring is q0 → must be 0 in all outcomes
-    expect(Object.keys(r.probs).every(bs => bs.at(-1) === '0')).toBe(true)
+    // Leftmost character in bitstring is q0 → must be 0 in all outcomes
+    expect(Object.keys(r.probs).every(bs => bs[0] === '0')).toBe(true)
   })
 
   it('reset(q, 1) resets to |1⟩ — qubit always measures as 1', () => {
@@ -1849,7 +1851,7 @@ describe('if — conditional gate (2b)', () => {
       .measure(1, 'c', 1)
       .if('c', 1, c => c.x(0))
       .run({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1, 10)  // q0 unchanged=0, q1=1 → '10' (q1 is MSB)
+    expect(r.probs['01']).toBeCloseTo(1, 10)  // q0=0 (leftmost), q1=1 → '01'
   })
 
   it('multi-bit creg: if fires on value=3 (both bits set)', () => {
@@ -1885,7 +1887,7 @@ describe('if — conditional gate (2b)', () => {
   it('teleportation with measurement + if: teleports |0⟩ → q2 always |0⟩', () => {
     const r = teleportMeasured(c => c)
     const p0 = Object.entries(r.probs)
-      .filter(([bs]) => bs[0] === '0')
+      .filter(([bs]) => bs[2] === '0')
       .reduce((s, [, p]) => s + p, 0)
     expect(p0).toBeCloseTo(1, 5)
   })
@@ -1893,15 +1895,15 @@ describe('if — conditional gate (2b)', () => {
   it('teleportation with measurement + if: teleports |1⟩ → q2 always |1⟩', () => {
     const r = teleportMeasured(c => c.x(0))
     const p1 = Object.entries(r.probs)
-      .filter(([bs]) => bs[0] === '1')
+      .filter(([bs]) => bs[2] === '1')
       .reduce((s, [, p]) => s + p, 0)
     expect(p1).toBeCloseTo(1, 5)
   })
 
   it('teleportation with measurement + if: teleports |+⟩ → q2 measures 50/50', () => {
     const r = teleportMeasured(c => c.h(0))
-    const p0 = Object.entries(r.probs).filter(([bs]) => bs[0] === '0').reduce((s, [, p]) => s + p, 0)
-    const p1 = Object.entries(r.probs).filter(([bs]) => bs[0] === '1').reduce((s, [, p]) => s + p, 0)
+    const p0 = Object.entries(r.probs).filter(([bs]) => bs[2] === '0').reduce((s, [, p]) => s + p, 0)
+    const p1 = Object.entries(r.probs).filter(([bs]) => bs[2] === '1').reduce((s, [, p]) => s + p, 0)
     expect(near(p0, 0.5)).toBe(true)
     expect(near(p1, 0.5)).toBe(true)
   })
@@ -2090,7 +2092,7 @@ describe('IonQ round-trip: toIonQ() → fromIonQ() → identical statevector', (
     const rt = roundTrip(c)
     const sv = c.statevector()
     for (const bs of sv.keys()) {
-      const key = bs.toString(2).padStart(3, '0')
+      const key = bs.toString(2).padStart(3, '0').split('').reverse().join('')
       expect(rt.amplitude(key).re).toBeCloseTo(c.amplitude(key).re, 8)
       expect(rt.amplitude(key).im).toBeCloseTo(c.amplitude(key).im, 8)
     }
@@ -2286,7 +2288,7 @@ describe('QASM round-trip: toQASM() → fromQASM() → identical statevector', (
     const sv = a.statevector()
     const n = a.qubits
     for (const idx of sv.keys()) {
-      const bs = idx.toString(2).padStart(n, '0')
+      const bs = idx.toString(2).padStart(n, '0').split('').reverse().join('')
       const aa = a.amplitude(bs), bb = b.amplitude(bs)
       if (Math.abs(aa.re - bb.re) > 1e-8 || Math.abs(aa.im - bb.im) > 1e-8) return false
     }
@@ -3278,7 +3280,7 @@ describe('defineGate() / gate() / decompose()', () => {
     const c = new Circuit(3).defineGate('bell', bell).gate('bell', 1, 2)
     const p = c.exactProbs()
     expect(p['000']).toBeCloseTo(0.5)
-    expect(p['110']).toBeCloseTo(0.5)   // qubits 1 and 2 entangled, qubit 0 unchanged
+    expect(p['011']).toBeCloseTo(0.5)   // qubits 1 and 2 entangled, qubit 0 unchanged
   })
 
   it('gate applied twice with different qubit mappings', () => {
@@ -3453,9 +3455,9 @@ describe('MPS backend — basic gates', () => {
     expect(total).toBeCloseTo(1.0, 5)
   })
 
-  it('SWAP gate: |01⟩ → |10⟩', () => {
+  it('SWAP gate: |10⟩ → |01⟩', () => {
     const r = new Circuit(2).x(0).swap(0, 1).runMps({ shots: 100, seed: 1 })
-    expect(r.probs['10']).toBeCloseTo(1.0, 10)  // q1=1 → bitstring '10'
+    expect(r.probs['01']).toBeCloseTo(1.0, 10)  // q1=1 → bitstring '01'
   })
 })
 
@@ -3518,12 +3520,10 @@ describe('MPS backend — large circuits (50+ qubits)', () => {
 
     const dist = c.runMps({ shots: 200, seed: 5 })
     // Ancilla q40 stays in |−⟩ → random 0/1; strip it out and check input register.
-    // probs keys = idx.toString(2) where bit i = qubit i, so BigInt('0b'+bs) = idx.
-    const ancillaMask = (1n << BigInt(n)) - 1n  // bits 0..n-1
+    // In q0-leftmost: bs[0]=q0, ..., bs[n-1]=q(n-1), bs[n]=q40(ancilla).
+    // Strip ancilla by taking bs.slice(0, n).
     const inputStrings = new Set(
-      Object.keys(dist.probs).map(bs =>
-        (BigInt('0b' + bs) & ancillaMask).toString(2).padStart(n, '0')
-      )
+      Object.keys(dist.probs).map(bs => bs.slice(0, n))
     )
     // Regardless of ancilla outcome, all shots yield the same input register
     expect(inputStrings.size).toBe(1)
@@ -3586,9 +3586,9 @@ describe('Circuit immutability', () => {
     const bell  = base.cnot(0, 1)
     const justH = base.run({ shots: 1000, seed: 1 })
     const bothH = bell.run({ shots: 1000, seed: 1 })
-    // base circuit: H on q0 of 2-qubit system → |00⟩ and |01⟩ (q1 stays |0⟩)
+    // base circuit: H on q0 of 2-qubit system → |00⟩ and |10⟩ (q1 stays |0⟩)
     expect('00' in justH.probs).toBe(true)
-    expect('01' in justH.probs).toBe(true)
+    expect('10' in justH.probs).toBe(true)
     expect(Object.keys(bothH.probs).every(bs => bs === '00' || bs === '11')).toBe(true)
   })
 })
@@ -3713,9 +3713,9 @@ describe('cu2 gate', () => {
 
   it('applies U2 to target when control=|1⟩', () => {
     // x(0) sets q0=1 → control=1; cu2(0,π,0,1) applies U2(0,π)=H to q1
-    // H|0⟩_q1 = (|0⟩+|1⟩)/√2; bitstrings are q1q0, so q0=1 → '01' and '11'
+    // H|0⟩_q1 = (|0⟩+|1⟩)/√2; q0=1 (leftmost) → '10' and '11'
     const c = new Circuit(2).x(0).cu2(0, Math.PI, 0, 1)
-    expect(c.amplitude('01').re).toBeCloseTo(1 / Math.SQRT2, 10)
+    expect(c.amplitude('10').re).toBeCloseTo(1 / Math.SQRT2, 10)
     expect(c.amplitude('11').re).toBeCloseTo(1 / Math.SQRT2, 10)
   })
 
@@ -3793,7 +3793,7 @@ describe('stateAsString()', () => {
     const s = new Circuit(3).h(2).stateAsString()
     // Should have 3-char bitstrings
     expect(s).toContain('|000⟩')
-    expect(s).toContain('|100⟩')
+    expect(s).toContain('|001⟩')
   })
 })
 
@@ -3831,7 +3831,7 @@ describe('qft — Quantum Fourier Transform', () => {
       // Strategy: run qft(n) with initialState '0..01' then check IQFT undoes it.
       // We need to compose circuits; use the statevector of qft(n) from |1⟩ as a reference.
       // Simplest: build the QFT+IQFT round-trip using statevector({ initialState }).
-      const initState = '0'.repeat(n - 1) + '1'  // q0=1, rest 0 (q0 is rightmost)
+      const initState = '1' + '0'.repeat(n - 1)  // q0=1, rest 0 (q0 is leftmost)
       // Apply IQFT(QFT(|1⟩)) by composing gate sequences manually to verify API functions.
       // qft(n) starts at |0⟩; iqft(n) starts at |0⟩. We test composition via run+initialState:
       const qftCircuit = qft(n)
@@ -3857,14 +3857,14 @@ describe('qft — Quantum Fourier Transform', () => {
       .h(1).cu1(Math.PI / 2, 0, 1).h(0).swap(0, 1)   // QFT
       .swap(0, 1).h(0).cu1(-Math.PI / 2, 0, 1).h(1)  // IQFT
     const probs = roundTrip.exactProbs()
-    expect(probs['01']).toBeCloseTo(1, 10)
+    expect(probs['10']).toBeCloseTo(1, 10)
   })
 
   it('n=3 QFT: |1⟩ → amplitudes are (1/√8)·e^{2πi·k/8} for each basis state |k⟩', () => {
     // QFT|1⟩ = (1/√8) Σ_{k=0}^{7} e^{2πi·k/8} |k⟩
     // Amplitude of computational basis state |k⟩ is (1/√8)·(cos(2πk/8) + i·sin(2πk/8))
     const n = 3
-    const sv = qft(n).statevector({ initialState: '001' })  // q0=1, rest 0 = |1⟩
+    const sv = qft(n).statevector({ initialState: '100' })  // q0=1, rest 0 = |1⟩
     expect(sv.size).toBe(2 ** n)  // all basis states are populated
     for (const [idx, amp] of sv) {
       const k = Number(idx)
@@ -3896,12 +3896,12 @@ describe('grover — Grover\'s search', () => {
     expect(probs['11']).toBeCloseTo(1, 5)
   })
 
-  it('n=2: finds marked state |10⟩ in 1 iteration', () => {
-    // '10' means q1=1, q0=0. Oracle: X q0, CZ(0,1), X q0 → phase flip when q1=1, q0=0
+  it('n=2: finds marked state |01⟩ in 1 iteration', () => {
+    // '01' means q0=0, q1=1. Oracle: X q0, CZ(0,1), X q0 → phase flip when q0=0, q1=1
     const oracle = (c: Circuit) => c.x(0).cz(0, 1).x(0)
     const c = grover(2, oracle, 1)
     const probs = c.exactProbs()
-    expect(probs['10']).toBeCloseTo(1, 5)
+    expect(probs['01']).toBeCloseTo(1, 5)
   })
 
   it('n=3: finds marked state |101⟩ with optimal iterations', () => {
@@ -3926,8 +3926,8 @@ describe('grover — Grover\'s search', () => {
     const circ = grover(4, oracle)
     expect(circ.qubits).toBe(5)
     const probs = circ.exactProbs()
-    // bitstring is q4q3q2q1q0; target |1111⟩ with ancilla=0 → '01111'
-    expect(probs['01111'] ?? 0).toBeGreaterThan(0.5)
+    // bitstring is q0q1q2q3q4 (q0 leftmost); target |1111⟩ with ancilla q4=0 → '11110'
+    expect(probs['11110'] ?? 0).toBeGreaterThan(0.5)
   })
 })
 
@@ -3949,7 +3949,7 @@ describe('phaseEstimation', () => {
       c = c.h(j)
     }
     const probs = c.exactProbs()
-    // counting |001⟩ (q0=1), target |1⟩ → bitstring q3q2q1q0 = '1001'
+    // counting |001⟩ (q0=1), target |1⟩ → bitstring q0q1q2q3 = '1001' (palindrome)
     expect(probs['1001']).toBeCloseTo(1, 5)
   })
 
@@ -3966,8 +3966,8 @@ describe('phaseEstimation', () => {
       c = c.h(j)
     }
     const probs = c.exactProbs()
-    // counting |010⟩ (q1=1), target |1⟩ → bitstring q3q2q1q0 = '1010'
-    expect(probs['1010']).toBeCloseTo(1, 5)
+    // counting |010⟩ (q1=1), target |1⟩ → bitstring q0q1q2q3 = '1010' (palindrome)
+    expect(probs['0101']).toBeCloseTo(1, 5)
   })
 
   it('phaseEstimation API returns correct qubit count', () => {
@@ -3983,9 +3983,9 @@ describe('phaseEstimation', () => {
     const prec = 3
     const c = phaseEstimation(prec, (circ, ctrl, pow, tgts) =>
       circ.cu1(Math.PI * pow / 4, ctrl, tgts[0]!), 1)
-    // Target qubit is qubit 3; initialise to eigenstate |1⟩ via initialState '1000' (q3=1).
-    const probs = c.run({ shots: 2000, seed: 42, initialState: '1000' }).probs
-    // Phase 1/8 → counting register = binary 001 (q0=1), target q3=1 → bitstring '1001'
+    // Target qubit is qubit 3; initialise to eigenstate |1⟩ via initialState '0001' (q3=1, q0 leftmost).
+    const probs = c.run({ shots: 2000, seed: 42, initialState: '0001' }).probs
+    // Phase 1/8 → counting register = binary 001 (q0=1), target q3=1 → bitstring '1001' (palindrome)
     expect(probs['1001'] ?? 0).toBeGreaterThan(0.95)
   })
 
@@ -3995,9 +3995,9 @@ describe('phaseEstimation', () => {
     const prec = 3
     const c = phaseEstimation(prec, (circ, ctrl, pow, tgts) =>
       circ.cu1(Math.PI * pow / 2, ctrl, tgts[0]!), 1)
-    const probs = c.run({ shots: 2000, seed: 42, initialState: '1000' }).probs
-    // Phase 1/4 → counting register = binary 010 (q1=1) → bitstring '1010'
-    expect(probs['1010'] ?? 0).toBeGreaterThan(0.95)
+    const probs = c.run({ shots: 2000, seed: 42, initialState: '0001' }).probs
+    // Phase 1/4 → counting register = binary 010 (q1=1), target q3=1 → bitstring '0101' (q0-leftmost)
+    expect(probs['0101'] ?? 0).toBeGreaterThan(0.95)
   })
 })
 
@@ -4061,6 +4061,17 @@ describe('vqe — Variational Quantum Eigensolver', () => {
     // Bell state |Φ+⟩ = (|00⟩+|11⟩)/√2: ZZ gives +1 for |00⟩, +1 for |11⟩ → ⟨ZZ⟩ = +1
     const h: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }]
     expect(vqe(new Circuit(2).h(0).cnot(0, 1), h)).toBeCloseTo(1, 8)
+  })
+
+  // 3-qubit asymmetric: catches bs[q] vs bs[n-1-q] indexing bugs
+  it('three-qubit XII: ⟨0|X|0⟩ on q2 only = 0', () => {
+    // ops='XII': ops[0]='X' on q2, ops[1]=ops[2]='I'. State |000⟩. ⟨X(q2)⟩ = ⟨0|X|0⟩ = 0.
+    expect(vqe(new Circuit(3), [{ coeff: 1, ops: 'XII' }])).toBeCloseTo(0, 10)
+  })
+
+  it('three-qubit XII: ⟨+|X|+⟩ on q2 only = 1', () => {
+    // ops='XII': X on q2. Prepare q2=|+⟩ via h(2). ⟨X(q2)⟩ = 1.
+    expect(vqe(new Circuit(3).h(2), [{ coeff: 1, ops: 'XII' }])).toBeCloseTo(1, 10)
   })
 
   it('throws for ops length mismatch', () => {
@@ -4900,16 +4911,16 @@ describe('dm() — noisy circuit', () => {
 })
 
 describe('dm() — three-qubit gates', () => {
-  it('ccx: |011⟩ → |111⟩ with purity 1', () => {
+  it('ccx: |110⟩ → |111⟩ with purity 1', () => {
     const dm = new Circuit(3).x(0).x(1).ccx(0, 1, 2).dm()
     expect(dm.purity()).toBeCloseTo(1, 10)
     expect(dm.probabilities()['111']).toBeCloseTo(1, 10)
   })
 
   it('ccx: controls not met — target unchanged', () => {
-    // x(2) = q2=1 only; controls q0=q1=0 → no flip; q2 stays 1 → '100'
+    // x(2) = q2=1 only; controls q0=q1=0 → no flip; q2 stays 1 → '001'
     const dm = new Circuit(3).x(2).ccx(0, 1, 2).dm()
-    expect(dm.probabilities()['100']).toBeCloseTo(1, 10)
+    expect(dm.probabilities()['001']).toBeCloseTo(1, 10)
   })
 
   it('ccx probabilities match statevector', () => {
@@ -4921,16 +4932,16 @@ describe('dm() — three-qubit gates', () => {
     }
   })
 
-  it('cswap: control=1, swaps q1 and q2 — |101⟩ → |011⟩', () => {
-    // x(0).x(2): q0=1,q2=1 → '101'; cswap(control=q0=1) swaps q1↔q2 → q0=1,q1=1,q2=0 → '011'
+  it('cswap: control=1, swaps q1 and q2 — |101⟩ → |110⟩', () => {
+    // x(0).x(2): q0=1,q2=1 → '101' (palindrome); cswap(control=q0=1) swaps q1↔q2 → q0=1,q1=1,q2=0 → '110'
     const dm = new Circuit(3).x(0).x(2).cswap(0, 1, 2).dm()
-    expect(dm.probabilities()['011']).toBeCloseTo(1, 10)
+    expect(dm.probabilities()['110']).toBeCloseTo(1, 10)
   })
 
   it('cswap: control=0, no swap — q2 stays 1', () => {
-    // x(2): q2=1 → '100'; control q0=0 → no swap → stays '100'
+    // x(2): q2=1 → '001'; control q0=0 → no swap → stays '001'
     const dm = new Circuit(3).x(2).cswap(0, 1, 2).dm()
-    expect(dm.probabilities()['100']).toBeCloseTo(1, 10)
+    expect(dm.probabilities()['001']).toBeCloseTo(1, 10)
   })
 
   it('cswap probabilities match statevector', () => {
@@ -5006,10 +5017,10 @@ describe('csrn (controlled-√NOT)', () => {
     expect(probs['00']).toBeCloseTo(1, 10)
   })
   it('control=|1⟩ → target gets √X', () => {
-    // x(0) sets q0=1 → bitstring '01' (IonQ: q0 rightmost); csrn(0,1) applies √X to q1
+    // x(0) sets q0=1 → bitstring '10' (q0 leftmost); csrn(0,1) applies √X to q1
     // √X|0⟩ = ½(1+i)|0⟩ + ½(1−i)|1⟩ — each with prob 0.5
     const probs = new Circuit(2).x(0).csrn(0, 1).exactProbs()
-    expect(probs['01'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['10'] ?? 0).toBeCloseTo(0.5, 10)
     expect(probs['11'] ?? 0).toBeCloseTo(0.5, 10)
   })
   it('two csrn = cx (controlled-X)', () => {
@@ -5292,8 +5303,8 @@ describe('Circuit.fromCirq()', () => {
 
 describe('initialState', () => {
   it('statevector: starts from given basis state', () => {
-    // X on q0 starting from |10⟩ (q0=0,q1=1) → |11⟩
-    const sv = new Circuit(2).x(0).statevector({ initialState: '10' })
+    // X on q0 starting from |01⟩ (q0=0,q1=1) → |11⟩ (q0-leftmost: '01'=q0=0,q1=1)
+    const sv = new Circuit(2).x(0).statevector({ initialState: '01' })
     expect(sv.get(0b11n)?.re).toBeCloseTo(1, 8)
     expect(sv.size).toBe(1)
   })
@@ -5306,14 +5317,14 @@ describe('initialState', () => {
   })
 
   it('run: starting from |11⟩ = measuring CNOT at all-ones', () => {
-    // CNOT(0,1) on |11⟩: control=q0=1 flips q1 (1→0) → q0=1,q1=0 = bitstring '01'
+    // CNOT(0,1) on |11⟩: control=q0=1 flips q1 (1→0) → q0=1,q1=0 = bitstring '10' (q0-leftmost)
     const p = new Circuit(2).cnot(0, 1).run({ shots: 1000, seed: 1, initialState: '11' }).probs
-    expect(p['01'] ?? 0).toBeCloseTo(1, 1)
+    expect(p['10'] ?? 0).toBeCloseTo(1, 1)
   })
 
   it('runMps: respects initialState', () => {
-    // X on q0 from |10⟩ → |11⟩
-    const p = new Circuit(2).x(0).runMps({ shots: 1000, seed: 1, initialState: '10' }).probs
+    // X on q0 from |01⟩ (q0=0,q1=1) → flips q0 → |11⟩
+    const p = new Circuit(2).x(0).runMps({ shots: 1000, seed: 1, initialState: '01' }).probs
     expect(p['11'] ?? 0).toBeCloseTo(1, 1)
   })
 
@@ -5984,9 +5995,9 @@ describe('circuit.compile(device)', () => {
   it('swap(a,b) compiles to native gates and gives same result as swap', () => {
     const orig     = new Circuit(2).x(0).swap(0, 1).exactProbs()
     const compiled = new Circuit(2).x(0).swap(0, 1).compile('aria-1').exactProbs()
-    // |10⟩ should become |01⟩ after swap: q0=0, q1=1 → bitstring '10'
-    expect(orig['10'] ?? 0).toBeCloseTo(1.0, 10)
-    expect(compiled['10'] ?? 0).toBeCloseTo(1.0, 8)  // slightly relaxed for compiled
+    // x(0) gives q0=1; after swap(0,1): q0=0,q1=1 → bitstring '01' (q0-leftmost)
+    expect(orig['01'] ?? 0).toBeCloseTo(1.0, 10)
+    expect(compiled['01'] ?? 0).toBeCloseTo(1.0, 8)  // slightly relaxed for compiled
   })
 
   it('compiled circuit returns a Circuit instance', () => {
@@ -6108,4 +6119,680 @@ describe('qaoa() + maxCutHamiltonian()', () => {
     const energy = vqe(qaoa(3, [], [0.5], [0.3]), maxCutHamiltonian(3, []))
     expect(energy).toBeCloseTo(0, 10)
   })
+})
+
+// ─── circuit.circuitMatrix() ──────────────────────────────────────────────────
+
+describe('circuit.circuitMatrix()', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  const TOL = 10
+
+  it('identity circuit produces identity matrix', () => {
+    const U = new Circuit(2).circuitMatrix()
+    for (let r = 0; r < 4; r++)
+      for (let c = 0; c < 4; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(r === c ? 1 : 0, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('H on 1 qubit: matrix is Hadamard', () => {
+    const U = new Circuit(1).h(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(-sq2, TOL)
+    for (let r = 0; r < 2; r++)
+      for (let c = 0; c < 2; c++)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+  })
+
+  it('X gate gives Pauli-X matrix', () => {
+    const U = new Circuit(1).x(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo(0, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo(1, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo(1, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(0, TOL)
+  })
+
+  it('matrix is unitary: U†U = I', () => {
+    const U = new Circuit(2).h(0).cnot(0, 1).circuitMatrix()
+    const dim = 4
+    for (let r = 0; r < dim; r++) {
+      for (let c = 0; c < dim; c++) {
+        // (U†U)[r][c] = Σ_k conj(U[k][r]) * U[k][c]
+        let re = 0, im = 0
+        for (let k = 0; k < dim; k++) {
+          const a = U[k]![r]!, b = U[k]![c]!
+          re += a.re * b.re + a.im * b.im
+          im += a.re * b.im - a.im * b.re
+        }
+        expect(re).toBeCloseTo(r === c ? 1 : 0, TOL)
+        expect(im).toBeCloseTo(0, TOL)
+      }
+    }
+  })
+
+  it('1-qubit unitary round-trips: circuitMatrix matches the matrix passed in', () => {
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const U = new Circuit(1).unitary(H, 0).circuitMatrix()
+    for (let r = 0; r < 2; r++)
+      for (let c = 0; c < 2; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(H[r]![c]!, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('2-qubit unitary round-trips: CNOT matrix (standard convention)', () => {
+    // CNOT in standard convention (q0=MSB): |10⟩→|11⟩, |11⟩→|10⟩
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    const U = new Circuit(2).unitary(CNOT, 0, 1).circuitMatrix()
+    for (let r = 0; r < 4; r++)
+      for (let c = 0; c < 4; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(CNOT[r]![c]!, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('S gate: complex diagonal entries (0,1) = i', () => {
+    const U = new Circuit(1).s(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo(1, TOL); expect(U[0]![0]!.im).toBeCloseTo(0, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(0, TOL); expect(U[1]![1]!.im).toBeCloseTo(1, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo(0, TOL); expect(U[0]![1]!.im).toBeCloseTo(0, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo(0, TOL); expect(U[1]![0]!.im).toBeCloseTo(0, TOL)
+  })
+
+  it('throws for circuits with measurement ops', () => {
+    expect(() =>
+      new Circuit(1).h(0).creg('c', 1).measure(0, 'c', 0).circuitMatrix()
+    ).toThrow(TypeError)
+  })
+
+  it('throws RangeError for circuits wider than 12 qubits', () => {
+    expect(() => new Circuit(13).circuitMatrix()).toThrow(RangeError)
+  })
+})
+
+// ─── circuit.unitary() — custom N-qubit gate ──────────────────────────────────
+
+describe('circuit.unitary() — 1-qubit', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  // H matrix as plain numbers (real)
+  const H = [[sq2, sq2], [sq2, -sq2]]
+  // X matrix as Complex
+  const X = [[{ re: 0, im: 0 }, { re: 1, im: 0 }], [{ re: 1, im: 0 }, { re: 0, im: 0 }]]
+
+  it('H via real number[][] produces Bell state on q0', () => {
+    const c = new Circuit(2).unitary(H, 0).cnot(0, 1)
+    const p = c.exactProbs()
+    expect(p['00']).toBeCloseTo(0.5, 10)
+    expect(p['11']).toBeCloseTo(0.5, 10)
+  })
+
+  it('X via Complex[][] flips qubit', () => {
+    const circ = new Circuit(1).unitary(X, 0)
+    expect(circ.probability('1')).toBeCloseTo(1, 10)
+  })
+
+  it('identity matrix leaves state unchanged', () => {
+    const I = [[1, 0], [0, 1]]
+    const circ = new Circuit(2).h(0).cnot(0, 1).unitary(I, 0)
+    const p = circ.exactProbs()
+    expect(p['00']).toBeCloseTo(0.5, 10)
+    expect(p['11']).toBeCloseTo(0.5, 10)
+  })
+
+  it('matches equivalent named gate amplitude exactly', () => {
+    const named  = new Circuit(1).h(0).amplitude('0')
+    const custom = new Circuit(1).unitary(H, 0).amplitude('0')
+    expect(custom.re).toBeCloseTo(named.re, 10)
+    expect(custom.im).toBeCloseTo(named.im, 10)
+  })
+
+  it('draw() shows U for custom unitary', () => {
+    const circ = new Circuit(1).unitary(H, 0)
+    expect(circ.draw()).toContain('U')
+  })
+})
+
+describe('circuit.unitary() — 2-qubit', () => {
+  // SWAP matrix: row/col order |00⟩,|01⟩,|10⟩,|11⟩ (q0=MSB)
+  const SWAP = [
+    [1, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 1, 0, 0],
+    [0, 0, 0, 1],
+  ]
+  // CNOT matrix (q0=control=MSB, q1=target)
+  const CNOT = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 0, 1],
+    [0, 0, 1, 0],
+  ]
+
+  it('SWAP via unitary swaps qubit states', () => {
+    // x(1) gives q0=0,q1=1 = bitstring "01" (q0-leftmost); SWAP(q0,q1) → q0=1,q1=0 = bitstring "10"
+    const circ = new Circuit(2).x(1).unitary(SWAP, 0, 1)
+    expect(circ.probability('10')).toBeCloseTo(1, 10)
+  })
+
+  it('CNOT via unitary entangles like built-in cnot', () => {
+    const builtin = new Circuit(2).h(0).cnot(0, 1).exactProbs()
+    const custom  = new Circuit(2).h(0).unitary(CNOT, 0, 1).exactProbs()
+    expect(custom['00']).toBeCloseTo(builtin['00']!, 10)
+    expect(custom['11']).toBeCloseTo(builtin['11']!, 10)
+  })
+
+  it('non-adjacent qubits: middle qubit is unaffected', () => {
+    // unitary(CNOT, 0, 2) on a 3-qubit circuit: q0=control, q2=target, q1 is spectator
+    // Start |001⟩ (q0=1, q1=0, q2=0): control fires → q2 flips → |101⟩
+    // Start |010⟩ (q0=0, q1=1, q2=0): control doesn't fire → stays |010⟩
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    expect(new Circuit(3).x(0).unitary(CNOT, 0, 2).probability('101')).toBeCloseTo(1, 10)
+    expect(new Circuit(3).x(1).unitary(CNOT, 0, 2).probability('010')).toBeCloseTo(1, 10)
+  })
+
+  it('qubit ordering: qubits[0] is MSB — reversing args reverses control/target', () => {
+    // q0-leftmost: x(0) → q0=1, q1=0 → bitstring "10".
+    // unitary(CNOT, 0, 1): q0=control=1, q1=target → q1 flips → "11"
+    // unitary(CNOT, 1, 0): q1=control=0, q0=target → q0 unchanged → "10"
+    const ctrlQ0 = new Circuit(2).x(0).unitary(CNOT, 0, 1).exactProbs()
+    const ctrlQ1 = new Circuit(2).x(0).unitary(CNOT, 1, 0).exactProbs()
+    expect(ctrlQ0['11']).toBeCloseTo(1, 10)
+    expect(ctrlQ1['10']).toBeCloseTo(1, 10)
+  })
+})
+
+describe('circuit.unitary() — 3-qubit', () => {
+  // Toffoli matrix 8×8: only CCX entry differs from I
+  const TOF: number[][] = Array.from({ length: 8 }, (_, r) =>
+    Array.from({ length: 8 }, (_, c) => {
+      if (r === 6 && c === 7) return 1
+      if (r === 7 && c === 6) return 1
+      if (r === c && r !== 6 && r !== 7) return 1
+      return 0
+    })
+  )
+
+  it('3-qubit Toffoli via unitary flips target when both controls are |1⟩', () => {
+    // Start in |110⟩ (q0=0,q1=1,q2=1), apply CCX(q2,q1,q0): both controls 1 → flip q0
+    const circ = new Circuit(3).x(1).x(2).unitary(TOF, 2, 1, 0)
+    expect(circ.probability('111')).toBeCloseTo(1, 10)
+  })
+})
+
+describe('circuit.unitary() — JSON round-trip', () => {
+  it('real matrix survives toJSON/fromJSON', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const original = new Circuit(1).unitary(H, 0)
+    const restored = Circuit.fromJSON(original.toJSON())
+    expect(restored.probability('0')).toBeCloseTo(0.5, 10)
+    expect(restored.probability('1')).toBeCloseTo(0.5, 10)
+  })
+
+  it('complex matrix survives toJSON/fromJSON', () => {
+    const S = [[{ re: 1, im: 0 }, { re: 0, im: 0 }], [{ re: 0, im: 0 }, { re: 0, im: 1 }]]
+    const original = new Circuit(1).x(0).unitary(S, 0)
+    const restored = Circuit.fromJSON(original.toJSON())
+    const amp = restored.amplitude('1')
+    expect(amp.re).toBeCloseTo(0, 10)
+    expect(amp.im).toBeCloseTo(1, 10)
+  })
+})
+
+describe('circuit.unitary() — MPS backend', () => {
+  it('1-qubit unitary H runs in MPS mode', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const result = new Circuit(2).unitary(H, 0).runMps({ shots: 4000, seed: 42 })
+    expect(result.probs['00']!).toBeGreaterThan(0.4)
+    expect(result.probs['00']!).toBeLessThan(0.6)
+  })
+
+  it('2-qubit unitary runs in MPS mode', () => {
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    const result = new Circuit(2).h(0).unitary(CNOT, 0, 1).runMps({ shots: 4000, seed: 42 })
+    const p = result.probs
+    expect((p['00'] ?? 0) + (p['11'] ?? 0)).toBeGreaterThan(0.9)
+  })
+
+  it('3-qubit unitary throws in MPS mode', () => {
+    const I8 = Array.from({ length: 8 }, (_, r) => Array.from({ length: 8 }, (_, c) => r === c ? 1 : 0))
+    expect(() => new Circuit(3).unitary(I8, 0, 1, 2).runMps()).toThrow('MPS')
+  })
+})
+
+describe('circuit.unitary() — dm() backend', () => {
+  it('H via unitary on DM backend matches named H', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const named  = new Circuit(1).h(0).dm().probabilities()
+    const custom = new Circuit(1).unitary(H, 0).dm().probabilities()
+    expect(custom['0']).toBeCloseTo(named['0']!, 10)
+    expect(custom['1']).toBeCloseTo(named['1']!, 10)
+  })
+})
+
+describe('circuit.unitary() — error paths', () => {
+  it('throws RangeError for out-of-range qubit', () => {
+    expect(() => new Circuit(2).unitary([[1,0],[0,1]], 5)).toThrow(RangeError)
+  })
+
+  it('throws TypeError for wrong matrix size (1-qubit needs 2×2)', () => {
+    const bad = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    expect(() => new Circuit(1).unitary(bad, 0)).toThrow('2×2')
+  })
+
+  it('throws TypeError for empty qubits list', () => {
+    expect(() => new Circuit(1).unitary([[1]])).toThrow('non-empty')
+  })
+
+  it('runClifford throws for custom unitary', () => {
+    const H = [[1/Math.sqrt(2), 1/Math.sqrt(2)], [1/Math.sqrt(2), -1/Math.sqrt(2)]]
+    expect(() => new Circuit(1).unitary(H, 0).creg('c',1).measure(0,'c',0).runClifford()).toThrow(/unitary/)
+  })
+})
+
+// ─── circuit.unitary() — serializer coverage ──────────────────────────────────
+//
+// Each export serializer must throw (not silently skip) when it encounters a
+// custom unitary op.  This suite acts as a regression guard: if a new op type
+// is added without being wired into a serializer, the analogous test here will
+// catch it.
+
+describe('circuit.unitary() — export serializer throws', () => {
+  const H = [[1 / Math.sqrt(2), 1 / Math.sqrt(2)], [1 / Math.sqrt(2), -1 / Math.sqrt(2)]]
+  const circ = () => new Circuit(1).unitary(H, 0)
+
+  it('toQASM() throws for unitary op',   () => expect(() => circ().toQASM()).toThrow(TypeError))
+  it('toIonQ() throws for unitary op',   () => expect(() => circ().toIonQ()).toThrow(TypeError))
+  it('toQiskit() throws for unitary op', () => expect(() => circ().toQiskit()).toThrow(TypeError))
+  it('toCirq() throws for unitary op',   () => expect(() => circ().toCirq()).toThrow(TypeError))
+  it('toTFQ() throws for unitary op',    () => expect(() => circ().toTFQ()).toThrow(TypeError))
+  it('toQSharp() throws for unitary op', () => expect(() => circ().toQSharp()).toThrow(TypeError))
+  it('toPyQuil() throws for unitary op', () => expect(() => circ().toPyQuil()).toThrow(TypeError))
+  it('toQuil() throws for unitary op',   () => expect(() => circ().toQuil()).toThrow(TypeError))
+  it('toBraket() throws for unitary op', () => expect(() => circ().toBraket()).toThrow(TypeError))
+  it('toCudaQ() throws for unitary op',  () => expect(() => circ().toCudaQ()).toThrow(TypeError))
+  it('toQuirk() throws for unitary op',  () => expect(() => circ().toQuirk()).toThrow(TypeError))
+  it('compile() throws for unitary op',  () => expect(() => circ().compile('aria-1')).toThrow(TypeError))
+  it('checkDevice() throws for unitary op', () => expect(() => circ().checkDevice('aria-1')).toThrow(TypeError))
+})
+
+describe('circuit.unitary() — depth() and toLatex()', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  const H = [[sq2, sq2], [sq2, -sq2]]
+
+  it('depth() counts a 1-qubit unitary as depth 1', () => {
+    expect(new Circuit(1).unitary(H, 0).depth()).toBe(1)
+  })
+
+  it('depth() counts a 2-qubit unitary as depth 1', () => {
+    const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+    expect(new Circuit(2).unitary(SWAP, 0, 1).depth()).toBe(1)
+  })
+
+  it('depth() serializes correctly with surrounding gates', () => {
+    // h(0) || h(1)  →  unitary(q0,q1)  →  depth 2
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    expect(new Circuit(2).h(0).h(1).unitary(CNOT, 0, 1).depth()).toBe(2)
+  })
+
+  it('toLatex() contains \\\\gate{U} for a 1-qubit unitary', () => {
+    expect(new Circuit(1).unitary(H, 0).toLatex()).toContain('\\gate{U}')
+  })
+
+  it('toLatex() contains \\\\gate[2]{U} for a 2-qubit unitary', () => {
+    const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+    expect(new Circuit(2).unitary(SWAP, 0, 1).toLatex()).toContain('\\gate[2]{U}')
+  })
+
+  it('toSVG() renders unitary as a gate box labelled U', () => {
+    const svg = new Circuit(1).unitary(H, 0).toSVG()
+    expect(svg).toContain('<svg')
+    expect(svg).toContain('>U<')
+  })
+})
+
+// ─── quantum invariants — probability normalization ───────────────────────────
+//
+// ∑p = 1 after any gate sequence. Exercises all gate categories and both backends.
+// A failure here means a gate kernel is not norm-preserving.
+
+describe('quantum invariants — probability normalization', () => {
+  const sum = (p: Readonly<Record<string, number>>) => Object.values(p).reduce((s, v) => s + v, 0)
+  const sq2 = 1 / Math.sqrt(2)
+  const H2x2 = [[sq2, sq2], [sq2, -sq2]]
+
+  it('single gate: H|0⟩',                         () => expect(sum(new Circuit(1).h(0).exactProbs())).toBeCloseTo(1, 13))
+  it('single gate: Rx(1.23)',                      () => expect(sum(new Circuit(1).rx(1.23, 0).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: Bell state H·CNOT',               () => expect(sum(new Circuit(2).h(0).cnot(0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: SWAP in superposition',           () => expect(sum(new Circuit(2).h(0).swap(0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: XX(π/4)',                         () => expect(sum(new Circuit(2).xx(Math.PI / 4, 0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: GHZ state',                     () => expect(sum(new Circuit(3).h(0).cnot(0, 1).cnot(1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: Toffoli on superposition',      () => expect(sum(new Circuit(3).h(0).h(1).ccx(0, 1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: csrswap',                       () => expect(sum(new Circuit(3).h(1).csrswap(0, 1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('custom unitary (Hadamard)',                  () => expect(sum(new Circuit(1).unitary(H2x2, 0).exactProbs())).toBeCloseTo(1, 13))
+  it('DM backend: Bell state probabilities sum to 1', () => expect(sum(new Circuit(2).h(0).cnot(0, 1).dm().probabilities())).toBeCloseTo(1, 13))
+  it('DM backend: pure state has purity 1',           () => expect(new Circuit(2).h(0).cnot(0, 1).dm().purity()).toBeCloseTo(1, 13))
+})
+
+// ─── quantum invariants — self-inverse gates (G·G = I) ───────────────────────
+//
+// Every self-inverse gate applied twice must restore the input state exactly.
+// Tests both single-qubit and multi-qubit gates on non-trivial inputs.
+
+describe('quantum invariants — self-inverse gates (G·G = I)', () => {
+  it('X·X = I',         () => expect(new Circuit(1).x(0).x(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('Y·Y = I',         () => expect(new Circuit(1).y(0).y(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('Z·Z = I',         () => expect(new Circuit(1).z(0).z(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('H·H = I',         () => expect(new Circuit(1).h(0).h(0).exactProbs()['0']).toBeCloseTo(1, 14))
+
+  // Multi-qubit: apply to a state where the gate does non-trivial work.
+  it('CNOT·CNOT = I on |10⟩',   () => expect(new Circuit(2).x(0).cnot(0, 1).cnot(0, 1).exactProbs()['10']).toBeCloseTo(1, 14))
+  it('SWAP·SWAP = I on |10⟩',   () => expect(new Circuit(2).x(0).swap(0, 1).swap(0, 1).exactProbs()['10']).toBeCloseTo(1, 14))
+  it('CZ·CZ = I on |10⟩',       () => expect(new Circuit(2).x(0).cz(0, 1).cz(0, 1).exactProbs()['10']).toBeCloseTo(1, 14))
+  it('CCX·CCX = I on |110⟩',    () => expect(new Circuit(3).x(0).x(1).ccx(0, 1, 2).ccx(0, 1, 2).exactProbs()['110']).toBeCloseTo(1, 14))
+  it('CSWAP·CSWAP = I on |110⟩', () => expect(new Circuit(3).x(0).x(1).cswap(0, 1, 2).cswap(0, 1, 2).exactProbs()['110']).toBeCloseTo(1, 14))
+
+  // Superposition input: H·CNOT·CNOT·H|0⟩ = |0⟩ confirms self-inverse on entangled state.
+  it('CNOT self-inverse in Bell basis: H·CNOT·CNOT·H = I', () => {
+    expect(new Circuit(2).h(0).cnot(0, 1).cnot(0, 1).h(0).exactProbs()['00']).toBeCloseTo(1, 14)
+  })
+})
+
+// ─── quantum invariants — SV and DM backends agree ───────────────────────────
+//
+// `exactProbs()` (statevector) and `dm().probabilities()` (density matrix) must
+// produce identical distributions for every pure circuit.  A divergence means
+// one backend has a gate-kernel bug.
+
+describe('quantum invariants — SV and DM backends agree on exact probabilities', () => {
+  function expectMatch(sv: Readonly<Record<string, number>>, dm: Readonly<Record<string, number>>) {
+    const keys = new Set([...Object.keys(sv), ...Object.keys(dm)])
+    for (const k of keys) expect(sv[k] ?? 0).toBeCloseTo(dm[k] ?? 0, 12)
+  }
+
+  it('H|0⟩',          () => { const c = new Circuit(1).h(0);                               expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Bell state',     () => { const c = new Circuit(2).h(0).cnot(0, 1);                    expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Rz(π/7) phase', () => { const c = new Circuit(1).rz(Math.PI / 7, 0);                 expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('3-qubit GHZ',   () => { const c = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2);         expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Toffoli',        () => { const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2);             expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('custom unitary', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const c = new Circuit(1).unitary([[sq2, sq2], [sq2, -sq2]], 0)
+    expectMatch(c.exactProbs(), c.dm().probabilities())
+  })
+})
+
+// ─── JSON round-trip — all op kinds ──────────────────────────────────────────
+//
+// Every op kind must survive toJSON → fromJSON with identical simulation output.
+// This is a regression guard: a missing opsToJSON/opsFromJSON branch silently
+// produces a circuit that behaves differently after deserialization.
+
+describe('JSON round-trip — all op kinds', () => {
+  const rt = (c: Circuit) => Circuit.fromJSON(c.toJSON())
+
+  function expectSameExactProbs(a: Circuit, b: Circuit) {
+    const pa = a.exactProbs(), pb = b.exactProbs()
+    const keys = new Set([...Object.keys(pa), ...Object.keys(pb)])
+    for (const k of keys) expect(pa[k] ?? 0).toBeCloseTo(pb[k] ?? 0, 13)
+  }
+
+  it('single gate',           () => { const c = new Circuit(2).h(0).x(1);                     expectSameExactProbs(c, rt(c)) })
+  it('cnot',                  () => { const c = new Circuit(2).h(0).cnot(0, 1);               expectSameExactProbs(c, rt(c)) })
+  it('swap',                  () => { const c = new Circuit(2).x(0).swap(0, 1);               expectSameExactProbs(c, rt(c)) })
+  it('two-qubit gate (xx)',   () => { const c = new Circuit(2).xx(Math.PI / 4, 0, 1);         expectSameExactProbs(c, rt(c)) })
+  it('controlled gate (cz)',  () => { const c = new Circuit(2).h(0).cz(0, 1);                 expectSameExactProbs(c, rt(c)) })
+  it('toffoli (ccx)',         () => { const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2);        expectSameExactProbs(c, rt(c)) })
+  it('cswap',                 () => { const c = new Circuit(3).x(0).h(1).cswap(0, 1, 2);     expectSameExactProbs(c, rt(c)) })
+  it('csrswap',               () => { const c = new Circuit(3).h(1).csrswap(0, 1, 2);        expectSameExactProbs(c, rt(c)) })
+  it('barrier (no-op)',       () => { const c = new Circuit(2).h(0).barrier(0, 1).cnot(0, 1); expectSameExactProbs(c, rt(c)) })
+  it('subcircuit (defineGate / gate)', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c    = new Circuit(4).defineGate('bell', bell).gate('bell', 0, 1).gate('bell', 2, 3)
+    expectSameExactProbs(c, rt(c))
+  })
+  it('unitary', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const c = new Circuit(2).unitary([[sq2, sq2], [sq2, -sq2]], 0).cnot(0, 1)
+    expectSameExactProbs(c, rt(c))
+  })
+  it('measure + reset + if: run() output is identical after round-trip', () => {
+    // x(0) → measure q0 into c[0] (always 1) → reset q0 → if c=1: flip q1
+    // Result: q0=|0⟩ (reset), q1=|1⟩ (flipped) → bitstring '10'
+    const c    = new Circuit(2).creg('c', 1).x(0).measure(0, 'c', 0).reset(0).if('c', 1, q => q.x(1))
+    const opts = { shots: 200, seed: 42 }
+    const before = c.run(opts), after = rt(c).run(opts)
+    for (const bs of ['00', '01', '10', '11']) expect(before.probs[bs] ?? 0).toBeCloseTo(after.probs[bs] ?? 0, 10)
+  })
+})
+
+// ─── classical control — edge cases ──────────────────────────────────────────
+
+describe('classical control — if op edge cases', () => {
+  it('condition not met: body is skipped', () => {
+    // creg starts 0; condition is 1 → x(0) never applied → q0 stays |0⟩
+    const r = new Circuit(1).creg('c', 1).if('c', 1, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('condition met: body executes', () => {
+    // x(0) → measure(0,'c',0) always gives c=1 → if c=1: x(1) → q1=|1⟩
+    // bitstring: q0 measured+not-reset=|1⟩, q1=|1⟩ → '11'
+    const r = new Circuit(2).creg('c', 1).x(0).measure(0, 'c', 0).if('c', 1, q => q.x(1)).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1, 10)
+  })
+
+  it('nested if: inner body executes when both conditions met', () => {
+    const r = new Circuit(2)
+      .creg('a', 1).creg('b', 1)
+      .x(0).measure(0, 'a', 0)         // a=1
+      .x(1).measure(1, 'b', 0)         // b=1
+      .reset(0).reset(1)               // qubits back to |0⟩
+      .if('a', 1, q => q.if('b', 1, q2 => q2.x(0)))  // nested: a=1 ∧ b=1 → flip q0
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['10']).toBeCloseTo(1, 10)  // q0=1 after nested if, bitstring '10' (q0-leftmost)
+  })
+
+  it('nonexistent register treated as 0 — condition with value 0 fires', () => {
+    // 'missing' register doesn't exist → cregValue returns 0 → if value=0: x(0) applied
+    const r = new Circuit(1).if('missing', 0, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('nonexistent register treated as 0 — condition with value 1 does not fire', () => {
+    const r = new Circuit(1).if('missing', 1, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+})
+
+// ─── toIonQ() — unsupported gate errors ──────────────────────────────────────
+//
+// toIonQ() must throw (not silently skip) for gates that have no IonQ JSON
+// representation.  These complement the unitary serializer tests above and
+// guard against gates that predate the unitary feature being silently dropped.
+
+describe('toIonQ() — unsupported gate errors', () => {
+  it('throws for toffoli (ccx)',  () => expect(() => new Circuit(3).ccx(0, 1, 2).toIonQ()).toThrow())
+  it('throws for cswap',          () => expect(() => new Circuit(3).cswap(0, 1, 2).toIonQ()).toThrow())
+  it('throws for csrswap',        () => expect(() => new Circuit(3).csrswap(0, 1, 2).toIonQ()).toThrow())
+  it('throws for measure',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).toIonQ()).toThrow())
+  it('throws for if op',          () => expect(() => new Circuit(1).creg('c',1).if('c', 0, q => q.x(0)).toIonQ()).toThrow())
+})
+
+// ─── serializer contracts — comprehensive throw coverage ──────────────────────
+//
+// Every text-format exporter must throw (not silently skip) for op kinds it
+// cannot represent.  Organised by op kind so a new serializer can be audited
+// by scanning vertically, and a new op kind can be wired in by scanning
+// horizontally.
+//
+// Circuit factories are shared across suites via module-level const closures.
+
+const _csrswapCirc  = () => new Circuit(3).csrswap(0, 1, 2)
+const _ifCirc       = () => new Circuit(1).creg('c', 1).if('c', 0, q => q.x(0))
+const _measureCirc  = () => new Circuit(1).creg('c', 1).measure(0, 'c', 0)
+const _resetCirc    = () => new Circuit(1).reset(0)
+const _xxCirc       = () => new Circuit(2).xx(Math.PI / 4, 0, 1)
+const _crxCirc      = () => new Circuit(2).crx(Math.PI / 4, 0, 1)
+
+// csrswap: no representation in any text-format exporter.
+describe('serializer contracts — csrswap throws in all text-format exporters', () => {
+  it('toQASM()',   () => expect(() => _csrswapCirc().toQASM()).toThrow(TypeError))
+  it('toQiskit()', () => expect(() => _csrswapCirc().toQiskit()).toThrow(TypeError))
+  it('toCirq()',   () => expect(() => _csrswapCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _csrswapCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _csrswapCirc().toQSharp()).toThrow(TypeError))
+  it('toPyQuil()', () => expect(() => _csrswapCirc().toPyQuil()).toThrow(TypeError))
+  it('toQuil()',   () => expect(() => _csrswapCirc().toQuil()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _csrswapCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _csrswapCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _csrswapCirc().toQuirk()).toThrow(TypeError))
+})
+
+// if op: classical control has no representation in any text-format exporter.
+describe('serializer contracts — if op throws in all text-format exporters', () => {
+  it('toQASM()',   () => expect(() => _ifCirc().toQASM()).toThrow(TypeError))
+  it('toQiskit()', () => expect(() => _ifCirc().toQiskit()).toThrow(TypeError))
+  it('toCirq()',   () => expect(() => _ifCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _ifCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _ifCirc().toQSharp()).toThrow(TypeError))
+  it('toPyQuil()', () => expect(() => _ifCirc().toPyQuil()).toThrow(TypeError))
+  it('toQuil()',   () => expect(() => _ifCirc().toQuil()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _ifCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _ifCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _ifCirc().toQuirk()).toThrow(TypeError))
+})
+
+// measure / reset: exporters targeting pure-unitary languages must reject them.
+describe('serializer contracts — measure throws in pure-unitary exporters', () => {
+  it('toCirq()',   () => expect(() => _measureCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _measureCirc().toTFQ()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _measureCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _measureCirc().toCudaQ()).toThrow(TypeError))
+})
+
+describe('serializer contracts — reset throws in pure-unitary exporters', () => {
+  it('toCirq()',   () => expect(() => _resetCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _resetCirc().toTFQ()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _resetCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _resetCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _resetCirc().toQuirk()).toThrow(TypeError))
+})
+
+// two-qubit interaction gates (e.g. XX): exporters without interaction-gate
+// support must throw rather than silently produce wrong output.
+describe('serializer contracts — XX gate throws where unsupported', () => {
+  it('toCirq()',   () => expect(() => _xxCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _xxCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _xxCirc().toQSharp()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _xxCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _xxCirc().toQuirk()).toThrow(TypeError))
+})
+
+// toPyQuil: controlled single-qubit gates have no standard pyQuil representation.
+describe('serializer contracts — toPyQuil() throws for controlled single-qubit gates', () => {
+  it('toPyQuil() throws for crx', () => expect(() => _crxCirc().toPyQuil()).toThrow(TypeError))
+})
+
+// ─── serializer contract matrix ───────────────────────────────────────────────
+//
+// Record<FlatOp['kind'], () => Circuit> is the load-bearing type here.
+// Adding a new op kind to FlatOp without adding it to `circuits` is a
+// compile error — npm test fails before a single test runs.
+//
+// Each cell asserts: the serializer either produces output or throws TypeError.
+// A crash (wrong exception type) or silent empty output both fail the test.
+
+describe('serializer contract matrix — every op kind × every text-format exporter', () => {
+  const sq2 = 1 / Math.sqrt(2)
+
+  // Keyed by FlatOp['kind'] — exhaustiveness enforced at compile time.
+  const circuits: Record<FlatOp['kind'], () => Circuit> = {
+    single:     () => new Circuit(1).h(0),
+    cnot:       () => new Circuit(2).cnot(0, 1),
+    swap:       () => new Circuit(2).swap(0, 1),
+    two:        () => new Circuit(2).xx(Math.PI / 4, 0, 1),
+    controlled: () => new Circuit(2).cz(0, 1),
+    toffoli:    () => new Circuit(3).ccx(0, 1, 2),
+    cswap:      () => new Circuit(3).cswap(0, 1, 2),
+    csrswap:    () => new Circuit(3).csrswap(0, 1, 2),
+    measure:    () => new Circuit(1).creg('c', 1).measure(0, 'c', 0),
+    reset:      () => new Circuit(1).reset(0),
+    if:         () => new Circuit(1).creg('c', 1).if('c', 0, q => q.x(0)),
+    barrier:    () => new Circuit(2).h(0).barrier().cnot(0, 1),
+    unitary:    () => new Circuit(1).unitary([[sq2, sq2], [sq2, -sq2]], 0),
+  }
+
+  const serializers: Array<[string, (c: Circuit) => unknown]> = [
+    ['toIonQ',   c => c.toIonQ()],
+    ['toQASM',   c => c.toQASM()],
+    ['toQiskit', c => c.toQiskit()],
+    ['toCirq',   c => c.toCirq()],
+    ['toTFQ',    c => c.toTFQ()],
+    ['toQSharp', c => c.toQSharp()],
+    ['toPyQuil', c => c.toPyQuil()],
+    ['toQuil',   c => c.toQuil()],
+    ['toBraket', c => c.toBraket()],
+    ['toCudaQ',  c => c.toCudaQ()],
+    ['toQuirk',  c => c.toQuirk()],
+  ]
+
+  for (const [serName, serialize] of serializers) {
+    for (const [kind, make] of Object.entries(circuits) as [FlatOp['kind'], () => Circuit][]) {
+      it(`${serName}() — '${kind}'`, () => {
+        let result: unknown
+        try {
+          result = serialize(make())
+        } catch (e) {
+          // Must throw TypeError, not crash with an unexpected error type.
+          expect(e).toBeInstanceOf(TypeError)
+          return
+        }
+        // Must produce non-empty output — not silently swallow the op.
+        expect(result).toBeTruthy()
+      })
+    }
+  }
+})
+
+// ─── Pauli expectation value ────────────────────────────────────────────────
+
+describe('expectation() — Pauli expectation value ⟨ψ|P|ψ⟩', () => {
+  // Single-qubit Z
+  it('|0⟩: ⟨Z⟩ = +1',          () => expect(new Circuit(1).expectation('Z')).toBeCloseTo(1, 10))
+  it('|1⟩: ⟨Z⟩ = −1',          () => expect(new Circuit(1).x(0).expectation('Z')).toBeCloseTo(-1, 10))
+  it('|+⟩: ⟨Z⟩ = 0',           () => expect(new Circuit(1).h(0).expectation('Z')).toBeCloseTo(0, 10))
+
+  // Single-qubit X
+  it('|+⟩: ⟨X⟩ = +1',          () => expect(new Circuit(1).h(0).expectation('X')).toBeCloseTo(1, 10))
+  it('|−⟩: ⟨X⟩ = −1',          () => expect(new Circuit(1).x(0).h(0).expectation('X')).toBeCloseTo(-1, 10))
+  it('|0⟩: ⟨X⟩ = 0',           () => expect(new Circuit(1).expectation('X')).toBeCloseTo(0, 10))
+
+  // Single-qubit Y
+  it('|+y⟩: ⟨Y⟩ = +1',         () => expect(new Circuit(1).rx(-Math.PI / 2, 0).expectation('Y')).toBeCloseTo(1, 8))
+  it('|0⟩: ⟨Y⟩ = 0',           () => expect(new Circuit(1).expectation('Y')).toBeCloseTo(0, 10))
+
+  // Identity
+  it('⟨I⟩ = 1 always',         () => expect(new Circuit(1).h(0).expectation('I')).toBeCloseTo(1, 10))
+
+  // Two-qubit Bell state
+  it('Bell ⟨ZZ⟩ = +1',         () => expect(new Circuit(2).h(0).cnot(0, 1).expectation('ZZ')).toBeCloseTo(1, 10))
+  it('Bell ⟨XX⟩ = +1',         () => expect(new Circuit(2).h(0).cnot(0, 1).expectation('XX')).toBeCloseTo(1, 10))
+  it('Bell ⟨ZI⟩ = 0',          () => expect(new Circuit(2).h(0).cnot(0, 1).expectation('ZI')).toBeCloseTo(0, 10))
+  it('Bell ⟨IZ⟩ = 0',          () => expect(new Circuit(2).h(0).cnot(0, 1).expectation('IZ')).toBeCloseTo(0, 10))
+  it('Bell ⟨YY⟩ = −1',         () => expect(new Circuit(2).h(0).cnot(0, 1).expectation('YY')).toBeCloseTo(-1, 8))
+
+  // GHZ state
+  it('GHZ ⟨ZZZ⟩ = 0',          () => expect(new Circuit(3).h(0).cnot(0,1).cnot(1,2).expectation('ZZZ')).toBeCloseTo(0, 10))
+  it('GHZ ⟨ZZI⟩ = +1',         () => expect(new Circuit(3).h(0).cnot(0,1).cnot(1,2).expectation('ZZI')).toBeCloseTo(1, 10))
+
+  // Validation
+  it('wrong length throws',     () => expect(() => new Circuit(2).expectation('Z')).toThrow(TypeError))
+  it('invalid character throws', () => expect(() => new Circuit(1).expectation('A')).toThrow(TypeError))
+  it('measure op throws',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).expectation('Z')).toThrow(TypeError))
 })
