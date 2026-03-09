@@ -84,7 +84,14 @@ function remapOp(op: Op, qmap: readonly number[]): Op {
     case 'csrswap':    return { ...op, control: q(op.control), a: q(op.a), b: q(op.b) }
     case 'subcircuit': return { ...op, qubits: op.qubits.map(i => q(i)) }
     case 'unitary':    return { ...op, qubits: op.qubits.map(i => q(i)) }
-    default:           return op  // measure/reset/if: validated at defineGate time
+    case 'barrier':    return { ...op, qubits: op.qubits.map(i => q(i)) }
+    case 'measure':    return op  // measure/reset/if are forbidden inside defineGate bodies
+    case 'reset':      return op
+    case 'if':         return op
+    default: {
+      const _exhaustive: never = op
+      return _exhaustive
+    }
   }
 }
 
@@ -516,6 +523,10 @@ function opsToJSON(ops: readonly Op[]): unknown[] {
       case 'subcircuit': return { kind: 'subcircuit', name: op.name, qubits: [...op.qubits], def: opsToJSON(op.def) }
       case 'barrier':    return { kind: 'barrier', qubits: [...op.qubits] }
       case 'unitary':    return { kind: 'unitary', qubits: [...op.qubits], matrix: op.matrix.map(row => row.map(({ re, im }) => [re, im])) }
+      default: {
+        const _exhaustive: never = op
+        return _exhaustive
+      }
     }
   })
 }
