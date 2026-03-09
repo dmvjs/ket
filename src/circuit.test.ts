@@ -6109,3 +6109,250 @@ describe('qaoa() + maxCutHamiltonian()', () => {
     expect(energy).toBeCloseTo(0, 10)
   })
 })
+
+// ─── circuit.circuitMatrix() ──────────────────────────────────────────────────
+
+describe('circuit.circuitMatrix()', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  const TOL = 10
+
+  it('identity circuit produces identity matrix', () => {
+    const U = new Circuit(2).circuitMatrix()
+    for (let r = 0; r < 4; r++)
+      for (let c = 0; c < 4; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(r === c ? 1 : 0, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('H on 1 qubit: matrix is Hadamard', () => {
+    const U = new Circuit(1).h(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo( sq2, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(-sq2, TOL)
+    for (let r = 0; r < 2; r++)
+      for (let c = 0; c < 2; c++)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+  })
+
+  it('X gate gives Pauli-X matrix', () => {
+    const U = new Circuit(1).x(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo(0, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo(1, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo(1, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(0, TOL)
+  })
+
+  it('matrix is unitary: U†U = I', () => {
+    const U = new Circuit(2).h(0).cnot(0, 1).circuitMatrix()
+    const dim = 4
+    for (let r = 0; r < dim; r++) {
+      for (let c = 0; c < dim; c++) {
+        // (U†U)[r][c] = Σ_k conj(U[k][r]) * U[k][c]
+        let re = 0, im = 0
+        for (let k = 0; k < dim; k++) {
+          const a = U[k]![r]!, b = U[k]![c]!
+          re += a.re * b.re + a.im * b.im
+          im += a.re * b.im - a.im * b.re
+        }
+        expect(re).toBeCloseTo(r === c ? 1 : 0, TOL)
+        expect(im).toBeCloseTo(0, TOL)
+      }
+    }
+  })
+
+  it('1-qubit unitary round-trips: circuitMatrix matches the matrix passed in', () => {
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const U = new Circuit(1).unitary(H, 0).circuitMatrix()
+    for (let r = 0; r < 2; r++)
+      for (let c = 0; c < 2; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(H[r]![c]!, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('2-qubit unitary round-trips: CNOT matrix (standard convention)', () => {
+    // CNOT in standard convention (q0=MSB): |10⟩→|11⟩, |11⟩→|10⟩
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    const U = new Circuit(2).unitary(CNOT, 0, 1).circuitMatrix()
+    for (let r = 0; r < 4; r++)
+      for (let c = 0; c < 4; c++) {
+        expect(U[r]![c]!.re).toBeCloseTo(CNOT[r]![c]!, TOL)
+        expect(U[r]![c]!.im).toBeCloseTo(0, TOL)
+      }
+  })
+
+  it('throws for circuits with measurement ops', () => {
+    expect(() =>
+      new Circuit(1).h(0).creg('c', 1).measure(0, 'c', 0).circuitMatrix()
+    ).toThrow(TypeError)
+  })
+
+  it('throws RangeError for circuits wider than 12 qubits', () => {
+    expect(() => new Circuit(13).circuitMatrix()).toThrow(RangeError)
+  })
+})
+
+// ─── circuit.unitary() — custom N-qubit gate ──────────────────────────────────
+
+describe('circuit.unitary() — 1-qubit', () => {
+  const sq2 = 1 / Math.sqrt(2)
+  // H matrix as plain numbers (real)
+  const H = [[sq2, sq2], [sq2, -sq2]]
+  // X matrix as Complex
+  const X = [[{ re: 0, im: 0 }, { re: 1, im: 0 }], [{ re: 1, im: 0 }, { re: 0, im: 0 }]]
+
+  it('H via real number[][] produces Bell state on q0', () => {
+    const c = new Circuit(2).unitary(H, 0).cnot(0, 1)
+    const p = c.exactProbs()
+    expect(p['00']).toBeCloseTo(0.5, 10)
+    expect(p['11']).toBeCloseTo(0.5, 10)
+  })
+
+  it('X via Complex[][] flips qubit', () => {
+    const circ = new Circuit(1).unitary(X, 0)
+    expect(circ.probability('1')).toBeCloseTo(1, 10)
+  })
+
+  it('identity matrix leaves state unchanged', () => {
+    const I = [[1, 0], [0, 1]]
+    const circ = new Circuit(2).h(0).cnot(0, 1).unitary(I, 0)
+    const p = circ.exactProbs()
+    expect(p['00']).toBeCloseTo(0.5, 10)
+    expect(p['11']).toBeCloseTo(0.5, 10)
+  })
+
+  it('matches equivalent named gate amplitude exactly', () => {
+    const named  = new Circuit(1).h(0).amplitude('0')
+    const custom = new Circuit(1).unitary(H, 0).amplitude('0')
+    expect(custom.re).toBeCloseTo(named.re, 10)
+    expect(custom.im).toBeCloseTo(named.im, 10)
+  })
+
+  it('draw() shows U for custom unitary', () => {
+    const circ = new Circuit(1).unitary(H, 0)
+    expect(circ.draw()).toContain('U')
+  })
+})
+
+describe('circuit.unitary() — 2-qubit', () => {
+  // SWAP matrix: row/col order |00⟩,|01⟩,|10⟩,|11⟩ (q0=MSB)
+  const SWAP = [
+    [1, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 1, 0, 0],
+    [0, 0, 0, 1],
+  ]
+  // CNOT matrix (q0=control=MSB, q1=target)
+  const CNOT = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 0, 1],
+    [0, 0, 1, 0],
+  ]
+
+  it('SWAP via unitary swaps qubit states', () => {
+    // x(1) gives q0=0,q1=1 = bitstring "10"; SWAP(q0,q1) → q0=1,q1=0 = bitstring "01"
+    const circ = new Circuit(2).x(1).unitary(SWAP, 0, 1)
+    expect(circ.probability('01')).toBeCloseTo(1, 10)
+  })
+
+  it('CNOT via unitary entangles like built-in cnot', () => {
+    const builtin = new Circuit(2).h(0).cnot(0, 1).exactProbs()
+    const custom  = new Circuit(2).h(0).unitary(CNOT, 0, 1).exactProbs()
+    expect(custom['00']).toBeCloseTo(builtin['00']!, 10)
+    expect(custom['11']).toBeCloseTo(builtin['11']!, 10)
+  })
+})
+
+describe('circuit.unitary() — 3-qubit', () => {
+  // Toffoli matrix 8×8: only CCX entry differs from I
+  const TOF: number[][] = Array.from({ length: 8 }, (_, r) =>
+    Array.from({ length: 8 }, (_, c) => {
+      if (r === 6 && c === 7) return 1
+      if (r === 7 && c === 6) return 1
+      if (r === c && r !== 6 && r !== 7) return 1
+      return 0
+    })
+  )
+
+  it('3-qubit Toffoli via unitary flips target when both controls are |1⟩', () => {
+    // Start in |110⟩ (q0=0,q1=1,q2=1), apply CCX(q2,q1,q0): both controls 1 → flip q0
+    const circ = new Circuit(3).x(1).x(2).unitary(TOF, 2, 1, 0)
+    expect(circ.probability('111')).toBeCloseTo(1, 10)
+  })
+})
+
+describe('circuit.unitary() — JSON round-trip', () => {
+  it('real matrix survives toJSON/fromJSON', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const original = new Circuit(1).unitary(H, 0)
+    const restored = Circuit.fromJSON(original.toJSON())
+    expect(restored.probability('0')).toBeCloseTo(0.5, 10)
+    expect(restored.probability('1')).toBeCloseTo(0.5, 10)
+  })
+
+  it('complex matrix survives toJSON/fromJSON', () => {
+    const S = [[{ re: 1, im: 0 }, { re: 0, im: 0 }], [{ re: 0, im: 0 }, { re: 0, im: 1 }]]
+    const original = new Circuit(1).x(0).unitary(S, 0)
+    const restored = Circuit.fromJSON(original.toJSON())
+    const amp = restored.amplitude('1')
+    expect(amp.re).toBeCloseTo(0, 10)
+    expect(amp.im).toBeCloseTo(1, 10)
+  })
+})
+
+describe('circuit.unitary() — MPS backend', () => {
+  it('1-qubit unitary H runs in MPS mode', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const result = new Circuit(2).unitary(H, 0).runMps({ shots: 4000, seed: 42 })
+    expect(result.probs['00']!).toBeGreaterThan(0.4)
+    expect(result.probs['00']!).toBeLessThan(0.6)
+  })
+
+  it('2-qubit unitary runs in MPS mode', () => {
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    const result = new Circuit(2).h(0).unitary(CNOT, 0, 1).runMps({ shots: 4000, seed: 42 })
+    const p = result.probs
+    expect((p['00'] ?? 0) + (p['11'] ?? 0)).toBeGreaterThan(0.9)
+  })
+
+  it('3-qubit unitary throws in MPS mode', () => {
+    const I8 = Array.from({ length: 8 }, (_, r) => Array.from({ length: 8 }, (_, c) => r === c ? 1 : 0))
+    expect(() => new Circuit(3).unitary(I8, 0, 1, 2).runMps()).toThrow('MPS')
+  })
+})
+
+describe('circuit.unitary() — dm() backend', () => {
+  it('H via unitary on DM backend matches named H', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const H = [[sq2, sq2], [sq2, -sq2]]
+    const named  = new Circuit(1).h(0).dm().probabilities()
+    const custom = new Circuit(1).unitary(H, 0).dm().probabilities()
+    expect(custom['0']).toBeCloseTo(named['0']!, 10)
+    expect(custom['1']).toBeCloseTo(named['1']!, 10)
+  })
+})
+
+describe('circuit.unitary() — error paths', () => {
+  it('throws RangeError for out-of-range qubit', () => {
+    expect(() => new Circuit(2).unitary([[1,0],[0,1]], 5)).toThrow(RangeError)
+  })
+
+  it('throws TypeError for wrong matrix size (1-qubit needs 2×2)', () => {
+    const bad = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    expect(() => new Circuit(1).unitary(bad, 0)).toThrow('2×2')
+  })
+
+  it('throws TypeError for empty qubits list', () => {
+    expect(() => new Circuit(1).unitary([[1]])).toThrow('non-empty')
+  })
+
+  it('runClifford throws for custom unitary', () => {
+    const H = [[1/Math.sqrt(2), 1/Math.sqrt(2)], [1/Math.sqrt(2), -1/Math.sqrt(2)]]
+    expect(() => new Circuit(1).unitary(H, 0).creg('c',1).measure(0,'c',0).runClifford()).toThrow(/unitary/)
+  })
+})

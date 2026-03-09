@@ -232,6 +232,42 @@ export function applyControlled(sv: StateVector, control: number, target: number
   return next
 }
 
+/**
+ * Apply an N-qubit unitary to qubits `qs` (qs[0] = MSB of local 2^N index).
+ * Matrix is 2^N × 2^N. Row/column order matches `applyTwo`: qs[0] is MSB.
+ */
+export function applyUnitary(sv: StateVector, qs: readonly number[], matrix: readonly (readonly Complex[])[]): StateVector {
+  const n = qs.length
+  const dim = 1 << n
+  const masks = qs.map(q => 1n << BigInt(q))
+  const allMask = masks.reduce((a, b) => a | b, 0n)
+  const next: StateVector = new Map()
+  const seen = new Set<bigint>()
+
+  for (const idx of sv.keys()) {
+    const ctx = idx & ~allMask
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    // bases[i] = global index for local state i (qs[0] = MSB of i)
+    const bases: bigint[] = Array.from({ length: dim }, (_, i) => {
+      let b = ctx
+      for (let bit = 0; bit < n; bit++) {
+        if ((i >> (n - 1 - bit)) & 1) b |= masks[bit]!
+      }
+      return b
+    })
+
+    const amps = bases.map(b => sv.get(b) ?? ZERO)
+    for (let r = 0; r < dim; r++) {
+      let out = ZERO
+      for (let c = 0; c < dim; c++) out = add(out, mul(matrix[r]![c]!, amps[c]!))
+      accumulate(next, bases[r]!, out)
+    }
+  }
+  return next
+}
+
 /** Return probability of each basis state as a plain Record<decimal-string, number>. */
 export function probabilities(sv: StateVector): Map<bigint, number> {
   const probs = new Map<bigint, number>()

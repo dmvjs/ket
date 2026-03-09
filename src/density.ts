@@ -129,6 +129,61 @@ function applyPerm(dm: DM, n: number, f: (i: bigint) => bigint): DM {
   return next
 }
 
+/** ρ → U ρ U†  — N-qubit unitary on qubits `qs` (qs[0] = MSB of local index). */
+function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonly (readonly Complex[])[]): DM {
+  const next: DM = new Map()
+  const shift    = BigInt(n)
+  const dimMask  = (1n << shift) - 1n
+  const localDim = 1 << qs.length
+  const masks    = qs.map(q => 1n << BigInt(q))
+  const allMask  = masks.reduce((a, b) => a | b, 0n)
+  const seen     = new Set<bigint>()
+
+  for (const k of dm.keys()) {
+    const ctx = k & ~(allMask << shift) & ~allMask
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    const rb = ctx >> shift, cb = ctx & dimMask
+
+    const rowBases: bigint[] = Array.from({ length: localDim }, (_, i) => {
+      let b = rb
+      for (let bit = 0; bit < qs.length; bit++) {
+        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
+      }
+      return b
+    })
+    const colBases: bigint[] = Array.from({ length: localDim }, (_, i) => {
+      let b = cb
+      for (let bit = 0; bit < qs.length; bit++) {
+        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
+      }
+      return b
+    })
+
+    const p: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
+      Array.from({ length: localDim }, (_, ci) => dmGet(dm, shift, rowBases[ri]!, colBases[ci]!))
+    )
+    // Left multiply: t = U · p
+    const t: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
+      Array.from({ length: localDim }, (_, ci) => {
+        let v = ZERO
+        for (let k2 = 0; k2 < localDim; k2++) v = add(v, mul(matrix[ri]![k2]!, p[k2]![ci]!))
+        return v
+      })
+    )
+    // Right multiply by U†: new = t · U†
+    for (let ri = 0; ri < localDim; ri++) {
+      for (let ci = 0; ci < localDim; ci++) {
+        let v = ZERO
+        for (let k2 = 0; k2 < localDim; k2++) v = add(v, mul(t[ri]![k2]!, conj(matrix[ci]![k2]!)))
+        dmSet(next, shift, rowBases[ri]!, colBases[ci]!, v)
+      }
+    }
+  }
+  return next
+}
+
 // ─── Noise channels ────────────────────────────────────────────────────────
 
 /**
@@ -414,6 +469,7 @@ export type DmOp =
   | { kind: 'toffoli';    c1: number;      c2: number;    target: number }
   | { kind: 'cswap';      control: number; a: number;     b: number }
   | { kind: 'csrswap';    control: number; a: number;     b: number }
+  | { kind: 'unitary';    qubits: readonly number[];      matrix: readonly (readonly Complex[])[] }
 
 /**
  * Simulate `ops` on the |0…0⟩⟨0…0| initial state and return the exact
@@ -524,6 +580,9 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
         dm = dmNext
         break
       }
+      case 'unitary':
+        dm = applyUnitaryN(dm, n, op.qubits, op.matrix)
+        break
     }
   }
 

@@ -195,6 +195,30 @@ circuit.statevector({ initialState: '110' })
 | CSWAP | `cswap(c, q0, q1)` | Fredkin |
 | C√SWAP | `csrswap(c, q0, q1)` | Controlled-√SWAP |
 
+### Custom unitary gate
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+import type { Complex } from '@kirkelliott/ket'
+
+// Real matrix (number[][])
+const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+circuit.unitary(SWAP, 0, 1)
+
+// Complex matrix ({ re, im }[][])
+const S: Complex[][] = [
+  [{ re: 1, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 1 }],
+]
+circuit.unitary(S, 0)
+```
+
+`matrix` must be 2^N × 2^N where N is the number of qubits. The first qubit in the argument list is the MSB of the local state index — matching the convention of all other multi-qubit gates. Entries can be plain `number` (real part only) or `Complex` objects.
+
+Supported in all backends: statevector, density matrix, and MPS (1 and 2-qubit only). Throws `TypeError` in `runClifford` (the simulator cannot verify Clifford membership from an arbitrary matrix).
+
+JSON round-trip is lossless — the matrix is stored as `[[re, im], ...][]` in the serialized format.
+
 ### Scheduling
 
 | Method | Description |
