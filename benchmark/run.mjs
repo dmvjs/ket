@@ -4,7 +4,7 @@
  * Used by .github/workflows/benchmark.yml to update the README.
  */
 
-import { Circuit, qft } from '../dist/ket.js'
+import { Circuit, qft, DEVICES } from '../dist/ket.js'
 
 const RUNS = 5  // take median of N runs
 
@@ -73,6 +73,49 @@ for (const n of [20, 50, 100]) {
 for (const n of [20, 30, 50]) {
   const c = randomCircuit(n, 4)
   results[`mps_random_${n}q_chi8`] = bench(() => c.runMps({ shots: 1000, maxBond: 8 }))
+}
+
+// compose(): measure pure concatenation overhead vs building equivalent circuit directly
+{
+  const half = randomCircuit(16, 2)
+  const full = randomCircuit(16, 4)
+  results['compose_16q_d4']       = bench(() => half.compose(half))
+  results['compose_vs_direct_16q'] = bench(() => full.statevector())
+  // compose() cost should be negligible — just array spread; statevector() dominates
+  const composed = half.compose(half)
+  results['compose_sv_16q'] = bench(() => composed.statevector())
+}
+
+// bind(): parametric ansatz substitution overhead
+{
+  // 10-parameter ansatz — realistic for VQE
+  let ansatz = new Circuit(5)
+  const names = ['t0','t1','t2','t3','t4','t5','t6','t7','t8','t9']
+  for (let i = 0; i < 5; i++) ansatz = ansatz.ry(names[i*2], i).rz(names[i*2+1], i)
+  for (let i = 0; i < 4; i++) ansatz = ansatz.cnot(i, i + 1)
+  const vals = Object.fromEntries(names.map((n, i) => [n, i * 0.1]))
+  results['bind_10param_5q']    = bench(() => ansatz.bind(vals))
+  const bound = ansatz.bind(vals)
+  results['bind_then_sv_5q']    = bench(() => ansatz.bind(vals).statevector())
+  results['bind_baseline_sv_5q'] = bench(() => bound.statevector())
+  // bind + sv overhead = bind_then_sv - bind_baseline_sv; should be < 0.1ms
+}
+
+// stateAsArray(): overhead vs raw statevector()
+{
+  const c = randomCircuit(12, 4)
+  results['stateAsArray_12q']   = bench(() => c.stateAsArray())
+  results['statevector_12q']    = bench(() => c.statevector())
+  // stateAsArray overhead = one extra pass over amplitudes; should be < 5% of total
+}
+
+// Noise simulation with device profiles
+{
+  const bell = new Circuit(2).h(0).cnot(0, 1).creg('c', 2).measure(0, 'c', 0).measure(1, 'c', 1)
+  results['noise_ibm_sherbrooke_1k'] = bench(() => bell.run({ shots: 1000, noise: 'ibm_sherbrooke' }))
+  results['noise_h1_1_1k']           = bench(() => bell.run({ shots: 1000, noise: 'h1-1' }))
+  results['noise_forte1_1k']         = bench(() => bell.run({ shots: 1000, noise: 'forte-1' }))
+  results['noise_clean_1k']          = bench(() => bell.run({ shots: 1000 }))
 }
 
 // Chart data: per-qubit time + memory for n=2..20 (JIT is warm from above runs)
