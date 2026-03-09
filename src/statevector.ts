@@ -1,8 +1,8 @@
 /**
  * Sparse statevector over BigInt indices.
  *
- * State index bit layout: qubit 0 is bit 0 (LSB), matching IonQ's bitstring
- * convention where q0 is the rightmost character.
+ * State index bit layout: qubit 0 is bit 0 (LSB). Public-facing bitstrings
+ * use the q0-leftmost convention where q0 is the leftmost character.
  *
  * Using BigInt eliminates the 32-bit overflow that silently wraps at qubit 30
  * when using `1 << 31` in JavaScript.

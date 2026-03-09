@@ -118,11 +118,11 @@ function flattenOps(ops: readonly Op[]): readonly FlatOp[] {
   return result
 }
 
-/** Build a computational-basis statevector from a bitstring (q0 rightmost, IonQ convention). */
+/** Build a computational-basis statevector from a bitstring (q0 leftmost, standard convention). */
 function svFromBitstring(s: string, qubits: number): StateVector {
   if (s.length !== qubits || !/^[01]+$/.test(s))
     throw new TypeError(`initialState '${s}' must be a ${qubits}-character binary string`)
-  return new Map([[BigInt('0b' + s), { re: 1, im: 0 }]])
+  return new Map([[BigInt('0b' + [...s].reverse().join('')), { re: 1, im: 0 }]])
 }
 
 /** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
@@ -709,7 +709,7 @@ export interface RunOptions {
   seed?: number
   /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
   noise?: string | NoiseParams
-  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
 }
 
@@ -718,14 +718,14 @@ export interface MpsRunOptions {
   seed?: number
   /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
   maxBond?: number
-  /** Starting computational basis state as a bitstring (q0 rightmost). E.g. `'110'` = q0=0, q1=1, q2=1. */
+  /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
 }
 
 /**
  * Measurement result — the output of running a circuit.
  *
- * `probs` keys are IonQ bitstrings: q0 is the rightmost character.
+ * `probs` keys are standard bitstrings: q0 is the leftmost character.
  * `histogram` keys are decimal integers (IonQ API convention).
  */
 export class Distribution {
@@ -750,7 +750,7 @@ export class Distribution {
 
     for (const [idx, count] of counts) {
       const prob      = count / shots
-      const bitstring = idx.toString(2).padStart(qubits, '0')
+      const bitstring = idx.toString(2).padStart(qubits, '0').split('').reverse().join('')
       probs[bitstring]         = prob
       histogram[String(idx)]   = prob
     }
@@ -1069,7 +1069,7 @@ export class Circuit {
    * Simulate the circuit and return the full sparse amplitude map.
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
    *
-   * @param initialState Optional starting computational basis state as a bitstring (q0 rightmost).
+   * @param initialState Optional starting computational basis state as a bitstring (q0 leftmost).
    */
   statevector({ initialState }: { initialState?: string } = {}): Map<bigint, Complex> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
@@ -1088,8 +1088,8 @@ export class Circuit {
    * varying slowest. This matches the convention of `unitary()`, textbooks, and
    * most quantum computing libraries.
    *
-   * Note: this is different from the IonQ bitstring convention (q0 rightmost)
-   * used by `amplitude()`, `exactProbs()`, and `statevector()`.
+   * Note: the column/row index ordering here uses q0 as MSB of the integer index,
+   * which differs from the public bitstring API where q0 is the leftmost character.
    *
    * Throws `TypeError` for circuits with mid-circuit measurement, reset, or
    * conditional ops. Throws `RangeError` for circuits wider than 12 qubits
@@ -1125,10 +1125,10 @@ export class Circuit {
 
   /**
    * Return the complex amplitude for the basis state identified by `bitstring`.
-   * Bitstring format: q0 is the rightmost character (IonQ convention), e.g. `'01'` = q0=1, q1=0.
+   * Bitstring format: q0 is the leftmost character (standard convention), e.g. `'10'` = q0=1, q1=0.
    */
   amplitude(bitstring: string): Complex {
-    return this.statevector().get(BigInt('0b' + bitstring)) ?? ZERO
+    return this.statevector().get(BigInt('0b' + [...bitstring].reverse().join(''))) ?? ZERO
   }
 
   /** Return the measurement probability (|amplitude|²) for the given basis state bitstring. */
@@ -1183,7 +1183,7 @@ export class Circuit {
     if (entries.length === 0) return '0'
 
     const terms = entries.map(([idx, amp]) =>
-      `${fmtAmp(amp)}|${idx.toString(2).padStart(this.qubits, '0')}⟩`
+      `${fmtAmp(amp)}|${idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')}⟩`
     )
 
     let result = terms[0]!
@@ -3017,9 +3017,9 @@ export class Circuit {
     let state = mpsInit(this.qubits)
     if (initialState !== undefined) {
       svFromBitstring(initialState, this.qubits) // validate
-      const rev = initialState.split('').reverse() // rev[q] = bit for qubit q
+      const bits = initialState.split('') // bits[q] = bit for qubit q (q0 leftmost)
       for (let q = 0; q < this.qubits; q++) {
-        if (rev[q] === '1') state = mpsApply1(state, q, G.X)
+        if (bits[q] === '1') state = mpsApply1(state, q, G.X)
       }
     }
 
@@ -3062,7 +3062,7 @@ export class Circuit {
   /**
    * Return exact floating-point probabilities from the statevector — no sampling variance.
    *
-   * Keys are IonQ bitstrings (q0 rightmost). Only non-negligible amplitudes are included.
+   * Keys are standard bitstrings (q0 leftmost). Only non-negligible amplitudes are included.
    * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
    */
   exactProbs({ initialState }: { initialState?: string } = {}): Readonly<Record<string, number>> {
@@ -3073,9 +3073,52 @@ export class Circuit {
     const sv = simulatePure(this.#ops, this.qubits, init)
     const out: Record<string, number> = {}
     for (const [idx, p] of probabilities(sv)) {
-      out[idx.toString(2).padStart(this.qubits, '0')] = p
+      out[idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = p
     }
     return Object.freeze(out)
+  }
+
+  /**
+   * Compute the Pauli expectation value ⟨ψ|P|ψ⟩ for a tensor-product Pauli operator P.
+   *
+   * `pauli` is a string of length `qubits` over {I, X, Y, Z} (case-insensitive).
+   * `pauli[q]` specifies the Pauli acting on qubit q (q0 leftmost, matching bitstring convention).
+   *
+   * Basis rotations: X → H, Y → Rx(π/2), Z/I → identity.
+   * Throws `TypeError` for circuits with mid-circuit measure, reset, or if ops.
+   *
+   * @example
+   * new Circuit(1).expectation('Z')              // 1   (|0⟩ is +1 eigenstate of Z)
+   * new Circuit(1).x(0).expectation('Z')         // -1  (|1⟩ is −1 eigenstate of Z)
+   * new Circuit(1).h(0).expectation('X')         // 1   (|+⟩ is +1 eigenstate of X)
+   * new Circuit(2).h(0).cnot(0,1).expectation('ZZ')  // 1   (Bell state)
+   */
+  expectation(pauli: string): number {
+    const n = this.qubits
+    pauli = pauli.toUpperCase()
+    if (pauli.length !== n) throw new TypeError(`pauli '${pauli}' length must equal qubits (${n})`)
+    if (!/^[IXYZ]+$/.test(pauli)) throw new TypeError(`pauli must contain only I, X, Y, Z`)
+    if (!/[XYZ]/.test(pauli)) return 1
+
+    // Rotate each qubit to the Z basis for its Pauli operator
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    let rot: Circuit = this
+    for (let q = 0; q < n; q++) {
+      if (pauli[q] === 'X') rot = rot.h(q)
+      else if (pauli[q] === 'Y') rot = rot.rx(Math.PI / 2, q)
+    }
+
+    // ⟨P⟩ = Σ_b (-1)^{parity(b)} · Pr(b)  where parity = XOR of bits at non-I positions
+    const probs = rot.exactProbs()
+    let exp = 0
+    for (const [bs, prob] of Object.entries(probs)) {
+      let parity = 0
+      for (let q = 0; q < n; q++) {
+        if (pauli[q] !== 'I' && bs[q] === '1') parity ^= 1
+      }
+      exp += (parity === 0 ? 1 : -1) * prob
+    }
+    return exp
   }
 
   // ── JSON save / load ─────────────────────────────────────────────────────

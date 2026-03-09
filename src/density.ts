@@ -269,7 +269,7 @@ function depolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
  * For n qubits the state space has 4ⁿ entries in the worst case.
  * In practice, near-pure states and modest noise keep the DM very sparse.
  *
- * All bitstring keys follow the IonQ convention: qubit 0 is the LSB (rightmost).
+ * All bitstring keys follow the standard convention: qubit 0 is the leftmost character.
  */
 export class DensityMatrix {
   readonly qubits: number
@@ -293,14 +293,14 @@ export class DensityMatrix {
   /**
    * Diagonal probabilities: P(bitstring) = ρ[bs][bs].
    *
-   * Keys are IonQ bitstrings (q0 rightmost).  Only non-negligible values
+   * Keys are standard bitstrings (q0 leftmost).  Only non-negligible values
    * (> 1e-14) are included.
    */
   probabilities(): Readonly<Record<string, number>> {
     const out: Record<string, number> = {}
     for (const [k, v] of this.#dm) {
       const r = k >> this.#shift, c = k & this.#dimMask
-      if (r === c && v.re > 1e-14) out[r.toString(2).padStart(this.qubits, '0')] = v.re
+      if (r === c && v.re > 1e-14) out[r.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = v.re
     }
     return Object.freeze(out)
   }
