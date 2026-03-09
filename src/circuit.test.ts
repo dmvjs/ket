@@ -4063,6 +4063,17 @@ describe('vqe — Variational Quantum Eigensolver', () => {
     expect(vqe(new Circuit(2).h(0).cnot(0, 1), h)).toBeCloseTo(1, 8)
   })
 
+  // 3-qubit asymmetric: catches bs[q] vs bs[n-1-q] indexing bugs
+  it('three-qubit XII: ⟨0|X|0⟩ on q2 only = 0', () => {
+    // ops='XII': ops[0]='X' on q2, ops[1]=ops[2]='I'. State |000⟩. ⟨X(q2)⟩ = ⟨0|X|0⟩ = 0.
+    expect(vqe(new Circuit(3), [{ coeff: 1, ops: 'XII' }])).toBeCloseTo(0, 10)
+  })
+
+  it('three-qubit XII: ⟨+|X|+⟩ on q2 only = 1', () => {
+    // ops='XII': X on q2. Prepare q2=|+⟩ via h(2). ⟨X(q2)⟩ = 1.
+    expect(vqe(new Circuit(3).h(2), [{ coeff: 1, ops: 'XII' }])).toBeCloseTo(1, 10)
+  })
+
   it('throws for ops length mismatch', () => {
     expect(() => vqe(new Circuit(2), [{ coeff: 1, ops: 'Z' }])).toThrow(TypeError)
   })
