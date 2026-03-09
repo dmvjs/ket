@@ -1128,6 +1128,8 @@ export class Circuit {
    * Bitstring format: q0 is the leftmost character (standard convention), e.g. `'10'` = q0=1, q1=0.
    */
   amplitude(bitstring: string): Complex {
+    if (bitstring.length !== this.qubits || !/^[01]+$/.test(bitstring))
+      throw new TypeError(`bitstring '${bitstring}' must be a ${this.qubits}-character binary string`)
     return this.statevector().get(BigInt('0b' + [...bitstring].reverse().join(''))) ?? ZERO
   }
 
@@ -3101,7 +3103,6 @@ export class Circuit {
     if (!/[XYZ]/.test(pauli)) return 1
 
     // Rotate each qubit to the Z basis for its Pauli operator
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
     let rot: Circuit = this
     for (let q = 0; q < n; q++) {
       if (pauli[q] === 'X') rot = rot.h(q)
