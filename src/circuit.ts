@@ -34,10 +34,15 @@ type SubcircuitOp = { kind: 'subcircuit'; name: string; qubits: readonly number[
 type BarrierOp    = { kind: 'barrier';    qubits: readonly number[] }
 /** Arbitrary N-qubit unitary gate defined by its 2^N × 2^N matrix. */
 type UnitaryOp    = { kind: 'unitary';    qubits: readonly number[]; matrix: readonly (readonly Complex[])[] }
-type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp | UnitaryOp
+/**
+ * A gate whose angle parameters are symbolic strings, deferred until `.bind()` is called.
+ * `params` may mix concrete numbers and string variable names (e.g. `['theta', 0.5]`).
+ */
+type ParametricOp = { kind: 'parametric'; name: string; params: readonly (number | string)[]; qubits: readonly number[] }
+type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp | UnitaryOp | ParametricOp
 
-/** Op after subcircuits have been expanded by flattenOps. */
-export type FlatOp = Exclude<Op, SubcircuitOp>
+/** Op after subcircuits have been expanded by flattenOps. Parametric ops are excluded — bind() first. */
+export type FlatOp = Exclude<Op, SubcircuitOp | ParametricOp>
 
 // ─── Mid-circuit measurement helpers ─────────────────────────────────────────
 
@@ -91,6 +96,7 @@ function remapOp(op: Op, qmap: readonly number[]): Op {
     case 'measure':    return op  // measure/reset/if are forbidden inside defineGate bodies
     case 'reset':      return op
     case 'if':         return op
+    case 'parametric': return op  // parametric ops carry qubit indices, no remapping needed
     default: {
       const _exhaustive: never = op
       return _exhaustive
@@ -104,7 +110,13 @@ function remapOp(op: Op, qmap: readonly number[]): Op {
  */
 function flattenOps(ops: readonly Op[]): readonly FlatOp[] {
   let hasSubcircuit = false
-  for (const op of ops) if (op.kind === 'subcircuit') { hasSubcircuit = true; break }
+  for (const op of ops) {
+    if (op.kind === 'parametric') {
+      const names = [...collectParams(ops)].join(', ')
+      throw new TypeError(`Circuit has unbound parameters: [${names}]. Call bind({ ${names} }) first.`)
+    }
+    if (op.kind === 'subcircuit') hasSubcircuit = true
+  }
   if (!hasSubcircuit) return ops as readonly FlatOp[]  // fast path — no allocation for pure-primitive circuits
 
   const result: FlatOp[] = []
@@ -112,7 +124,7 @@ function flattenOps(ops: readonly Op[]): readonly FlatOp[] {
     if (op.kind === 'subcircuit') {
       result.push(...flattenOps(op.def.map(inner => remapOp(inner, op.qubits))))
     } else {
-      result.push(op)
+      result.push(op as FlatOp)
     }
   }
   return result
@@ -204,28 +216,56 @@ export interface NoiseParams {
   pMeas?: number
 }
 
-/** Per-device specs: qubit capacity, hardware-native gate set, and published noise figures. */
-export interface IonQDeviceInfo {
+/** Hardware specs and noise parameters for a quantum device. */
+export interface DeviceInfo {
   /** Maximum number of qubits the device supports. */
-  readonly qubits:      number
-  /** Gates that run directly on hardware without compiler translation. */
-  readonly nativeGates: readonly string[]
-  /** Published depolarizing + readout noise parameters (conservative estimates). */
-  readonly noise:       Readonly<NoiseParams>
+  readonly qubits:       number
+  /** Hardware-native gate set, if applicable (IonQ devices). */
+  readonly nativeGates?: readonly string[]
+  /** Published depolarizing + readout noise parameters. */
+  readonly noise:        Readonly<NoiseParams>
 }
+
+/** @deprecated Use `DeviceInfo` instead. */
+export type IonQDeviceInfo = DeviceInfo & { readonly nativeGates: readonly string[] }
 
 /**
- * Published IonQ device specifications.
- * Keys match the strings accepted by `run({ noise })`, `dm({ noise })`, and `checkDevice()`.
+ * Published device specifications for all supported hardware.
+ * Keys match the strings accepted by `run({ noise })`, `dm({ noise })`, and `runClifford({ noise })`.
+ *
+ * **IonQ** — depolarizing probabilities from published benchmarks:
+ *   `aria-1`, `forte-1`, `harmony`
+ *
+ * **IBM Quantum** — median SX (p1), ECR/CZ (p2), and readout (pMeas) error rates
+ *   from arXiv:2410.00916 (AbuGhanem, Aug 2024 calibrations):
+ *   `ibm_sherbrooke`, `ibm_brisbane`, `ibm_torino`
+ *
+ * **Quantinuum** — per-zone RB averages from the H-Series performance-validation page
+ *   (docs.quantinuum.com, 2024):
+ *   `h1-1`, `h2-1`
  */
-export const IONQ_DEVICES: Readonly<Record<string, IonQDeviceInfo>> = {
-  'aria-1':  { qubits: 25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],        noise: { p1: 0.0003, p2: 0.005,  pMeas: 0.004 } },
-  'forte-1': { qubits: 36, nativeGates: ['gpi', 'gpi2', 'ms', 'vz', 'zz'],  noise: { p1: 0.0001, p2: 0.002,  pMeas: 0.002 } },
-  'harmony': { qubits: 11, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],         noise: { p1: 0.001,  p2: 0.015,  pMeas: 0.01  } },
+export const DEVICES: Readonly<Record<string, DeviceInfo>> = {
+  // ── IonQ ──────────────────────────────────────────────────────────────────
+  'aria-1':  { qubits:  25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],       noise: { p1: 0.0003, p2: 0.005,  pMeas: 0.004  } },
+  'forte-1': { qubits:  36, nativeGates: ['gpi', 'gpi2', 'ms', 'vz', 'zz'], noise: { p1: 0.0001, p2: 0.002,  pMeas: 0.002  } },
+  'harmony': { qubits:  11, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],        noise: { p1: 0.001,  p2: 0.015,  pMeas: 0.01   } },
+  // ── IBM Quantum ───────────────────────────────────────────────────────────
+  'ibm_sherbrooke': { qubits: 127, noise: { p1: 2.4e-4, p2: 7.4e-3, pMeas: 1.35e-2 } },
+  'ibm_brisbane':   { qubits: 127, noise: { p1: 2.4e-4, p2: 7.6e-3, pMeas: 1.35e-2 } },
+  'ibm_torino':     { qubits: 133, noise: { p1: 2.0e-4, p2: 3.0e-3, pMeas: 1.0e-2  } },
+  // ── Quantinuum ────────────────────────────────────────────────────────────
+  'h1-1': { qubits:  20, noise: { p1: 1.8e-5, p2: 9.7e-4, pMeas: 2.3e-3 } },
+  'h2-1': { qubits:  56, noise: { p1: 1.9e-5, p2: 1.1e-3, pMeas: 1.0e-3 } },
 }
 
+/** IonQ-specific entries — used by `checkDevice()` and `compile()`. */
+export const IONQ_DEVICES: Readonly<Record<string, IonQDeviceInfo>> =
+  Object.fromEntries(
+    Object.entries(DEVICES).filter(([, d]) => d.nativeGates != null),
+  ) as Record<string, IonQDeviceInfo>
+
 const DEVICE_NOISE: Readonly<Record<string, NoiseParams>> =
-  Object.fromEntries(Object.entries(IONQ_DEVICES).map(([k, v]) => [k, v.noise]))
+  Object.fromEntries(Object.entries(DEVICES).map(([k, v]) => [k, v.noise]))
 
 // 15 non-identity two-qubit Paulis for depolarizing channel: {I,X,Y,Z}⊗{I,X,Y,Z} \ {II}
 const TWO_PAULI: readonly (readonly [Gate2x2 | null, Gate2x2 | null])[] = [
@@ -509,6 +549,8 @@ function opsFromJSON(raw: readonly unknown[]): Op[] {
         return { kind: 'subcircuit', name: o['name'] as string, qubits: o['qubits'] as number[], def: opsFromJSON(o['def'] as unknown[]) } satisfies SubcircuitOp
       case 'barrier':
         return { kind: 'barrier', qubits: o['qubits'] as number[] } satisfies BarrierOp
+      case 'parametric':
+        return { kind: 'parametric', name: o['name'] as string, params: o['params'] as (number | string)[], qubits: o['qubits'] as number[] } satisfies ParametricOp
       case 'unitary': {
         const rawMatrix = o['matrix'] as [number, number][][]
         const matrix: Complex[][] = rawMatrix.map(row => row.map(([re, im]) => ({ re, im })))
@@ -538,6 +580,7 @@ function opsToJSON(ops: readonly Op[]): unknown[] {
       case 'subcircuit': return { kind: 'subcircuit', name: op.name, qubits: [...op.qubits], def: opsToJSON(op.def) }
       case 'barrier':    return { kind: 'barrier', qubits: [...op.qubits] }
       case 'unitary':    return { kind: 'unitary', qubits: [...op.qubits], matrix: op.matrix.map(row => row.map(({ re, im }) => [re, im])) }
+      case 'parametric': return { kind: 'parametric', name: op.name, params: [...op.params], qubits: [...op.qubits] }
       default: {
         const _exhaustive: never = op
         return _exhaustive
@@ -631,6 +674,7 @@ function opQubits(op: Op): number[] {
     case 'subcircuit': return [...op.qubits]
     case 'unitary':    return [...op.qubits]
     case 'if':         return []
+    case 'parametric': return [...op.qubits]
     default: { const _exhaustive: never = op; return [] }
   }
 }
@@ -689,6 +733,7 @@ function opLabel(op: Op, q: number): string {
     case 'subcircuit': return op.name
     case 'unitary':    return 'U'
     case 'if':         return '?'
+    case 'parametric': return `${op.name}(${op.params.join(',')})`
     default: { const _exhaustive: never = op; return '?' }
   }
 }
@@ -707,7 +752,7 @@ function makePrng(seed?: number): () => number {
 export interface RunOptions {
   shots?: number
   seed?: number
-  /** Named device profile ('aria-1' | 'forte-1' | 'harmony') or custom NoiseParams. */
+  /** Named device profile (see `DEVICES` for all options) or custom NoiseParams. */
   noise?: string | NoiseParams
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
@@ -797,6 +842,51 @@ export class Distribution {
   }
 }
 
+// ─── Parametric gate helpers ──────────────────────────────────────────────────
+
+/** Rebuild a ParametricOp into a concrete Op once all params are resolved to numbers. */
+function resolveParametric(name: string, ps: number[], qubits: readonly number[]): Op {
+  const q0 = qubits[0]!, q1 = qubits[1]!
+  const p0 = ps[0]!, p1 = ps[1]!, p2 = ps[2]!
+  switch (name) {
+    case 'rx':   return { kind: 'single',     q: q0,                  gate: G.Rx(p0),       meta: { name, params: ps } }
+    case 'ry':   return { kind: 'single',     q: q0,                  gate: G.Ry(p0),       meta: { name, params: ps } }
+    case 'rz':   return { kind: 'single',     q: q0,                  gate: G.Rz(p0),       meta: { name, params: ps } }
+    case 'vz':   return { kind: 'single',     q: q0,                  gate: G.Rz(p0),       meta: { name, params: ps } }
+    case 'u1':   return { kind: 'single',     q: q0,                  gate: G.U1(p0),       meta: { name, params: ps } }
+    case 'p':    return { kind: 'single',     q: q0,                  gate: G.U1(p0),       meta: { name, params: ps } }
+    case 'u2':   return { kind: 'single',     q: q0,                  gate: G.U2(p0, p1),   meta: { name, params: ps } }
+    case 'u3':   return { kind: 'single',     q: q0,                  gate: G.U3(p0, p1, p2), meta: { name, params: ps } }
+    case 'gpi':  return { kind: 'single',     q: q0,                  gate: G.Gpi(p0),      meta: { name, params: ps } }
+    case 'gpi2': return { kind: 'single',     q: q0,                  gate: G.Gpi2(p0),     meta: { name, params: ps } }
+    case 'xx':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Xx(p0),       meta: { name, params: ps } }
+    case 'yy':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Yy(p0),       meta: { name, params: ps } }
+    case 'zz':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Zz(p0),       meta: { name, params: ps } }
+    case 'xy':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Xy(p0),       meta: { name, params: ps } }
+    case 'ms':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Ms(p0, p1),    meta: { name, params: ps } }
+    case 'crx':  return { kind: 'controlled', control: q0, target: q1, gate: G.Rx(p0),        meta: { name, params: ps } }
+    case 'cry':  return { kind: 'controlled', control: q0, target: q1, gate: G.Ry(p0),        meta: { name, params: ps } }
+    case 'crz':  return { kind: 'controlled', control: q0, target: q1, gate: G.Rz(p0),        meta: { name, params: ps } }
+    case 'cu1':  return { kind: 'controlled', control: q0, target: q1, gate: G.U1(p0),        meta: { name, params: ps } }
+    case 'cu2':  return { kind: 'controlled', control: q0, target: q1, gate: G.U2(p0, p1),    meta: { name, params: ps } }
+    case 'cu3':  return { kind: 'controlled', control: q0, target: q1, gate: G.U3(p0, p1, p2), meta: { name, params: ps } }
+    default: throw new TypeError(`bind: unknown parametric gate '${name}'`)
+  }
+}
+
+/** Collect all unbound parameter names in an op list (recursing into IfOps). */
+function collectParams(ops: readonly Op[]): Set<string> {
+  const names = new Set<string>()
+  for (const op of ops) {
+    if (op.kind === 'parametric') {
+      for (const p of op.params) if (typeof p === 'string') names.add(p)
+    } else if (op.kind === 'if') {
+      for (const n of collectParams(op.ops)) names.add(n)
+    }
+  }
+  return names
+}
+
 // ─── Circuit ──────────────────────────────────────────────────────────────────
 
 export class Circuit {
@@ -839,6 +929,7 @@ export class Circuit {
       case 'measure':    q(op.q); break
       case 'reset':      q(op.q); break
       case 'barrier':    op.qubits.forEach(q); break
+      case 'parametric': op.qubits.forEach(q); break
       case 'unitary': {
         if (op.qubits.length === 0) throw new TypeError('unitary: qubits must be non-empty')
         const expected = 1 << op.qubits.length
@@ -880,16 +971,28 @@ export class Circuit {
 
   // ── Rotation gates ───────────────────────────────────────────────────────
 
-  rx(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rx(theta), meta: { name: 'rx', params: [theta] } }) }
-  ry(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Ry(theta), meta: { name: 'ry', params: [theta] } }) }
-  rz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'rz', params: [theta] } }) }
+  rx(theta: number | string, q: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'rx', params: [theta], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Rx(theta), meta: { name: 'rx', params: [theta] } })
+  }
+  ry(theta: number | string, q: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'ry', params: [theta], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Ry(theta), meta: { name: 'ry', params: [theta] } })
+  }
+  rz(theta: number | string, q: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'rz', params: [theta], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'rz', params: [theta] } })
+  }
 
   /**
    * VirtualZ(θ) — named Rz alias common in superconducting hardware native gate sets
    * (IBM, Rigetti). Functionally identical to `rz(θ)` but carries the `vz` name through
    * import/export for hardware compilation pass awareness.
    */
-  vz(theta: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'vz', params: [theta] } }) }
+  vz(theta: number | string, q: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'vz', params: [theta], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Rz(theta), meta: { name: 'vz', params: [theta] } })
+  }
 
   // ── Named phase rotation gates ───────────────────────────────────────────
 
@@ -905,16 +1008,30 @@ export class Circuit {
   // ── OpenQASM basis gates ─────────────────────────────────────────────────
 
   /** U1(λ) — phase gate; equal to Rz(λ) up to global phase. */
-  u1(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'u1', params: [lambda] } }) }
+  u1(lambda: number | string, q: number): Circuit {
+    if (typeof lambda === 'string') return this.#add({ kind: 'parametric', name: 'u1', params: [lambda], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'u1', params: [lambda] } })
+  }
 
   /** P(λ) — phase gate alias for U1(λ); Qiskit 1.0+ name. P(π) = Z, P(π/2) = S, P(π/4) = T. */
-  p(lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'p', params: [lambda] } }) }
+  p(lambda: number | string, q: number): Circuit {
+    if (typeof lambda === 'string') return this.#add({ kind: 'parametric', name: 'p', params: [lambda], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.U1(lambda), meta: { name: 'p', params: [lambda] } })
+  }
 
   /** U2(φ, λ) = U3(π/2, φ, λ) — equatorial gate. U2(0, π) = H. */
-  u2(phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda), meta: { name: 'u2', params: [phi, lambda] } }) }
+  u2(phi: number | string, lambda: number | string, q: number): Circuit {
+    if (typeof phi === 'string' || typeof lambda === 'string')
+      return this.#add({ kind: 'parametric', name: 'u2', params: [phi, lambda], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.U2(phi, lambda), meta: { name: 'u2', params: [phi, lambda] } })
+  }
 
   /** U3(θ, φ, λ) — general single-qubit unitary; OpenQASM 2.0 basis gate. */
-  u3(theta: number, phi: number, lambda: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.U3(theta, phi, lambda), meta: { name: 'u3', params: [theta, phi, lambda] } }) }
+  u3(theta: number | string, phi: number | string, lambda: number | string, q: number): Circuit {
+    if (typeof theta === 'string' || typeof phi === 'string' || typeof lambda === 'string')
+      return this.#add({ kind: 'parametric', name: 'u3', params: [theta, phi, lambda], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.U3(theta, phi, lambda), meta: { name: 'u3', params: [theta, phi, lambda] } })
+  }
 
   // ── Two-qubit gates ──────────────────────────────────────────────────────
 
@@ -930,16 +1047,28 @@ export class Circuit {
   // ── Two-qubit interaction gates ─────────────────────────────────────────
 
   /** XX(θ) = exp(−iθ/2 · X⊗X) — Ising-XX interaction; IonQ native. */
-  xx(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xx(theta), meta: { name: 'xx', params: [theta] } }) }
+  xx(theta: number | string, a: number, b: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'xx', params: [theta], qubits: [a, b] })
+    return this.#add({ kind: 'two', a, b, gate: G.Xx(theta), meta: { name: 'xx', params: [theta] } })
+  }
 
   /** YY(θ) = exp(−iθ/2 · Y⊗Y) — Ising-YY interaction; IonQ native. */
-  yy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Yy(theta), meta: { name: 'yy', params: [theta] } }) }
+  yy(theta: number | string, a: number, b: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'yy', params: [theta], qubits: [a, b] })
+    return this.#add({ kind: 'two', a, b, gate: G.Yy(theta), meta: { name: 'yy', params: [theta] } })
+  }
 
   /** ZZ(θ) = exp(−iθ/2 · Z⊗Z) — Ising-ZZ interaction; IonQ native. */
-  zz(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Zz(theta), meta: { name: 'zz', params: [theta] } }) }
+  zz(theta: number | string, a: number, b: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'zz', params: [theta], qubits: [a, b] })
+    return this.#add({ kind: 'two', a, b, gate: G.Zz(theta), meta: { name: 'zz', params: [theta] } })
+  }
 
   /** XY(θ) interaction gate. XY(π) = iSWAP, XY(π/2) = √iSWAP. */
-  xy(theta: number, a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.Xy(theta), meta: { name: 'xy', params: [theta] } }) }
+  xy(theta: number | string, a: number, b: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'xy', params: [theta], qubits: [a, b] })
+    return this.#add({ kind: 'two', a, b, gate: G.Xy(theta), meta: { name: 'xy', params: [theta] } })
+  }
 
   /** iSWAP = XY(π): swaps qubits and multiplies each by i. */
   iswap(a: number, b: number): Circuit { return this.#add({ kind: 'two', a, b, gate: G.ISwap, meta: { name: 'iswap' } }) }
@@ -958,9 +1087,18 @@ export class Circuit {
 
   // ── Controlled rotation gates ────────────────────────────────────────────
 
-  crx(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rx(theta), { name: 'crx', params: [theta] }) }
-  cry(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Ry(theta), { name: 'cry', params: [theta] }) }
-  crz(theta: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.Rz(theta), { name: 'crz', params: [theta] }) }
+  crx(theta: number | string, control: number, target: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'crx', params: [theta], qubits: [control, target] })
+    return this.#ctrl(control, target, G.Rx(theta), { name: 'crx', params: [theta] })
+  }
+  cry(theta: number | string, control: number, target: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'cry', params: [theta], qubits: [control, target] })
+    return this.#ctrl(control, target, G.Ry(theta), { name: 'cry', params: [theta] })
+  }
+  crz(theta: number | string, control: number, target: number): Circuit {
+    if (typeof theta === 'string') return this.#add({ kind: 'parametric', name: 'crz', params: [theta], qubits: [control, target] })
+    return this.#ctrl(control, target, G.Rz(theta), { name: 'crz', params: [theta] })
+  }
 
   /** Controlled-Rz(π/2) — controlled phase half-turn. */
   cr2(control: number, target: number): Circuit { return this.#ctrl(control, target, G.R2, { name: 'cr2' }) }
@@ -974,15 +1112,22 @@ export class Circuit {
   // ── Controlled parameterized unitaries ───────────────────────────────────
 
   /** CU1(λ) — controlled phase gate; CU1(π) = CZ. */
-  cu1(lambda: number, control: number, target: number): Circuit { return this.#ctrl(control, target, G.U1(lambda), { name: 'cu1', params: [lambda] }) }
+  cu1(lambda: number | string, control: number, target: number): Circuit {
+    if (typeof lambda === 'string') return this.#add({ kind: 'parametric', name: 'cu1', params: [lambda], qubits: [control, target] })
+    return this.#ctrl(control, target, G.U1(lambda), { name: 'cu1', params: [lambda] })
+  }
 
   /** CU2(φ,λ) = CU3(π/2,φ,λ) — controlled equatorial gate. */
-  cu2(phi: number, lambda: number, control: number, target: number): Circuit {
+  cu2(phi: number | string, lambda: number | string, control: number, target: number): Circuit {
+    if (typeof phi === 'string' || typeof lambda === 'string')
+      return this.#add({ kind: 'parametric', name: 'cu2', params: [phi, lambda], qubits: [control, target] })
     return this.#ctrl(control, target, G.U2(phi, lambda), { name: 'cu2', params: [phi, lambda] })
   }
 
   /** CU3(θ,φ,λ) — controlled general unitary; CU3(π,0,π) = CX. */
-  cu3(theta: number, phi: number, lambda: number, control: number, target: number): Circuit {
+  cu3(theta: number | string, phi: number | string, lambda: number | string, control: number, target: number): Circuit {
+    if (typeof theta === 'string' || typeof phi === 'string' || typeof lambda === 'string')
+      return this.#add({ kind: 'parametric', name: 'cu3', params: [theta, phi, lambda], qubits: [control, target] })
     return this.#ctrl(control, target, G.U3(theta, phi, lambda), { name: 'cu3', params: [theta, phi, lambda] })
   }
 
@@ -999,13 +1144,21 @@ export class Circuit {
   // ── Native IonQ gates ────────────────────────────────────────────────────
 
   /** GPI(φ) — IonQ hardware-native single-qubit gate. GPI(0) = X, GPI(π/2) = Y. */
-  gpi(phi: number, q: number):  Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi(phi),  meta: { name: 'gpi',  params: [phi] } }) }
+  gpi(phi: number | string, q: number): Circuit {
+    if (typeof phi === 'string') return this.#add({ kind: 'parametric', name: 'gpi', params: [phi], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Gpi(phi), meta: { name: 'gpi', params: [phi] } })
+  }
 
   /** GPI2(φ) — IonQ hardware-native half-rotation. GPI2(0) = Rx(π/2), GPI2(π/2) = Ry(π/2). */
-  gpi2(phi: number, q: number): Circuit { return this.#add({ kind: 'single', q, gate: G.Gpi2(phi), meta: { name: 'gpi2', params: [phi] } }) }
+  gpi2(phi: number | string, q: number): Circuit {
+    if (typeof phi === 'string') return this.#add({ kind: 'parametric', name: 'gpi2', params: [phi], qubits: [q] })
+    return this.#add({ kind: 'single', q, gate: G.Gpi2(phi), meta: { name: 'gpi2', params: [phi] } })
+  }
 
   /** MS(φ₀, φ₁) — Mølmer-Sørensen entangling gate; IonQ's native two-qubit operation. MS(0,0) = XX(π/2). */
-  ms(phi0: number, phi1: number, a: number, b: number): Circuit {
+  ms(phi0: number | string, phi1: number | string, a: number, b: number): Circuit {
+    if (typeof phi0 === 'string' || typeof phi1 === 'string')
+      return this.#add({ kind: 'parametric', name: 'ms', params: [phi0, phi1], qubits: [a, b] })
     return this.#add({ kind: 'two', a, b, gate: G.Ms(phi0, phi1), meta: { name: 'ms', params: [phi0, phi1] } })
   }
 
@@ -1074,6 +1227,10 @@ export class Circuit {
   statevector({ initialState }: { initialState?: string } = {}): Map<bigint, Complex> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
+    }
+    const unbound = collectParams(this.#ops)
+    if (unbound.size) {
+      throw new TypeError(`statevector() requires bound parameters. Call bind({ ${[...unbound].map(p => `${p}: value`).join(', ')} }) first.`)
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
     return simulatePure(this.#ops, this.qubits, init)
@@ -1196,6 +1353,41 @@ export class Circuit {
     return result
   }
 
+  /**
+   * Return the statevector as a sorted array of basis-state entries.
+   *
+   * Each entry contains:
+   * - `bitstring` — q0-leftmost basis label, e.g. `'10'` = q0=1, q1=0
+   * - `re`, `im`  — real and imaginary parts of the amplitude
+   * - `prob`      — measurement probability |amplitude|²
+   * - `phase`     — argument of the amplitude in radians: `Math.atan2(im, re)`
+   *
+   * Entries with prob < 1e-10 are omitted. Results are sorted by prob descending.
+   * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
+   *
+   * @example
+   * new Circuit(2).h(0).cnot(0, 1).stateAsArray()
+   * // [
+   * //   { bitstring: '00', re: 0.7071, im: 0, prob: 0.5, phase: 0 },
+   * //   { bitstring: '11', re: 0.7071, im: 0, prob: 0.5, phase: 0 },
+   * // ]
+   */
+  stateAsArray(): { bitstring: string; re: number; im: number; prob: number; phase: number }[] {
+    const sv = this.statevector()
+    const n = this.qubits
+    const entries: { bitstring: string; re: number; im: number; prob: number; phase: number }[] = []
+    for (const [idx, { re, im }] of sv) {
+      const prob = re * re + im * im
+      if (prob < 1e-10) continue
+      entries.push({
+        bitstring: idx.toString(2).padStart(n, '0').split('').reverse().join(''),
+        re, im, prob,
+        phase: Math.atan2(im, re),
+      })
+    }
+    return entries.sort((a, b) => b.prob - a.prob)
+  }
+
   // ── Classical registers and mid-circuit measurement ──────────────────────
 
   /** Declare a classical register of `size` bits. */
@@ -1298,11 +1490,94 @@ export class Circuit {
     return new Circuit(this.qubits, flattenOps(this.#ops), this.#cregs, this.#gates)
   }
 
+  /**
+   * Append all ops from `other` onto this circuit and return the combined circuit.
+   *
+   * Both circuits must have the same qubit count. Classical registers and named
+   * gate definitions from both circuits are merged: if the same register name
+   * appears in both, the larger declared size wins; if the same gate name appears
+   * in both, `this` takes precedence.
+   *
+   * @example
+   * const prep = new Circuit(2).h(0).cnot(0, 1)
+   * const meas = new Circuit(2).measure(0, 'c', 0).measure(1, 'c', 1)
+   * const full = prep.compose(meas)
+   * full.run({ shots: 1000 })
+   */
+  compose(other: Circuit): Circuit {
+    if (other.qubits !== this.qubits)
+      throw new TypeError(
+        `compose: qubit count mismatch — this has ${this.qubits}, other has ${other.qubits}`,
+      )
+    const mergedCregs = new Map(this.#cregs)
+    for (const [name, size] of other.#cregs)
+      mergedCregs.set(name, Math.max(mergedCregs.get(name) ?? 0, size))
+    const mergedGates = new Map(other.#gates)
+    for (const [name, gate] of this.#gates) mergedGates.set(name, gate)
+    return new Circuit(this.qubits, [...this.#ops, ...other.#ops], mergedCregs, mergedGates)
+  }
+
+  /**
+   * Return the names of all unbound symbolic parameters in this circuit, sorted.
+   *
+   * @example
+   * new Circuit(1).rx('theta', 0).ry('phi', 0).params  // ['phi', 'theta']
+   */
+  get params(): string[] {
+    return [...collectParams(this.#ops)].sort()
+  }
+
+  /**
+   * Substitute symbolic parameter names with concrete numeric values and return
+   * a new fully-bound circuit that can be simulated.
+   *
+   * Throws `TypeError` if any parameter referenced in the circuit is not supplied
+   * in `values`.
+   *
+   * @example
+   * // VQE-style: build once, sweep parameters
+   * const ansatz = new Circuit(1).h(0).rx('theta', 0).rz('phi', 0)
+   * for (const theta of [0, Math.PI / 4, Math.PI / 2]) {
+   *   const e = ansatz.bind({ theta, phi: 0.5 }).expectation('Z')
+   * }
+   */
+  bind(values: Record<string, number>): Circuit {
+    const resolve = (p: number | string): number => {
+      if (typeof p === 'number') return p
+      if (p in values) return values[p]!
+      throw new TypeError(`bind: unbound parameter '${p}'. Provide a value for it in the bind() call.`)
+    }
+    const rebuildOps = (ops: readonly Op[]): Op[] => ops.map(op => {
+      if (op.kind === 'parametric') {
+        const ps = op.params.map(resolve)
+        return resolveParametric(op.name, ps, op.qubits)
+      }
+      if (op.kind === 'if') return { ...op, ops: rebuildOps(op.ops) }
+      return op
+    })
+    return new Circuit(this.qubits, rebuildOps(this.#ops), this.#cregs, this.#gates)
+  }
+
   // ── IonQ device targeting ────────────────────────────────────────────────
+
+  /**
+   * Return the published specs for any supported device (IonQ, IBM, Quantinuum).
+   * Throws if the device name is not recognised.
+   *
+   * @example
+   * Circuit.device('ibm_sherbrooke').noise  // { p1: 2.4e-4, p2: 7.4e-3, pMeas: 1.35e-2 }
+   * Circuit.device('h1-1').qubits           // 20
+   */
+  static device(name: string): DeviceInfo {
+    const info = DEVICES[name]
+    if (!info) throw new TypeError(`Unknown device '${name}'. Known: ${Object.keys(DEVICES).join(', ')}`)
+    return info
+  }
 
   /**
    * Return the published specs for a named IonQ device.
    * Throws if the device name is not recognised.
+   * @deprecated Use `Circuit.device(name)` instead.
    */
   static ionqDevice(name: string): IonQDeviceInfo {
     const info = IONQ_DEVICES[name]
@@ -3630,7 +3905,7 @@ export class Circuit {
    *
    * @param opts.shots  Number of measurement shots (default 1024).
    * @param opts.seed   Optional PRNG seed for reproducibility.
-   * @param opts.noise  Device name (`'aria-1'` / `'forte-1'` / `'harmony'`) or
+   * @param opts.noise  Device name (any key of `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or
    *                    `{ p1?, p2?, pMeas? }` depolarizing + readout error rates.
    */
   runClifford({ shots = 1024, seed, noise }: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
@@ -3926,7 +4201,7 @@ export class Circuit {
    * Only valid for pure circuits (no `measure` / `reset` / `if` ops).
    * Complexity: O(4ⁿ) — practical up to ~12 qubits.
    *
-   * @param options.noise  Device name (`'aria-1'` / `'forte-1'` / `'harmony'`) or
+   * @param options.noise  Device name (any key of `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or
    *                       `{ p1?, p2? }` noise parameters.
    */
   dm(options?: { noise?: DmNoiseParams | string }): DensityMatrix {
