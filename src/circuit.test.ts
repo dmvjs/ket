@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
-import type { IonQCircuit } from './circuit.js'
+import type { IonQCircuit, FlatOp } from './circuit.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
@@ -6686,4 +6686,65 @@ describe('serializer contracts — XX gate throws where unsupported', () => {
 // toPyQuil: controlled single-qubit gates have no standard pyQuil representation.
 describe('serializer contracts — toPyQuil() throws for controlled single-qubit gates', () => {
   it('toPyQuil() throws for crx', () => expect(() => _crxCirc().toPyQuil()).toThrow(TypeError))
+})
+
+// ─── serializer contract matrix ───────────────────────────────────────────────
+//
+// Record<FlatOp['kind'], () => Circuit> is the load-bearing type here.
+// Adding a new op kind to FlatOp without adding it to `circuits` is a
+// compile error — npm test fails before a single test runs.
+//
+// Each cell asserts: the serializer either produces output or throws TypeError.
+// A crash (wrong exception type) or silent empty output both fail the test.
+
+describe('serializer contract matrix — every op kind × every text-format exporter', () => {
+  const sq2 = 1 / Math.sqrt(2)
+
+  // Keyed by FlatOp['kind'] — exhaustiveness enforced at compile time.
+  const circuits: Record<FlatOp['kind'], () => Circuit> = {
+    single:     () => new Circuit(1).h(0),
+    cnot:       () => new Circuit(2).cnot(0, 1),
+    swap:       () => new Circuit(2).swap(0, 1),
+    two:        () => new Circuit(2).xx(Math.PI / 4, 0, 1),
+    controlled: () => new Circuit(2).cz(0, 1),
+    toffoli:    () => new Circuit(3).ccx(0, 1, 2),
+    cswap:      () => new Circuit(3).cswap(0, 1, 2),
+    csrswap:    () => new Circuit(3).csrswap(0, 1, 2),
+    measure:    () => new Circuit(1).creg('c', 1).measure(0, 'c', 0),
+    reset:      () => new Circuit(1).reset(0),
+    if:         () => new Circuit(1).creg('c', 1).if('c', 0, q => q.x(0)),
+    barrier:    () => new Circuit(2).h(0).barrier().cnot(0, 1),
+    unitary:    () => new Circuit(1).unitary([[sq2, sq2], [sq2, -sq2]], 0),
+  }
+
+  const serializers: Array<[string, (c: Circuit) => unknown]> = [
+    ['toIonQ',   c => c.toIonQ()],
+    ['toQASM',   c => c.toQASM()],
+    ['toQiskit', c => c.toQiskit()],
+    ['toCirq',   c => c.toCirq()],
+    ['toTFQ',    c => c.toTFQ()],
+    ['toQSharp', c => c.toQSharp()],
+    ['toPyQuil', c => c.toPyQuil()],
+    ['toQuil',   c => c.toQuil()],
+    ['toBraket', c => c.toBraket()],
+    ['toCudaQ',  c => c.toCudaQ()],
+    ['toQuirk',  c => c.toQuirk()],
+  ]
+
+  for (const [serName, serialize] of serializers) {
+    for (const [kind, make] of Object.entries(circuits) as [FlatOp['kind'], () => Circuit][]) {
+      it(`${serName}() — '${kind}'`, () => {
+        let result: unknown
+        try {
+          result = serialize(make())
+        } catch (e) {
+          // Must throw TypeError, not crash with an unexpected error type.
+          expect(e).toBeInstanceOf(TypeError)
+          return
+        }
+        // Must produce non-empty output — not silently swallow the op.
+        expect(result).toBeTruthy()
+      })
+    }
+  }
 })

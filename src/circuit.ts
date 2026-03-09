@@ -37,7 +37,7 @@ type UnitaryOp    = { kind: 'unitary';    qubits: readonly number[]; matrix: rea
 type Op = SingleOp | CNOTOp | SWAPOp | TwoOp | ControlledOp | ToffoliOp | CSwapOp | CsrSwapOp | MeasureOp | ResetOp | IfOp | SubcircuitOp | BarrierOp | UnitaryOp
 
 /** Op after subcircuits have been expanded by flattenOps. */
-type FlatOp = Exclude<Op, SubcircuitOp>
+export type FlatOp = Exclude<Op, SubcircuitOp>
 
 // ─── Mid-circuit measurement helpers ─────────────────────────────────────────
 
