@@ -6437,4 +6437,10 @@ describe('circuit.unitary() — depth() and toLatex()', () => {
     const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
     expect(new Circuit(2).unitary(SWAP, 0, 1).toLatex()).toContain('\\gate[2]{U}')
   })
+
+  it('toSVG() renders unitary as a gate box labelled U', () => {
+    const svg = new Circuit(1).unitary(H, 0).toSVG()
+    expect(svg).toContain('<svg')
+    expect(svg).toContain('>U<')
+  })
 })
