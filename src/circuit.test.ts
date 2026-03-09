@@ -4082,6 +4082,28 @@ describe('vqe — Variational Quantum Eigensolver', () => {
     const h: PauliTerm[] = [{ coeff: 1e-20, ops: 'Z' }, { coeff: 2, ops: 'I' }]
     expect(vqe(new Circuit(1), h)).toBeCloseTo(2, 10)
   })
+
+  it('lowercase ops: ⟨0|z|0⟩ = +1 (case-insensitive)', () => {
+    expect(vqe(new Circuit(1), [{ coeff: 1, ops: 'z' }])).toBeCloseTo(1, 10)
+  })
+
+  it('lowercase ops: ⟨1|z|1⟩ = -1', () => {
+    expect(vqe(new Circuit(1).x(0), [{ coeff: 1, ops: 'z' }])).toBeCloseTo(-1, 10)
+  })
+
+  it('lowercase ops: two-qubit zz matches uppercase ZZ', () => {
+    const ansatz = new Circuit(2).h(0).cnot(0, 1)
+    const upper = vqe(ansatz, [{ coeff: 1, ops: 'ZZ' }])
+    const lower = vqe(ansatz, [{ coeff: 1, ops: 'zz' }])
+    expect(lower).toBeCloseTo(upper, 10)
+  })
+
+  it('lowercase ops: mixed case zi matches ZI', () => {
+    const ansatz = new Circuit(2).h(0)
+    const upper = vqe(ansatz, [{ coeff: 1, ops: 'ZI' }])
+    const lower = vqe(ansatz, [{ coeff: 1, ops: 'zi' }])
+    expect(lower).toBeCloseTo(upper, 10)
+  })
 })
 
 // ─── toJSON() / fromJSON() ────────────────────────────────────────────────────

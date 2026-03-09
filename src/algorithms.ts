@@ -303,16 +303,16 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
   let energy = 0
 
   for (const { coeff, ops } of hamiltonian) {
-    if (ops.length !== n) {
+    if (ops.length !== n)
       throw new TypeError(`ops '${ops}' length must equal ansatz.qubits (${n})`)
-    }
     if (Math.abs(coeff) < 1e-15) continue
-    if (!/[XYZ]/.test(ops)) { energy += coeff; continue }
+    const upper = ops.toUpperCase()
+    if (!/[XYZ]/.test(upper)) { energy += coeff; continue }
 
     // Rotate each qubit into the Z basis for its Pauli operator
     let rot = ansatz
     for (let q = 0; q < n; q++) {
-      const pauli = ops[n - 1 - q]!  // ops[n-1-q] acts on qubit q
+      const pauli = upper[n - 1 - q]!  // upper[n-1-q] acts on qubit q
       if (pauli === 'X') rot = rot.h(q)
       else if (pauli === 'Y') rot = rot.rx(Math.PI / 2, q)
     }
@@ -324,7 +324,7 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
     for (const [bs, prob] of Object.entries(probs)) {
       let parity = 0
       for (let q = 0; q < n; q++) {
-        const pauli = ops[n - 1 - q]!  // PauliTerm: ops[n-1-q] acts on qubit q
+        const pauli = upper[n - 1 - q]!  // upper[n-1-q] acts on qubit q
         if (pauli !== 'I' && bs[q] === '1') parity ^= 1  // bs[q] = qubit q's bit (q0 leftmost)
       }
       exp += (parity === 0 ? 1 : -1) * prob
