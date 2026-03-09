@@ -6804,7 +6804,7 @@ describe('runClifford — classical feed-forward', () => {
     // h → measure → if 1 apply X; same protocol as the run() test
     const r = new Circuit(1).h(0).measure(0, 'c', 0).if('c', 1, c => c.x(0)).runClifford({ shots: 1000, seed: 42 })
     // All qubits must end in |0⟩
-    expect(r.probs['0']).toBeCloseTo(1.0, 1)
+    expect(r.probs['0']).toBeCloseTo(1.0, 2)
   })
 
   it('if(creg=1, value=0): does NOT fire when creg is 1', () => {
@@ -6868,5 +6868,13 @@ describe('Circuit.random', () => {
   it('single-qubit circuit generates only single-qubit gates', () => {
     // No CNOT/SWAP possible on 1 qubit — must not throw
     expect(() => Circuit.random(1, 50, 5).run({ shots: 10 })).not.toThrow()
+  })
+})
+
+describe('runClifford — validates non-Clifford gates in if bodies', () => {
+  it('throws for non-Clifford gate inside an if body', () => {
+    // T is not Clifford; inside an if body it should still be caught
+    const c = new Circuit(1).creg('c', 1).measure(0, 'c', 0).if('c', 1, c => c.t(0))
+    expect(() => c.runClifford()).toThrow(/not a Clifford gate/)
   })
 })

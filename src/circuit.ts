@@ -3762,7 +3762,7 @@ export class Circuit {
               break
             }
             case 'if': {
-              if (cregValue(shotCregs, op.creg) === op.value) applyCliffords(op.ops)
+              if (cregValue(shotCregs, op.creg) === op.value) applyCliffords(flattenOps(op.ops))
               break
             }
           }
