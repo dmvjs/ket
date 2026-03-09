@@ -6796,3 +6796,77 @@ describe('expectation() — Pauli expectation value ⟨ψ|P|ψ⟩', () => {
   it('invalid character throws', () => expect(() => new Circuit(1).expectation('A')).toThrow(TypeError))
   it('measure op throws',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).expectation('Z')).toThrow(TypeError))
 })
+
+// ─── runClifford classical feed-forward ───────────────────────────────────────
+
+describe('runClifford — classical feed-forward', () => {
+  it('if(creg=1, value=1): corrects |+⟩ collapse — always ends in |0⟩', () => {
+    // h → measure → if 1 apply X; same protocol as the run() test
+    const r = new Circuit(1).h(0).measure(0, 'c', 0).if('c', 1, c => c.x(0)).runClifford({ shots: 1000, seed: 42 })
+    // All qubits must end in |0⟩
+    expect(r.probs['0']).toBeCloseTo(1.0, 1)
+  })
+
+  it('if(creg=1, value=0): does NOT fire when creg is 1', () => {
+    // x → measure → creg=1; if(creg,0) must not fire → qubit stays |1⟩
+    const r = new Circuit(1).x(0).measure(0, 'c', 0).if('c', 0, c => c.x(0)).runClifford({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1.0, 5)
+  })
+
+  it('creg counts are populated after measurement', () => {
+    // x → measure → creg c[0] must always be 1
+    const r = new Circuit(1).x(0).creg('c', 1).measure(0, 'c', 0).runClifford({ shots: 100, seed: 1 })
+    expect(r.cregs['c']![0]).toBeCloseTo(1.0, 5)
+  })
+
+  it('creg counts for |+⟩ measurement are ~0.5', () => {
+    const r = new Circuit(1).h(0).creg('c', 1).measure(0, 'c', 0).runClifford({ shots: 2000, seed: 7 })
+    expect(r.cregs['c']![0]).toBeGreaterThan(0.4)
+    expect(r.cregs['c']![0]).toBeLessThan(0.6)
+  })
+})
+
+// ─── Circuit.random ───────────────────────────────────────────────────────────
+
+describe('Circuit.random', () => {
+  it('returns a Circuit with the right qubit count', () => {
+    const c = Circuit.random(3, 10, 1)
+    expect(c.qubits).toBe(3)
+  })
+
+  it('produces a circuit that can be simulated', () => {
+    const r = Circuit.random(4, 20, 42).run({ shots: 256, seed: 1 })
+    const total = Object.values(r.probs).reduce((a, b) => a + b, 0)
+    expect(total).toBeCloseTo(1.0, 5)
+  })
+
+  it('is reproducible with the same seed', () => {
+    const r1 = Circuit.random(3, 15, 99).run({ shots: 512, seed: 1 })
+    const r2 = Circuit.random(3, 15, 99).run({ shots: 512, seed: 1 })
+    expect(r1.probs).toEqual(r2.probs)
+  })
+
+  it('differs with different seeds', () => {
+    const r1 = Circuit.random(3, 15, 1).run({ shots: 512, seed: 1 })
+    const r2 = Circuit.random(3, 15, 2).run({ shots: 512, seed: 1 })
+    expect(r1.probs).not.toEqual(r2.probs)
+  })
+
+  it('nGates=0 returns a trivial all-|0⟩ circuit', () => {
+    const r = Circuit.random(2, 0).run({ shots: 100 })
+    expect(r.probs['00']).toBeCloseTo(1.0, 5)
+  })
+
+  it('throws for nQubits < 1', () => {
+    expect(() => Circuit.random(0, 10)).toThrow(RangeError)
+  })
+
+  it('throws for nGates < 0', () => {
+    expect(() => Circuit.random(2, -1)).toThrow(RangeError)
+  })
+
+  it('single-qubit circuit generates only single-qubit gates', () => {
+    // No CNOT/SWAP possible on 1 qubit — must not throw
+    expect(() => Circuit.random(1, 50, 5).run({ shots: 10 })).not.toThrow()
+  })
+})
