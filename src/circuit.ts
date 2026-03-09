@@ -846,30 +846,29 @@ export class Distribution {
 
 /** Rebuild a ParametricOp into a concrete Op once all params are resolved to numbers. */
 function resolveParametric(name: string, ps: number[], qubits: readonly number[]): Op {
-  const q0 = qubits[0]!, q1 = qubits[1]!
-  const p0 = ps[0]!, p1 = ps[1]!, p2 = ps[2]!
+  // Each case references only the indices that gate actually needs.
   switch (name) {
-    case 'rx':   return { kind: 'single',     q: q0,                  gate: G.Rx(p0),       meta: { name, params: ps } }
-    case 'ry':   return { kind: 'single',     q: q0,                  gate: G.Ry(p0),       meta: { name, params: ps } }
-    case 'rz':   return { kind: 'single',     q: q0,                  gate: G.Rz(p0),       meta: { name, params: ps } }
-    case 'vz':   return { kind: 'single',     q: q0,                  gate: G.Rz(p0),       meta: { name, params: ps } }
-    case 'u1':   return { kind: 'single',     q: q0,                  gate: G.U1(p0),       meta: { name, params: ps } }
-    case 'p':    return { kind: 'single',     q: q0,                  gate: G.U1(p0),       meta: { name, params: ps } }
-    case 'u2':   return { kind: 'single',     q: q0,                  gate: G.U2(p0, p1),   meta: { name, params: ps } }
-    case 'u3':   return { kind: 'single',     q: q0,                  gate: G.U3(p0, p1, p2), meta: { name, params: ps } }
-    case 'gpi':  return { kind: 'single',     q: q0,                  gate: G.Gpi(p0),      meta: { name, params: ps } }
-    case 'gpi2': return { kind: 'single',     q: q0,                  gate: G.Gpi2(p0),     meta: { name, params: ps } }
-    case 'xx':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Xx(p0),       meta: { name, params: ps } }
-    case 'yy':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Yy(p0),       meta: { name, params: ps } }
-    case 'zz':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Zz(p0),       meta: { name, params: ps } }
-    case 'xy':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Xy(p0),       meta: { name, params: ps } }
-    case 'ms':   return { kind: 'two',        a: q0,  b: q1,          gate: G.Ms(p0, p1),    meta: { name, params: ps } }
-    case 'crx':  return { kind: 'controlled', control: q0, target: q1, gate: G.Rx(p0),        meta: { name, params: ps } }
-    case 'cry':  return { kind: 'controlled', control: q0, target: q1, gate: G.Ry(p0),        meta: { name, params: ps } }
-    case 'crz':  return { kind: 'controlled', control: q0, target: q1, gate: G.Rz(p0),        meta: { name, params: ps } }
-    case 'cu1':  return { kind: 'controlled', control: q0, target: q1, gate: G.U1(p0),        meta: { name, params: ps } }
-    case 'cu2':  return { kind: 'controlled', control: q0, target: q1, gate: G.U2(p0, p1),    meta: { name, params: ps } }
-    case 'cu3':  return { kind: 'controlled', control: q0, target: q1, gate: G.U3(p0, p1, p2), meta: { name, params: ps } }
+    case 'rx':   return { kind: 'single',     q: qubits[0]!,                           gate: G.Rx(ps[0]!),                  meta: { name, params: ps } }
+    case 'ry':   return { kind: 'single',     q: qubits[0]!,                           gate: G.Ry(ps[0]!),                  meta: { name, params: ps } }
+    case 'rz':   return { kind: 'single',     q: qubits[0]!,                           gate: G.Rz(ps[0]!),                  meta: { name, params: ps } }
+    case 'vz':   return { kind: 'single',     q: qubits[0]!,                           gate: G.Rz(ps[0]!),                  meta: { name, params: ps } }
+    case 'u1':   return { kind: 'single',     q: qubits[0]!,                           gate: G.U1(ps[0]!),                  meta: { name, params: ps } }
+    case 'p':    return { kind: 'single',     q: qubits[0]!,                           gate: G.U1(ps[0]!),                  meta: { name, params: ps } }
+    case 'u2':   return { kind: 'single',     q: qubits[0]!,                           gate: G.U2(ps[0]!, ps[1]!),          meta: { name, params: ps } }
+    case 'u3':   return { kind: 'single',     q: qubits[0]!,                           gate: G.U3(ps[0]!, ps[1]!, ps[2]!),  meta: { name, params: ps } }
+    case 'gpi':  return { kind: 'single',     q: qubits[0]!,                           gate: G.Gpi(ps[0]!),                 meta: { name, params: ps } }
+    case 'gpi2': return { kind: 'single',     q: qubits[0]!,                           gate: G.Gpi2(ps[0]!),                meta: { name, params: ps } }
+    case 'xx':   return { kind: 'two',        a: qubits[0]!, b: qubits[1]!,            gate: G.Xx(ps[0]!),                  meta: { name, params: ps } }
+    case 'yy':   return { kind: 'two',        a: qubits[0]!, b: qubits[1]!,            gate: G.Yy(ps[0]!),                  meta: { name, params: ps } }
+    case 'zz':   return { kind: 'two',        a: qubits[0]!, b: qubits[1]!,            gate: G.Zz(ps[0]!),                  meta: { name, params: ps } }
+    case 'xy':   return { kind: 'two',        a: qubits[0]!, b: qubits[1]!,            gate: G.Xy(ps[0]!),                  meta: { name, params: ps } }
+    case 'ms':   return { kind: 'two',        a: qubits[0]!, b: qubits[1]!,            gate: G.Ms(ps[0]!, ps[1]!),           meta: { name, params: ps } }
+    case 'crx':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.Rx(ps[0]!),                   meta: { name, params: ps } }
+    case 'cry':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.Ry(ps[0]!),                   meta: { name, params: ps } }
+    case 'crz':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.Rz(ps[0]!),                   meta: { name, params: ps } }
+    case 'cu1':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.U1(ps[0]!),                   meta: { name, params: ps } }
+    case 'cu2':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.U2(ps[0]!, ps[1]!),           meta: { name, params: ps } }
+    case 'cu3':  return { kind: 'controlled', control: qubits[0]!, target: qubits[1]!, gate: G.U3(ps[0]!, ps[1]!, ps[2]!),   meta: { name, params: ps } }
     default: throw new TypeError(`bind: unknown parametric gate '${name}'`)
   }
 }
