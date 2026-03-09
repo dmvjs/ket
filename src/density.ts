@@ -139,27 +139,24 @@ function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonl
   const allMask  = masks.reduce((a, b) => a | b, 0n)
   const seen     = new Set<bigint>()
 
-  for (const k of dm.keys()) {
-    const ctx = k & ~(allMask << shift) & ~allMask
+  // Expand a base index (with qubit bits zeroed) into all 2^N local variants.
+  // qs[0] is MSB of the local index i, matching the matrix convention.
+  const buildBases = (base: bigint): bigint[] =>
+    Array.from({ length: localDim }, (_, i) => {
+      let b = base
+      for (let bit = 0; bit < qs.length; bit++) {
+        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
+      }
+      return b
+    })
+
+  for (const key of dm.keys()) {
+    const ctx = key & ~(allMask << shift) & ~allMask
     if (seen.has(ctx)) continue
     seen.add(ctx)
 
-    const rb = ctx >> shift, cb = ctx & dimMask
-
-    const rowBases: bigint[] = Array.from({ length: localDim }, (_, i) => {
-      let b = rb
-      for (let bit = 0; bit < qs.length; bit++) {
-        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
-      }
-      return b
-    })
-    const colBases: bigint[] = Array.from({ length: localDim }, (_, i) => {
-      let b = cb
-      for (let bit = 0; bit < qs.length; bit++) {
-        if ((i >> (qs.length - 1 - bit)) & 1) b |= masks[bit]!
-      }
-      return b
-    })
+    const rowBases = buildBases(ctx >> shift)
+    const colBases = buildBases(ctx & dimMask)
 
     const p: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
       Array.from({ length: localDim }, (_, ci) => dmGet(dm, shift, rowBases[ri]!, colBases[ci]!))
@@ -168,15 +165,15 @@ function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonl
     const t: Complex[][] = Array.from({ length: localDim }, (_, ri) =>
       Array.from({ length: localDim }, (_, ci) => {
         let v = ZERO
-        for (let k2 = 0; k2 < localDim; k2++) v = add(v, mul(matrix[ri]![k2]!, p[k2]![ci]!))
+        for (let j = 0; j < localDim; j++) v = add(v, mul(matrix[ri]![j]!, p[j]![ci]!))
         return v
       })
     )
-    // Right multiply by U†: new = t · U†
+    // Right multiply by U†: result = t · U†
     for (let ri = 0; ri < localDim; ri++) {
       for (let ci = 0; ci < localDim; ci++) {
         let v = ZERO
-        for (let k2 = 0; k2 < localDim; k2++) v = add(v, mul(t[ri]![k2]!, conj(matrix[ci]![k2]!)))
+        for (let j = 0; j < localDim; j++) v = add(v, mul(t[ri]![j]!, conj(matrix[ci]![j]!)))
         dmSet(next, shift, rowBases[ri]!, colBases[ci]!, v)
       }
     }

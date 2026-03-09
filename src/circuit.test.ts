@@ -6183,6 +6183,14 @@ describe('circuit.circuitMatrix()', () => {
       }
   })
 
+  it('S gate: complex diagonal entries (0,1) = i', () => {
+    const U = new Circuit(1).s(0).circuitMatrix()
+    expect(U[0]![0]!.re).toBeCloseTo(1, TOL); expect(U[0]![0]!.im).toBeCloseTo(0, TOL)
+    expect(U[1]![1]!.re).toBeCloseTo(0, TOL); expect(U[1]![1]!.im).toBeCloseTo(1, TOL)
+    expect(U[0]![1]!.re).toBeCloseTo(0, TOL); expect(U[0]![1]!.im).toBeCloseTo(0, TOL)
+    expect(U[1]![0]!.re).toBeCloseTo(0, TOL); expect(U[1]![0]!.im).toBeCloseTo(0, TOL)
+  })
+
   it('throws for circuits with measurement ops', () => {
     expect(() =>
       new Circuit(1).h(0).creg('c', 1).measure(0, 'c', 0).circuitMatrix()
@@ -6263,6 +6271,16 @@ describe('circuit.unitary() — 2-qubit', () => {
     const custom  = new Circuit(2).h(0).unitary(CNOT, 0, 1).exactProbs()
     expect(custom['00']).toBeCloseTo(builtin['00']!, 10)
     expect(custom['11']).toBeCloseTo(builtin['11']!, 10)
+  })
+
+  it('qubit ordering: qubits[0] is MSB — reversing args reverses control/target', () => {
+    // IonQ bitstring convention: q0 is rightmost. x(0) → q0=1, q1=0 → bitstring "01".
+    // unitary(CNOT, 0, 1): q0=control=1, q1=target → q1 flips → "11"
+    // unitary(CNOT, 1, 0): q1=control=0, q0=target → q0 unchanged → "01"
+    const ctrlQ0 = new Circuit(2).x(0).unitary(CNOT, 0, 1).exactProbs()
+    const ctrlQ1 = new Circuit(2).x(0).unitary(CNOT, 1, 0).exactProbs()
+    expect(ctrlQ0['11']).toBeCloseTo(1, 10)
+    expect(ctrlQ1['01']).toBeCloseTo(1, 10)
   })
 })
 
