@@ -6612,3 +6612,78 @@ describe('toIonQ() — unsupported gate errors', () => {
   it('throws for measure',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).toIonQ()).toThrow())
   it('throws for if op',          () => expect(() => new Circuit(1).creg('c',1).if('c', 0, q => q.x(0)).toIonQ()).toThrow())
 })
+
+// ─── serializer contracts — comprehensive throw coverage ──────────────────────
+//
+// Every text-format exporter must throw (not silently skip) for op kinds it
+// cannot represent.  Organised by op kind so a new serializer can be audited
+// by scanning vertically, and a new op kind can be wired in by scanning
+// horizontally.
+//
+// Circuit factories are shared across suites via module-level const closures.
+
+const _csrswapCirc  = () => new Circuit(3).csrswap(0, 1, 2)
+const _ifCirc       = () => new Circuit(1).creg('c', 1).if('c', 0, q => q.x(0))
+const _measureCirc  = () => new Circuit(1).creg('c', 1).measure(0, 'c', 0)
+const _resetCirc    = () => new Circuit(1).reset(0)
+const _xxCirc       = () => new Circuit(2).xx(Math.PI / 4, 0, 1)
+const _crxCirc      = () => new Circuit(2).crx(Math.PI / 4, 0, 1)
+
+// csrswap: no representation in any text-format exporter.
+describe('serializer contracts — csrswap throws in all text-format exporters', () => {
+  it('toQASM()',   () => expect(() => _csrswapCirc().toQASM()).toThrow(TypeError))
+  it('toQiskit()', () => expect(() => _csrswapCirc().toQiskit()).toThrow(TypeError))
+  it('toCirq()',   () => expect(() => _csrswapCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _csrswapCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _csrswapCirc().toQSharp()).toThrow(TypeError))
+  it('toPyQuil()', () => expect(() => _csrswapCirc().toPyQuil()).toThrow(TypeError))
+  it('toQuil()',   () => expect(() => _csrswapCirc().toQuil()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _csrswapCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _csrswapCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _csrswapCirc().toQuirk()).toThrow(TypeError))
+})
+
+// if op: classical control has no representation in any text-format exporter.
+describe('serializer contracts — if op throws in all text-format exporters', () => {
+  it('toQASM()',   () => expect(() => _ifCirc().toQASM()).toThrow(TypeError))
+  it('toQiskit()', () => expect(() => _ifCirc().toQiskit()).toThrow(TypeError))
+  it('toCirq()',   () => expect(() => _ifCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _ifCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _ifCirc().toQSharp()).toThrow(TypeError))
+  it('toPyQuil()', () => expect(() => _ifCirc().toPyQuil()).toThrow(TypeError))
+  it('toQuil()',   () => expect(() => _ifCirc().toQuil()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _ifCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _ifCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _ifCirc().toQuirk()).toThrow(TypeError))
+})
+
+// measure / reset: exporters targeting pure-unitary languages must reject them.
+describe('serializer contracts — measure throws in pure-unitary exporters', () => {
+  it('toCirq()',   () => expect(() => _measureCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _measureCirc().toTFQ()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _measureCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _measureCirc().toCudaQ()).toThrow(TypeError))
+})
+
+describe('serializer contracts — reset throws in pure-unitary exporters', () => {
+  it('toCirq()',   () => expect(() => _resetCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _resetCirc().toTFQ()).toThrow(TypeError))
+  it('toBraket()', () => expect(() => _resetCirc().toBraket()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _resetCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _resetCirc().toQuirk()).toThrow(TypeError))
+})
+
+// two-qubit interaction gates (e.g. XX): exporters without interaction-gate
+// support must throw rather than silently produce wrong output.
+describe('serializer contracts — XX gate throws where unsupported', () => {
+  it('toCirq()',   () => expect(() => _xxCirc().toCirq()).toThrow(TypeError))
+  it('toTFQ()',    () => expect(() => _xxCirc().toTFQ()).toThrow(TypeError))
+  it('toQSharp()', () => expect(() => _xxCirc().toQSharp()).toThrow(TypeError))
+  it('toCudaQ()',  () => expect(() => _xxCirc().toCudaQ()).toThrow(TypeError))
+  it('toQuirk()',  () => expect(() => _xxCirc().toQuirk()).toThrow(TypeError))
+})
+
+// toPyQuil: controlled single-qubit gates have no standard pyQuil representation.
+describe('serializer contracts — toPyQuil() throws for controlled single-qubit gates', () => {
+  it('toPyQuil() throws for crx', () => expect(() => _crxCirc().toPyQuil()).toThrow(TypeError))
+})
