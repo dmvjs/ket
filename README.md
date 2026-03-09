@@ -243,20 +243,53 @@ JSON round-trip is lossless — the matrix is stored as `[[re, im], ...][]` in t
 | GPI2 | `gpi2(φ, q)` | Half-angle GPI |
 | MS | `ms(φ₀, φ₁, q0, q1)` | Mølmer-Sørensen entangling gate |
 
-## IonQ device targeting
+## Device targeting
 
-ket models IonQ hardware devices with qubit capacity, native gate sets, and published noise figures in one place.
+ket ships noise profiles for IonQ, IBM, and Quantinuum hardware. All profiles are accessible via `DEVICES` and usable by name anywhere a `noise` option is accepted.
+
+```typescript
+import { DEVICES, IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
+
+// Query any device
+const aria  = DEVICES['aria-1']       // { qubits: 25, nativeGates: [...], noise: {...} }
+const eagle = DEVICES['ibm_sherbrooke'] // { qubits: 127, noise: {...} }
+const h1    = DEVICES['h1-1']           // { qubits: 20, noise: {...} }
+
+// Use by name in any simulation method
+circuit.run({ shots: 1000, noise: 'ibm_sherbrooke' })
+circuit.runClifford({ shots: 10000, noise: 'forte-1' })
+circuit.dm({ noise: 'h2-1' })
+
+// Create a circuit sized for a specific device
+const c = Circuit.device('aria-1')  // new Circuit(25)
+```
+
+**All devices** (`DEVICES`):
+
+| Device | Vendor | Qubits | p1 (1Q) | p2 (2Q) | pMeas |
+|---|---|---|---|---|---|
+| `aria-1` | IonQ | 25 | 0.03% | 0.50% | 0.40% |
+| `forte-1` | IonQ | 36 | 0.01% | 0.20% | 0.20% |
+| `harmony` | IonQ | 11 | 0.10% | 1.50% | 1.00% |
+| `ibm_sherbrooke` | IBM | 127 | 0.024% | 0.74% | 1.35% |
+| `ibm_brisbane` | IBM | 127 | 0.024% | 0.76% | 1.35% |
+| `ibm_torino` | IBM | 133 | 0.020% | 0.30% | 1.00% |
+| `h1-1` | Quantinuum | 20 | 0.0018% | 0.097% | 0.23% |
+| `h2-1` | Quantinuum | 56 | 0.0019% | 0.11% | 0.10% |
+
+IBM figures from arXiv:2410.00916. Quantinuum figures from docs.quantinuum.com.
+
+**IonQ devices** (`IONQ_DEVICES`) additionally expose `nativeGates` for compilation and validation:
 
 ```typescript
 import { IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
 
-// Query device specs
 const aria = IONQ_DEVICES['aria-1']
 // { qubits: 25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'], noise: { p1, p2, pMeas } }
 
-// Validate a circuit before submitting
+// Validate before submitting
 const circuit = new Circuit(2).h(0).cnot(0, 1)
-circuit.checkDevice('aria-1')   // passes — h and cnot are in the IonQ abstract gate set
+circuit.checkDevice('aria-1')   // passes
 circuit.toIonQ()                // safe to call
 
 // checkDevice throws with all issues at once
@@ -264,17 +297,7 @@ new Circuit(30).cu1(Math.PI / 4, 0, 1).checkDevice('harmony')
 // TypeError: Circuit is not compatible with harmony:
 //   - circuit uses 30 qubits; harmony supports at most 11
 //   - gate 'cu1' is not supported on harmony
-
-// Run simulation with device noise
-circuit.run({ shots: 1000, noise: 'forte-1' })
-circuit.dm({ noise: 'aria-1' })
 ```
-
-| Device | Qubits | Native gates | p1 (1Q) | p2 (2Q) | pMeas |
-|---|---|---|---|---|---|
-| `aria-1` | 25 | GPI, GPI2, MS, VZ | 0.03% | 0.50% | 0.40% |
-| `forte-1` | 36 | GPI, GPI2, MS, VZ, ZZ | 0.01% | 0.20% | 0.20% |
-| `harmony` | 11 | GPI, GPI2, MS, VZ | 0.10% | 1.50% | 1.00% |
 
 ## Import / Export
 
@@ -393,6 +416,52 @@ fs.writeFileSync('state.svg', circuit.blochSphere(0))
 
 `circuit.toLatex()` emits a `quantikz` LaTeX environment with `\frac{\pi}{n}` angle formatting, proper `\ctrl{}`, `\targ{}`, `\swap{}`, `\gate[2]{}`, and `\meter{}` commands.
 
+## Parametric circuits
+
+Gate angle parameters can be symbolic strings, deferred until `.bind()` is called. This lets you build an ansatz once and evaluate it at many parameter values without reconstructing the circuit.
+
+```typescript
+import { Circuit } from '@kirkelliott/ket'
+
+// Build once — 'theta' and 'phi' are symbolic
+const ansatz = new Circuit(2)
+  .ry('theta', 0)
+  .rz('phi', 0)
+  .cnot(0, 1)
+
+ansatz.params  // ['phi', 'theta'] — sorted unbound names
+
+// Evaluate at a specific point
+const bound = ansatz.bind({ theta: Math.PI / 4, phi: 0.1 })
+bound.params      // []
+bound.statevector()  // runs normally
+
+// VQE sweep — reuse the same ansatz object
+for (const theta of [0, 0.1, 0.2, Math.PI / 4]) {
+  const energy = vqe(ansatz.bind({ theta, phi: 0 }), hamiltonian)
+}
+```
+
+Any gate with angle parameters accepts `number | string` for each angle: `rx`, `ry`, `rz`, `vz`, `u1`, `p`, `u2`, `u3`, `gpi`, `gpi2`, `xx`, `yy`, `zz`, `xy`, `ms`, `crx`, `cry`, `crz`, `cu1`, `cu2`, `cu3`.
+
+Calling `statevector()`, `run()`, `toQASM()`, or any export on a circuit with unbound parameters throws a `TypeError` listing the missing names.
+
+## Circuit composition
+
+`circuit.compose(other)` concatenates two circuits of the same width, returning a new immutable circuit. Classical registers are merged (same name → larger size wins). Custom gate definitions are merged (`this` takes precedence on name conflicts).
+
+```typescript
+const state_prep = new Circuit(2).h(0).cnot(0, 1)
+const rotation   = new Circuit(2).rz(Math.PI / 4, 0).rz(Math.PI / 4, 1)
+
+const full = state_prep.compose(rotation)
+// equivalent to: new Circuit(2).h(0).cnot(0,1).rz(π/4,0).rz(π/4,1)
+
+full.statevector()   // runs the combined circuit
+```
+
+Mismatched qubit counts throw `TypeError` immediately.
+
 ## State inspection
 
 ```typescript
@@ -404,9 +473,12 @@ circuit.probability('11')       // number — |amplitude|²
 circuit.exactProbs()            // { '00': 0.5, '11': 0.5 } — no sampling, no variance
 circuit.marginals()             // [P(q0=1), P(q1=1)]
 circuit.stateAsString()         // '0.7071|00⟩ + 0.7071|11⟩'
+circuit.stateAsArray()          // [{ bitstring, re, im, prob, phase }, ...] sorted by prob
 circuit.blochAngles(0)          // { theta, phi } via partial trace
 circuit.expectation('ZZ')       // number — ⟨ψ|P|ψ⟩ for a Pauli string P
 ```
+
+`stateAsArray()` returns one entry per basis state with non-negligible amplitude (|a|² ≥ 1e-10), sorted by probability descending. Each entry carries the real and imaginary parts, the probability, and the phase angle `atan2(im, re)`. Throws on circuits with measurements or unbound parameters.
 
 ## Classical control and named gates
 
@@ -454,7 +526,7 @@ circuit.runClifford({ shots: 10000, noise: { p1: 0.001, p2: 0.005 } })
 
 `p1` — single-qubit depolarizing error probability per gate. `p2` — two-qubit depolarizing probability. `pMeas` — bit-flip probability on each measured bit (SPAM error).
 
-Named profiles match the device table in [IonQ device targeting](#ionq-device-targeting). The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
+Named profiles cover all devices in the [device table](#device-targeting) — IonQ, IBM, and Quantinuum. The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
 
 ## Serialization
 
