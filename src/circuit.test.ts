@@ -6273,6 +6273,15 @@ describe('circuit.unitary() — 2-qubit', () => {
     expect(custom['11']).toBeCloseTo(builtin['11']!, 10)
   })
 
+  it('non-adjacent qubits: middle qubit is unaffected', () => {
+    // unitary(CNOT, 0, 2) on a 3-qubit circuit: q0=control, q2=target, q1 is spectator
+    // Start |001⟩ (q0=1, q1=0, q2=0): control fires → q2 flips → |101⟩
+    // Start |010⟩ (q0=0, q1=1, q2=0): control doesn't fire → stays |010⟩
+    const CNOT = [[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]]
+    expect(new Circuit(3).x(0).unitary(CNOT, 0, 2).probability('101')).toBeCloseTo(1, 10)
+    expect(new Circuit(3).x(1).unitary(CNOT, 0, 2).probability('010')).toBeCloseTo(1, 10)
+  })
+
   it('qubit ordering: qubits[0] is MSB — reversing args reverses control/target', () => {
     // IonQ bitstring convention: q0 is rightmost. x(0) → q0=1, q1=0 → bitstring "01".
     // unitary(CNOT, 0, 1): q0=control=1, q1=target → q1 flips → "11"
