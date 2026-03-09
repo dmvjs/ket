@@ -3172,6 +3172,57 @@ export class Circuit {
     return new Circuit(j.qubits, opsFromJSON(j.ops), cregs, gates)
   }
 
+  // ── Random circuit generation ─────────────────────────────────────────────
+
+  /**
+   * Generate a random circuit with `nQubits` qubits and `nGates` gates.
+   *
+   * Each gate is chosen uniformly at random from a standard set: H, X, Y, Z,
+   * S, T, Rx, Ry, Rz (single-qubit) and CNOT, SWAP (two-qubit, 30% chance when
+   * `nQubits ≥ 2`).  Rotation angles are drawn uniformly from [0, 2π).
+   *
+   * Useful for benchmarking, quantum-volume estimation, and noise characterisation.
+   *
+   * @param nQubits Number of qubits (≥ 1).
+   * @param nGates  Number of gates to add.
+   * @param seed    Optional PRNG seed for reproducibility.
+   *
+   * @example
+   * const c = Circuit.random(4, 20, 42)
+   * c.run({ shots: 1024 })
+   */
+  static random(nQubits: number, nGates: number, seed?: number): Circuit {
+    if (nQubits < 1) throw new RangeError('nQubits must be ≥ 1')
+    if (nGates  < 0) throw new RangeError('nGates must be ≥ 0')
+    const rng = makePrng(seed)
+    let c = new Circuit(nQubits)
+    const TAU = 2 * Math.PI
+    for (let i = 0; i < nGates; i++) {
+      const twoQ = nQubits >= 2 && rng() < 0.3
+      if (twoQ) {
+        const a = Math.floor(rng() * nQubits)
+        let b   = Math.floor(rng() * (nQubits - 1))
+        if (b >= a) b++
+        c = rng() < 0.5 ? c.cnot(a, b) : c.swap(a, b)
+      } else {
+        const q    = Math.floor(rng() * nQubits)
+        const kind = Math.floor(rng() * 9)
+        switch (kind) {
+          case 0: c = c.h(q);               break
+          case 1: c = c.x(q);               break
+          case 2: c = c.y(q);               break
+          case 3: c = c.z(q);               break
+          case 4: c = c.s(q);               break
+          case 5: c = c.t(q);               break
+          case 6: c = c.rx(rng() * TAU, q); break
+          case 7: c = c.ry(rng() * TAU, q); break
+          case 8: c = c.rz(rng() * TAU, q); break
+        }
+      }
+    }
+    return c
+  }
+
   // ── Visualization ────────────────────────────────────────────────────────
 
   /**
@@ -3583,32 +3634,36 @@ export class Circuit {
    *                    `{ p1?, p2?, pMeas? }` depolarizing + readout error rates.
    */
   runClifford({ shots = 1024, seed, noise }: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
-    // ── Validate: check all ops are Clifford ─────────────────────────────
+    // ── Validate: check all ops are Clifford (recursing into if bodies) ─────
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
 
-    for (const op of flattenOps(this.#ops)) {
-      switch (op.kind) {
-        case 'barrier': case 'measure': case 'reset': break
-        case 'cnot': case 'swap': break
-        case 'single': {
-          const name = op.meta?.name ?? '?'
-          if (!CLIFFORD_SINGLE.has(name))
+    const validateOps = (ops: readonly Op[]): void => {
+      for (const op of flattenOps(ops)) {
+        switch (op.kind) {
+          case 'barrier': case 'measure': case 'reset': break
+          case 'cnot': case 'swap': break
+          case 'if': validateOps(op.ops); break
+          case 'single': {
+            const name = op.meta?.name ?? '?'
+            if (!CLIFFORD_SINGLE.has(name))
+              throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+            break
+          }
+          case 'controlled': {
+            const name = op.meta?.name ?? '?'
+            if (!CLIFFORD_CTRL.has(name))
+              throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+            break
+          }
+          default: {
+            const name = (op as { meta?: GateMeta }).meta?.name ?? op.kind
             throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
-          break
-        }
-        case 'controlled': {
-          const name = op.meta?.name ?? '?'
-          if (!CLIFFORD_CTRL.has(name))
-            throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
-          break
-        }
-        default: {
-          const name = (op as { meta?: GateMeta }).meta?.name ?? op.kind
-          throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
+          }
         }
       }
     }
+    validateOps(this.#ops)
 
     // Resolve noise profile
     const noiseParams: NoiseParams | undefined =
@@ -3624,16 +3679,14 @@ export class Circuit {
 
     const rng = makePrng(seed)
     const counts = new Map<bigint, number>()
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
 
-    // Precompute which qubits are explicitly measured in this circuit
     const flatOps = flattenOps(this.#ops)
-    const measuredQubits = new Set<number>()
-    for (const op of flatOps) {
-      if (op.kind === 'measure') measuredQubits.add(op.q)
-    }
 
     // Clifford depolarizing: random Pauli X/Y/Z with total prob p
-    const cDep1 = (q: number, p: number): void => {
+    const cDep1 = (sim: CliffordSim, q: number, p: number): void => {
       const r = rng()
       if (r >= p) return
       const s = r / p
@@ -3643,23 +3696,22 @@ export class Circuit {
     }
 
     // Clifford two-qubit depolarizing: random non-identity {I,X,Y,Z}⊗{I,X,Y,Z} with total prob p
-    const applyPauli = (q: number, p: number): void => {
+    const applyPauli = (sim: CliffordSim, q: number, p: number): void => {
       if (p === 1) sim.x(q); else if (p === 2) sim.y(q); else if (p === 3) sim.z(q)
     }
-    const cDep2 = (a: number, b: number, p: number): void => {
+    const cDep2 = (sim: CliffordSim, a: number, b: number, p: number): void => {
       const r = rng()
       if (r >= p) return
       const [ea, eb] = TWO_PAULI_IDX[Math.min(Math.floor(r / p * 15), 14)]!
-      applyPauli(a, ea); applyPauli(b, eb)
+      applyPauli(sim, a, ea); applyPauli(sim, b, eb)
     }
 
     // ── Per-shot simulation ───────────────────────────────────────────────
-    let sim!: CliffordSim
     for (let shot = 0; shot < shots; shot++) {
-      sim = new CliffordSim(this.qubits)
-
-      // Track measurement outcomes for this shot (to form the output bitstring)
-      const measured = new Array<number>(this.qubits).fill(0)
+      const sim = new CliffordSim(this.qubits)
+      const shotCregs = new Map<string, boolean[]>(
+        Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
+      )
 
       const applyCliffords = (ops: readonly Op[]): void => {
         for (const op of ops) {
@@ -3675,16 +3727,16 @@ export class Circuit {
                 case 's':  sim.s(op.q);  break
                 case 'si': case 'sdg': sim.si(op.q); break
               }
-              if (p1) cDep1(op.q, p1)
+              if (p1) cDep1(sim, op.q, p1)
               break
             }
             case 'cnot':
               sim.cnot(op.control, op.target)
-              if (p2) cDep2(op.control, op.target, p2)
+              if (p2) cDep2(sim, op.control, op.target, p2)
               break
             case 'swap':
               sim.swap(op.a, op.b)
-              if (p2) cDep2(op.a, op.b, p2)
+              if (p2) cDep2(sim, op.a, op.b, p2)
               break
             case 'controlled': {
               const name = op.meta?.name ?? ''
@@ -3693,25 +3745,24 @@ export class Circuit {
                 case 'cy': sim.cy(op.control, op.target);   break
                 case 'cz': sim.cz(op.control, op.target);   break
               }
-              if (p2) cDep2(op.control, op.target, p2)
+              if (p2) cDep2(sim, op.control, op.target, p2)
               break
             }
             case 'measure': {
               const raw = sim.measure(op.q, rng())
               const outcome = pMeas && rng() < pMeas ? (raw ^ 1) : raw
-              measured[op.q] = outcome
+              const reg = shotCregs.get(op.creg)
+              if (reg) reg[op.bit] = outcome === 1
               break
             }
             case 'reset': {
               // Reset: measure then conditionally flip back to |0⟩
               const outcome = sim.measure(op.q, rng())
               if (outcome === 1) sim.x(op.q)
-              measured[op.q] = 0
               break
             }
             case 'if': {
-              // Recurse into inner ops (creg evaluation not tracked in Clifford mode)
-              applyCliffords(op.ops)
+              if (cregValue(shotCregs, op.creg) === op.value) applyCliffords(flattenOps(op.ops))
               break
             }
           }
@@ -3720,19 +3771,22 @@ export class Circuit {
 
       applyCliffords(flatOps)
 
-      // Final readout: for qubits not explicitly measured, measure now
+      // Final readout: sample from the current Clifford state then apply SPAM noise,
+      // mirroring how run() samples from the final statevector.
       let idx = 0n
       for (let q = 0; q < this.qubits; q++) {
-        const bit = measuredQubits.has(q) ? measured[q]! : sim.measure(q, rng())
+        let bit = sim.measure(q, rng())
+        if (pMeas && rng() < pMeas) bit ^= 1
         if (bit) idx |= (1n << BigInt(q))
       }
 
       counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      for (const [name, bits] of shotCregs) {
+        const acc = cregCounts.get(name)!
+        for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
+      }
     }
 
-    const cregCounts = new Map<string, number[]>(
-      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
-    )
     return new Distribution(this.qubits, shots, counts, cregCounts)
   }
 
