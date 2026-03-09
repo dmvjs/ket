@@ -6444,3 +6444,171 @@ describe('circuit.unitary() — depth() and toLatex()', () => {
     expect(svg).toContain('>U<')
   })
 })
+
+// ─── quantum invariants — probability normalization ───────────────────────────
+//
+// ∑p = 1 after any gate sequence. Exercises all gate categories and both backends.
+// A failure here means a gate kernel is not norm-preserving.
+
+describe('quantum invariants — probability normalization', () => {
+  const sum = (p: Readonly<Record<string, number>>) => Object.values(p).reduce((s, v) => s + v, 0)
+  const sq2 = 1 / Math.sqrt(2)
+  const H2x2 = [[sq2, sq2], [sq2, -sq2]]
+
+  it('single gate: H|0⟩',                         () => expect(sum(new Circuit(1).h(0).exactProbs())).toBeCloseTo(1, 13))
+  it('single gate: Rx(1.23)',                      () => expect(sum(new Circuit(1).rx(1.23, 0).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: Bell state H·CNOT',               () => expect(sum(new Circuit(2).h(0).cnot(0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: SWAP in superposition',           () => expect(sum(new Circuit(2).h(0).swap(0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('two-qubit: XX(π/4)',                         () => expect(sum(new Circuit(2).xx(Math.PI / 4, 0, 1).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: GHZ state',                     () => expect(sum(new Circuit(3).h(0).cnot(0, 1).cnot(1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: Toffoli on superposition',      () => expect(sum(new Circuit(3).h(0).h(1).ccx(0, 1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('three-qubit: csrswap',                       () => expect(sum(new Circuit(3).h(1).csrswap(0, 1, 2).exactProbs())).toBeCloseTo(1, 13))
+  it('custom unitary (Hadamard)',                  () => expect(sum(new Circuit(1).unitary(H2x2, 0).exactProbs())).toBeCloseTo(1, 13))
+  it('DM backend: Bell state probabilities sum to 1', () => expect(sum(new Circuit(2).h(0).cnot(0, 1).dm().probabilities())).toBeCloseTo(1, 13))
+  it('DM backend: pure state has purity 1',           () => expect(new Circuit(2).h(0).cnot(0, 1).dm().purity()).toBeCloseTo(1, 13))
+})
+
+// ─── quantum invariants — self-inverse gates (G·G = I) ───────────────────────
+//
+// Every self-inverse gate applied twice must restore the input state exactly.
+// Tests both single-qubit and multi-qubit gates on non-trivial inputs.
+
+describe('quantum invariants — self-inverse gates (G·G = I)', () => {
+  it('X·X = I',         () => expect(new Circuit(1).x(0).x(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('Y·Y = I',         () => expect(new Circuit(1).y(0).y(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('Z·Z = I',         () => expect(new Circuit(1).z(0).z(0).exactProbs()['0']).toBeCloseTo(1, 14))
+  it('H·H = I',         () => expect(new Circuit(1).h(0).h(0).exactProbs()['0']).toBeCloseTo(1, 14))
+
+  // Multi-qubit: apply to a state where the gate does non-trivial work.
+  it('CNOT·CNOT = I on |10⟩',   () => expect(new Circuit(2).x(0).cnot(0, 1).cnot(0, 1).exactProbs()['01']).toBeCloseTo(1, 14))
+  it('SWAP·SWAP = I on |10⟩',   () => expect(new Circuit(2).x(0).swap(0, 1).swap(0, 1).exactProbs()['01']).toBeCloseTo(1, 14))
+  it('CZ·CZ = I on |10⟩',       () => expect(new Circuit(2).x(0).cz(0, 1).cz(0, 1).exactProbs()['01']).toBeCloseTo(1, 14))
+  it('CCX·CCX = I on |110⟩',    () => expect(new Circuit(3).x(0).x(1).ccx(0, 1, 2).ccx(0, 1, 2).exactProbs()['011']).toBeCloseTo(1, 14))
+  it('CSWAP·CSWAP = I on |110⟩', () => expect(new Circuit(3).x(0).x(1).cswap(0, 1, 2).cswap(0, 1, 2).exactProbs()['011']).toBeCloseTo(1, 14))
+
+  // Superposition input: H·CNOT·CNOT·H|0⟩ = |0⟩ confirms self-inverse on entangled state.
+  it('CNOT self-inverse in Bell basis: H·CNOT·CNOT·H = I', () => {
+    expect(new Circuit(2).h(0).cnot(0, 1).cnot(0, 1).h(0).exactProbs()['00']).toBeCloseTo(1, 14)
+  })
+})
+
+// ─── quantum invariants — SV and DM backends agree ───────────────────────────
+//
+// `exactProbs()` (statevector) and `dm().probabilities()` (density matrix) must
+// produce identical distributions for every pure circuit.  A divergence means
+// one backend has a gate-kernel bug.
+
+describe('quantum invariants — SV and DM backends agree on exact probabilities', () => {
+  function expectMatch(sv: Readonly<Record<string, number>>, dm: Readonly<Record<string, number>>) {
+    const keys = new Set([...Object.keys(sv), ...Object.keys(dm)])
+    for (const k of keys) expect(sv[k] ?? 0).toBeCloseTo(dm[k] ?? 0, 12)
+  }
+
+  it('H|0⟩',          () => { const c = new Circuit(1).h(0);                               expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Bell state',     () => { const c = new Circuit(2).h(0).cnot(0, 1);                    expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Rz(π/7) phase', () => { const c = new Circuit(1).rz(Math.PI / 7, 0);                 expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('3-qubit GHZ',   () => { const c = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2);         expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('Toffoli',        () => { const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2);             expectMatch(c.exactProbs(), c.dm().probabilities()) })
+  it('custom unitary', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const c = new Circuit(1).unitary([[sq2, sq2], [sq2, -sq2]], 0)
+    expectMatch(c.exactProbs(), c.dm().probabilities())
+  })
+})
+
+// ─── JSON round-trip — all op kinds ──────────────────────────────────────────
+//
+// Every op kind must survive toJSON → fromJSON with identical simulation output.
+// This is a regression guard: a missing opsToJSON/opsFromJSON branch silently
+// produces a circuit that behaves differently after deserialization.
+
+describe('JSON round-trip — all op kinds', () => {
+  const rt = (c: Circuit) => Circuit.fromJSON(c.toJSON())
+
+  function expectSameExactProbs(a: Circuit, b: Circuit) {
+    const pa = a.exactProbs(), pb = b.exactProbs()
+    const keys = new Set([...Object.keys(pa), ...Object.keys(pb)])
+    for (const k of keys) expect(pa[k] ?? 0).toBeCloseTo(pb[k] ?? 0, 13)
+  }
+
+  it('single gate',           () => { const c = new Circuit(2).h(0).x(1);                     expectSameExactProbs(c, rt(c)) })
+  it('cnot',                  () => { const c = new Circuit(2).h(0).cnot(0, 1);               expectSameExactProbs(c, rt(c)) })
+  it('swap',                  () => { const c = new Circuit(2).x(0).swap(0, 1);               expectSameExactProbs(c, rt(c)) })
+  it('two-qubit gate (xx)',   () => { const c = new Circuit(2).xx(Math.PI / 4, 0, 1);         expectSameExactProbs(c, rt(c)) })
+  it('controlled gate (cz)',  () => { const c = new Circuit(2).h(0).cz(0, 1);                 expectSameExactProbs(c, rt(c)) })
+  it('toffoli (ccx)',         () => { const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2);        expectSameExactProbs(c, rt(c)) })
+  it('cswap',                 () => { const c = new Circuit(3).x(0).h(1).cswap(0, 1, 2);     expectSameExactProbs(c, rt(c)) })
+  it('csrswap',               () => { const c = new Circuit(3).h(1).csrswap(0, 1, 2);        expectSameExactProbs(c, rt(c)) })
+  it('barrier (no-op)',       () => { const c = new Circuit(2).h(0).barrier(0, 1).cnot(0, 1); expectSameExactProbs(c, rt(c)) })
+  it('subcircuit (defineGate / gate)', () => {
+    const bell = new Circuit(2).h(0).cnot(0, 1)
+    const c    = new Circuit(4).defineGate('bell', bell).gate('bell', 0, 1).gate('bell', 2, 3)
+    expectSameExactProbs(c, rt(c))
+  })
+  it('unitary', () => {
+    const sq2 = 1 / Math.sqrt(2)
+    const c = new Circuit(2).unitary([[sq2, sq2], [sq2, -sq2]], 0).cnot(0, 1)
+    expectSameExactProbs(c, rt(c))
+  })
+  it('measure + reset + if: run() output is identical after round-trip', () => {
+    // x(0) → measure q0 into c[0] (always 1) → reset q0 → if c=1: flip q1
+    // Result: q0=|0⟩ (reset), q1=|1⟩ (flipped) → bitstring '10'
+    const c    = new Circuit(2).creg('c', 1).x(0).measure(0, 'c', 0).reset(0).if('c', 1, q => q.x(1))
+    const opts = { shots: 200, seed: 42 }
+    const before = c.run(opts), after = rt(c).run(opts)
+    for (const bs of ['00', '01', '10', '11']) expect(before.probs[bs] ?? 0).toBeCloseTo(after.probs[bs] ?? 0, 10)
+  })
+})
+
+// ─── classical control — edge cases ──────────────────────────────────────────
+
+describe('classical control — if op edge cases', () => {
+  it('condition not met: body is skipped', () => {
+    // creg starts 0; condition is 1 → x(0) never applied → q0 stays |0⟩
+    const r = new Circuit(1).creg('c', 1).if('c', 1, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+
+  it('condition met: body executes', () => {
+    // x(0) → measure(0,'c',0) always gives c=1 → if c=1: x(1) → q1=|1⟩
+    // bitstring: q0 measured+not-reset=|1⟩, q1=|1⟩ → '11'
+    const r = new Circuit(2).creg('c', 1).x(0).measure(0, 'c', 0).if('c', 1, q => q.x(1)).run({ shots: 100, seed: 1 })
+    expect(r.probs['11']).toBeCloseTo(1, 10)
+  })
+
+  it('nested if: inner body executes when both conditions met', () => {
+    const r = new Circuit(2)
+      .creg('a', 1).creg('b', 1)
+      .x(0).measure(0, 'a', 0)         // a=1
+      .x(1).measure(1, 'b', 0)         // b=1
+      .reset(0).reset(1)               // qubits back to |0⟩
+      .if('a', 1, q => q.if('b', 1, q2 => q2.x(0)))  // nested: a=1 ∧ b=1 → flip q0
+      .run({ shots: 100, seed: 1 })
+    expect(r.probs['01']).toBeCloseTo(1, 10)  // q0=1 after nested if, bitstring '01'
+  })
+
+  it('nonexistent register treated as 0 — condition with value 0 fires', () => {
+    // 'missing' register doesn't exist → cregValue returns 0 → if value=0: x(0) applied
+    const r = new Circuit(1).if('missing', 0, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['1']).toBeCloseTo(1, 10)
+  })
+
+  it('nonexistent register treated as 0 — condition with value 1 does not fire', () => {
+    const r = new Circuit(1).if('missing', 1, q => q.x(0)).run({ shots: 100, seed: 1 })
+    expect(r.probs['0']).toBeCloseTo(1, 10)
+  })
+})
+
+// ─── toIonQ() — unsupported gate errors ──────────────────────────────────────
+//
+// toIonQ() must throw (not silently skip) for gates that have no IonQ JSON
+// representation.  These complement the unitary serializer tests above and
+// guard against gates that predate the unitary feature being silently dropped.
+
+describe('toIonQ() — unsupported gate errors', () => {
+  it('throws for toffoli (ccx)',  () => expect(() => new Circuit(3).ccx(0, 1, 2).toIonQ()).toThrow())
+  it('throws for cswap',          () => expect(() => new Circuit(3).cswap(0, 1, 2).toIonQ()).toThrow())
+  it('throws for csrswap',        () => expect(() => new Circuit(3).csrswap(0, 1, 2).toIonQ()).toThrow())
+  it('throws for measure',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).toIonQ()).toThrow())
+  it('throws for if op',          () => expect(() => new Circuit(1).creg('c',1).if('c', 0, q => q.x(0)).toIonQ()).toThrow())
+})
