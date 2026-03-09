@@ -619,7 +619,7 @@ function latexSingleLabel(op: SingleOp): string {
     case 'rx': return `R_x(${a(0)})`; case 'ry': return `R_y(${a(0)})`
     case 'rz': case 'vz': return `R_z(${a(0)})`
     case 'r2': return 'R_2'; case 'r4': return 'R_4'; case 'r8': return 'R_8'
-    case 'u1': return `U_1(${a(0)})`; case 'u2': return `U_2(${a(0)},${a(1)})`
+    case 'u1': case 'p': return `U_1(${a(0)})`; case 'u2': return `U_2(${a(0)},${a(1)})`
     case 'u3': return `U_3(${a(0)},${a(1)},${a(2)})`
     case 'gpi': return `\\text{GPI}(${a(0)})`; case 'gpi2': return `\\text{GPI2}(${a(0)})`
     default: return nm ? nm.toUpperCase() : 'U'
@@ -692,7 +692,7 @@ function opLabel(op: Op, q: number): string {
         case 'rx': return `Rx(${a(p,0)})`; case 'ry': return `Ry(${a(p,0)})`
         case 'rz': case 'vz': return `Rz(${a(p,0)})`
         case 'r2': return 'R₂'; case 'r4': return 'R₄'; case 'r8': return 'R₈'
-        case 'u1': return `U1(${a(p,0)})`
+        case 'u1': case 'p': return `U1(${a(p,0)})`
         case 'u2': return `U2(${a(p,0)},${a(p,1)})`
         case 'u3': return `U3(${a(p,0)},${a(p,1)},${a(p,2)})`
         case 'gpi': return `GPI(${a(p,0)})`; case 'gpi2': return `GPI2(${a(p,0)})`
@@ -937,6 +937,9 @@ export class Circuit {
         op.qubits.forEach(q)
         break
       }
+      case 'if':         op.ops.forEach(inner => this.#checkOp(inner)); break
+      case 'subcircuit': op.qubits.forEach(q); break
+      default: { const _: never = op; void _ }
     }
   }
 
