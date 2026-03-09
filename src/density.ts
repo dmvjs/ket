@@ -580,6 +580,7 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
       case 'unitary':
         dm = applyUnitaryN(dm, n, op.qubits, op.matrix)
         break
+      default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
 
