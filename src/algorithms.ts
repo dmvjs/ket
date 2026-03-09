@@ -302,9 +302,10 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
   const n = ansatz.qubits
   let energy = 0
 
-  for (const { coeff, ops } of hamiltonian) {
+  for (const { coeff, ops: opsRaw } of hamiltonian) {
+    const ops = opsRaw.toUpperCase()
     if (ops.length !== n) {
-      throw new TypeError(`ops '${ops}' length must equal ansatz.qubits (${n})`)
+      throw new TypeError(`ops '${opsRaw}' length must equal ansatz.qubits (${n})`)
     }
     if (Math.abs(coeff) < 1e-15) continue
     if (!/[XYZ]/.test(ops)) { energy += coeff; continue }
