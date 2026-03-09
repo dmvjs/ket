@@ -126,15 +126,19 @@ function svFromBitstring(s: string, qubits: number): StateVector {
 function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
   let sv: StateVector = init ?? zero(qubits)
   for (const op of flattenOps(ops)) {
-    if      (op.kind === 'single')     sv = applySingle(sv, op.q, op.gate)
-    else if (op.kind === 'cnot')       sv = applyCNOT(sv, op.control, op.target)
-    else if (op.kind === 'controlled') sv = applyControlled(sv, op.control, op.target, op.gate)
-    else if (op.kind === 'swap')       sv = applySWAP(sv, op.a, op.b)
-    else if (op.kind === 'toffoli')    sv = applyToffoli(sv, op.c1, op.c2, op.target)
-    else if (op.kind === 'cswap')      sv = applyCSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'csrswap')    sv = applyCsrSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'two')        sv = applyTwo(sv, op.a, op.b, op.gate)
-    else if (op.kind === 'unitary')    sv = applyUnitary(sv, op.qubits, op.matrix)
+    switch (op.kind) {
+      case 'single':     sv = applySingle(sv, op.q, op.gate); break
+      case 'cnot':       sv = applyCNOT(sv, op.control, op.target); break
+      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate); break
+      case 'swap':       sv = applySWAP(sv, op.a, op.b); break
+      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
+      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
+      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
+      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate); break
+      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'barrier': case 'measure': case 'reset': case 'if': case 'subcircuit': break
+      default: { const _exhaustive: never = op; void _exhaustive }
+    }
   }
   return sv
 }
@@ -151,27 +155,35 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
   const p2 = noise?.p2 ?? 0
   const pM = noise?.pMeas ?? 0
   for (const op of flattenOps(ops)) {
-    if      (op.kind === 'single')     { sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()) }
-    else if (op.kind === 'cnot')       { sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
-    else if (op.kind === 'controlled') { sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()) }
-    else if (op.kind === 'swap')       { sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
-    else if (op.kind === 'toffoli')      sv = applyToffoli(sv, op.c1, op.c2, op.target)
-    else if (op.kind === 'cswap')        sv = applyCSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'csrswap')      sv = applyCsrSwap(sv, op.control, op.a, op.b)
-    else if (op.kind === 'two')        { sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()) }
-    else if (op.kind === 'unitary')      sv = applyUnitary(sv, op.qubits, op.matrix)
-    else if (op.kind === 'measure') {
-      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
-      const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
-      sv = next
-      const reg = shotCregs.get(op.creg)
-      if (reg) reg[op.bit] = reported === 1
-    } else if (op.kind === 'reset') {
-      const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
-      sv = next
-      if (outcome === 1) sv = applySingle(sv, op.q, G.X)
-    } else if (op.kind === 'if') {
-      if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
+    switch (op.kind) {
+      case 'single':     sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()); break
+      case 'cnot':       sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
+      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
+      case 'swap':       sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
+      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
+      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
+      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'measure': {
+        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+        const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
+        sv = next
+        const reg = shotCregs.get(op.creg)
+        if (reg) reg[op.bit] = reported === 1
+        break
+      }
+      case 'reset': {
+        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+        sv = next
+        if (outcome === 1) sv = applySingle(sv, op.q, G.X)
+        break
+      }
+      case 'if':
+        if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
+        break
+      case 'barrier': case 'subcircuit': break
+      default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
   return sv
