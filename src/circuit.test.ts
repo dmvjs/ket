@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
-import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
+import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 import { add, mul, scale, conj, norm2, isNegligible, c } from './complex.js'
@@ -4103,6 +4103,106 @@ describe('vqe — Variational Quantum Eigensolver', () => {
     const upper = vqe(ansatz, [{ coeff: 1, ops: 'ZI' }])
     const lower = vqe(ansatz, [{ coeff: 1, ops: 'zi' }])
     expect(lower).toBeCloseTo(upper, 10)
+  })
+})
+
+// ─── gradient — parameter shift rule ─────────────────────────────────────────
+
+describe('gradient — parameter shift rule', () => {
+  const Z: PauliTerm[] = [{ coeff: 1, ops: 'Z' }]
+
+  it('∂⟨Z⟩/∂θ at θ=0 is 0 (|0⟩ is a critical point of ⟨Z⟩)', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const [g] = gradient(ansatz, Z, [0])
+    expect(g).toBeCloseTo(0, 10)
+  })
+
+  it('∂⟨Z⟩/∂θ = −sin(θ): exact analytic match at θ=π/4', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const theta = Math.PI / 4
+    const [g] = gradient(ansatz, Z, [theta])
+    expect(g).toBeCloseTo(-Math.sin(theta), 10)
+  })
+
+  it('gradient is zero at the minimum θ=π (ground state of Z)', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const [g] = gradient(ansatz, Z, [Math.PI])
+    expect(g).toBeCloseTo(0, 10)
+  })
+
+  it('gradient sign points downhill: negative at θ=π/4 → GD moves toward π', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const [g] = gradient(ansatz, Z, [Math.PI / 4])
+    expect(g).toBeLessThan(0)
+  })
+
+  it('multi-param: independent gradients match analytic −sin(θᵢ)', () => {
+    // H = Z⊗I + I⊗Z, ⟨H⟩ = cos(p0) + cos(p1) → ∂/∂p0 = −sin(p0), ∂/∂p1 = −sin(p1)
+    const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).ry(p[1]!, 1)
+    const H: PauliTerm[] = [{ coeff: 1, ops: 'ZI' }, { coeff: 1, ops: 'IZ' }]
+    const p0 = Math.PI / 3, p1 = Math.PI / 6
+    const grad = gradient(ansatz, H, [p0, p1])
+    expect(grad[0]).toBeCloseTo(-Math.sin(p0), 10)
+    expect(grad[1]).toBeCloseTo(-Math.sin(p1), 10)
+  })
+
+  it('coefficient scaling: doubling coeff doubles the gradient', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const theta = Math.PI / 5
+    const [g1] = gradient(ansatz, [{ coeff: 1, ops: 'Z' }], [theta])
+    const [g2] = gradient(ansatz, [{ coeff: 2, ops: 'Z' }], [theta])
+    expect(g2).toBeCloseTo(2 * g1!, 10)
+  })
+
+  it('empty params returns empty array', () => {
+    const ansatz = (_p: readonly number[]) => new Circuit(1).h(0)
+    expect(gradient(ansatz, Z, [])).toEqual([])
+  })
+})
+
+// ─── minimize ────────────────────────────────────────────────────────────────
+
+describe('minimize — gradient descent VQE optimizer', () => {
+  it('finds ground state of single-qubit Z (energy → −1)', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const { energy, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [0.1])
+    expect(energy).toBeCloseTo(-1, 4)
+    expect(converged).toBe(true)
+  })
+
+  it('finds ground state of two-qubit ZZ + ZI Hamiltonian', () => {
+    // H = ZZ + 0.5·ZI, ground state is |11⟩ with energy = 1 − 0.5 = 0.5... wait:
+    // |11⟩: ZZ=+1 (both -1 eigenvalues multiply: (-1)(-1)=+1), ZI=-1 → H=1-0.5=0.5
+    // |00⟩: ZZ=+1, ZI=+1 → 1.5. |01⟩: ZZ=-1, ZI=+1 → -0.5. |10⟩: ZZ=-1, ZI=-1 → -1.5 ← min
+    // Ground state is |10⟩: ansatz = Ry(π)⊗I, energy = -1.5
+    const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).ry(p[1]!, 1)
+    const H: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }, { coeff: 0.5, ops: 'ZI' }]
+    const { energy, converged } = minimize(ansatz, H, [0.1, 0.1], { lr: 0.2, steps: 500 })
+    expect(energy).toBeCloseTo(-1.5, 3)
+    expect(converged).toBe(true)
+  })
+
+  it('reports converged=false when step budget exhausted', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const { converged, steps } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [0.1], { steps: 1 })
+    expect(converged).toBe(false)
+    expect(steps).toBe(1)
+  })
+
+  it('step count matches actual iterations taken', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const { steps, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [0.1], { steps: 500 })
+    expect(steps).toBeGreaterThan(0)
+    expect(steps).toBeLessThanOrEqual(500)
+    expect(converged).toBe(true)
+  })
+
+  it('already at minimum: converges in 0 steps', () => {
+    // θ=π → |1⟩, ground state of Z, gradient is 0
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const { steps, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [Math.PI])
+    expect(converged).toBe(true)
+    expect(steps).toBe(0)
   })
 })
 
