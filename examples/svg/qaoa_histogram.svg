@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="320" height="215" viewBox="0 0 320 215">
 <rect width="320" height="215" fill="#fff"/>
 <text x="160" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#94a3b8">QAOA Max-Cut (4-cycle, p=1) (all 16 states)</text>
-<rect x="30" y="161.61" width="14" height="13.39" rx="2" fill="#e2e8f0"/>
-<rect x="46" y="166.58" width="14" height="8.42" rx="2" fill="#e2e8f0"/>
-<rect x="62" y="166.36" width="14" height="8.64" rx="2" fill="#e2e8f0"/>
-<rect x="78" y="146.70" width="14" height="28.30" rx="2" fill="#e2e8f0"/>
-<rect x="94" y="166.04" width="14" height="8.96" rx="2" fill="#e2e8f0"/>
-<rect x="110" y="58.89" width="14" height="116.11" rx="2" fill="#3b82f6"/>
-<text x="117" y="55" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">26%</text>
+<rect x="30" y="163.42" width="14" height="11.58" rx="2" fill="#e2e8f0"/>
+<rect x="46" y="165.32" width="14" height="9.68" rx="2" fill="#e2e8f0"/>
+<rect x="62" y="166.47" width="14" height="8.53" rx="2" fill="#e2e8f0"/>
+<rect x="78" y="147.00" width="14" height="28.00" rx="2" fill="#e2e8f0"/>
+<rect x="94" y="165.74" width="14" height="9.26" rx="2" fill="#e2e8f0"/>
+<rect x="110" y="71.00" width="14" height="104.00" rx="2" fill="#3b82f6"/>
+<text x="117" y="67" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">24%</text>
 <text x="117" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#2563eb" transform="rotate(-45 117 189)">0101</text>
-<rect x="126" y="151.35" width="14" height="23.65" rx="2" fill="#e2e8f0"/>
-<rect x="142" y="165.71" width="14" height="9.29" rx="2" fill="#e2e8f0"/>
-<rect x="158" y="166.14" width="14" height="8.86" rx="2" fill="#e2e8f0"/>
-<rect x="174" y="147.89" width="14" height="27.11" rx="2" fill="#e2e8f0"/>
+<rect x="126" y="147.53" width="14" height="27.47" rx="2" fill="#e2e8f0"/>
+<rect x="142" y="165.21" width="14" height="9.79" rx="2" fill="#e2e8f0"/>
+<rect x="158" y="166.68" width="14" height="8.32" rx="2" fill="#e2e8f0"/>
+<rect x="174" y="146.37" width="14" height="28.63" rx="2" fill="#e2e8f0"/>
 <rect x="190" y="55.00" width="14" height="120.00" rx="2" fill="#3b82f6"/>
-<text x="197" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">27%</text>
+<text x="197" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">28%</text>
 <text x="197" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#2563eb" transform="rotate(-45 197 189)">1010</text>
-<rect x="206" y="167.12" width="14" height="7.88" rx="2" fill="#e2e8f0"/>
-<rect x="222" y="145.08" width="14" height="29.92" rx="2" fill="#e2e8f0"/>
-<rect x="238" y="165.71" width="14" height="9.29" rx="2" fill="#e2e8f0"/>
-<rect x="254" y="165.60" width="14" height="9.40" rx="2" fill="#e2e8f0"/>
-<rect x="270" y="161.82" width="14" height="13.18" rx="2" fill="#e2e8f0"/>
+<rect x="206" y="167.11" width="14" height="7.89" rx="2" fill="#e2e8f0"/>
+<rect x="222" y="147.00" width="14" height="28.00" rx="2" fill="#e2e8f0"/>
+<rect x="238" y="165.53" width="14" height="9.47" rx="2" fill="#e2e8f0"/>
+<rect x="254" y="166.37" width="14" height="8.63" rx="2" fill="#e2e8f0"/>
+<rect x="270" y="163.11" width="14" height="11.89" rx="2" fill="#e2e8f0"/>
 <line x1="29" y1="175" x2="284" y2="175" stroke="#e2e8f0" stroke-width="1"/>
 </svg>

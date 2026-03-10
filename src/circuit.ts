@@ -858,18 +858,18 @@ export class Distribution {
   toSVG(opts: { title?: string; highlight?: readonly string[] } = {}): string {
     const entries = Object.entries(this.probs).toSorted(([a], [b]) => a.localeCompare(b))
     if (entries.length === 0) {
-      return '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="215" viewBox="0 0 300 215"><rect width="300" height="215" fill="#fff"/></svg>'
+      return '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="240" viewBox="0 0 300 240"><rect width="300" height="240" fill="#fff"/></svg>'
     }
 
-    const n       = entries.length
-    const barW    = 14
-    const barStep = 16   // bar + 2px gap
-    const ml      = 30   // left margin
-    const mr      = 20   // right margin
-    const baseline = 175
-    const maxBarH  = 120 // tallest possible bar (leaves room above for pct label)
-    const totalH   = 215
-    const totalW   = Math.max(320, ml + n * barStep + mr)
+    const n        = entries.length
+    const barW     = 14
+    const barStep  = 20   // bar + 6px gap
+    const barsSpan = n * barStep - 6
+    const totalW   = Math.max(300, barsSpan + 120)
+    const ml       = Math.round((totalW - barsSpan) / 2)
+    const baseline = 170
+    const maxBarH  = 115  // tallest possible bar (leaves room above for pct label)
+    const totalH   = 240
 
     const maxP = entries.reduce((m, [, p]) => p > m ? p : m, 0)
 
@@ -909,21 +909,20 @@ export class Distribution {
         // Percentage label above bar
         const pct = `${(p * 100).toFixed(0)}%`
         els.push(
-          `<text x="${cx.toFixed(0)}" y="${(y - 4).toFixed(0)}" text-anchor="middle"` +
+          `<text x="${cx.toFixed(0)}" y="${(y - 8).toFixed(0)}" text-anchor="middle"` +
           ` font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">${pct}</text>`,
         )
         // Rotated bitstring label in blue
         els.push(
-          `<text x="${cx.toFixed(0)}" y="${baseline + 14}" text-anchor="middle"` +
+          `<text x="${cx.toFixed(0)}" y="${baseline + 18}" text-anchor="middle"` +
           ` font-family="ui-monospace,monospace" font-size="9" fill="#2563eb"` +
-          ` transform="rotate(-45 ${cx.toFixed(0)} ${baseline + 14})">${bs}</text>`,
+          ` transform="rotate(-45 ${cx.toFixed(0)} ${baseline + 18})">${bs}</text>`,
         )
       }
     }
 
     // Baseline
-    const lineX2 = ml + n * barStep - 2
-    els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${lineX2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
+    els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${ml + barsSpan + 2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n${els.join('\n')}\n</svg>`
   }
