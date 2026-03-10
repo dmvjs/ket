@@ -871,17 +871,16 @@ export class Distribution {
     const totalH   = 215
     const totalW   = Math.max(320, ml + n * barStep + mr)
 
-    const maxP = Math.max(...entries.map(([, p]) => p))
+    const maxP = entries.reduce((m, [, p]) => p > m ? p : m, 0)
 
     // Auto-detect dominant peaks or use caller-supplied list
     const highlighted: Set<string> = opts.highlight
       ? new Set(opts.highlight)
       : new Set(entries.filter(([, p]) => p >= maxP * 0.8).map(([bs]) => bs))
 
-    const shown    = n
     const possible = 2 ** this.qubits
-    const countLabel = shown === possible ? `all ${shown}` : `${shown} of ${possible}`
-    const subtitle = `${opts.title ?? 'measurement outcomes'} (${countLabel} state${shown !== 1 ? 's' : ''})`
+    const countLabel = n === possible ? `all ${n}` : `${n} of ${possible}`
+    const subtitle = `${opts.title ?? 'measurement outcomes'} (${countLabel} state${n !== 1 ? 's' : ''})`
 
     const els: string[] = []
 
