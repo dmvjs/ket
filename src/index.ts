@@ -1,6 +1,6 @@
 export { Circuit, Distribution } from './circuit.js'
-export { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
-export type { PauliTerm, MinimizeOptions, MinimizeResult } from './algorithms.js'
+export { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
+export type { PauliTerm, MinimizeOptions, MinimizeResult, AnsatzFn } from './algorithms.js'
 export type { RunOptions, NoiseParams, MpsRunOptions, IonQGate, IonQCircuit, IonQDeviceInfo, DeviceInfo, CircuitJSON, FlatOp } from './circuit.js'
 export { IONQ_DEVICES, DEVICES } from './circuit.js'
 export { CliffordSim } from './clifford.js'

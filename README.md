@@ -24,7 +24,7 @@ This matches the convention used by every major quantum computing library and pa
 - **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
-- **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, and Trotterized Hamiltonian simulation ship with the core.
+- **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, Trotter simulation, QAOA, gradient (parameter shift rule), minimize, standard ansatz circuits, and Pauli operator algebra ship with the core.
 
 ## Install
 
@@ -43,7 +43,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle is 174kb unminified / ~20kb gzipped. No external dependencies.
+The ESM bundle is 230kb unminified / ~25kb gzipped. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -321,7 +321,8 @@ new Circuit(30).cu1(Math.PI / 4, 0, 1).checkDevice('harmony')
 ## Algorithms
 
 ```typescript
-import { Circuit, qft, iqft, grover, phaseEstimation, vqe, trotter, qaoa, maxCutHamiltonian } from '@kirkelliott/ket'
+import { Circuit, qft, iqft, grover, phaseEstimation, vqe, gradient, minimize,
+         realAmplitudes, efficientSU2, PauliOp, trotter, qaoa, maxCutHamiltonian } from '@kirkelliott/ket'
 
 // Quantum Fourier Transform
 const qftCircuit = qft(4)
@@ -347,14 +348,43 @@ new Circuit(2).h(0).cnot(0, 1).expectation('ZZ')           // 1   (Bell state �
 new Circuit(2).h(0).cnot(0, 1).expectation('XX')           // 1   (Bell state ⟨XX⟩)
 new Circuit(2).h(0).cnot(0, 1).expectation('YY')           // -1  (Bell state ⟨YY⟩)
 
-// Variational Quantum Eigensolver
-const ansatz = new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1)
-const hamiltonian = [{ coeff: 0.5, ops: 'ZI' }, { coeff: 0.5, ops: 'IZ' }]
-const energy = vqe(ansatz, hamiltonian)  // ⟨ψ|H|ψ⟩
+// Variational Quantum Eigensolver — exact statevector, no sampling noise
+const H = [{ coeff: 0.5, ops: 'ZI' }, { coeff: 0.5, ops: 'IZ' }]
+const energy = vqe(new Circuit(2).ry(Math.PI / 4, 0).cnot(0, 1), H)
+
+// Standard ansatz circuits — paramCount tells you how many parameters to initialise
+const ansatz = realAmplitudes(2, 2)  // Ry + CNOT layers, real amplitudes
+ansatz.paramCount                    // 6 (= n × (reps + 1))
+
+const ansatz2 = efficientSU2(2, 2)  // Ry·Rz + CNOT layers, full SU(2)
+ansatz2.paramCount                   // 12 (= 2n × (reps + 1))
+
+// Exact analytic gradient via parameter shift rule — 2N vqe() calls for N parameters
+// ∂⟨H⟩/∂θᵢ = ½[⟨H⟩(θᵢ + π/2) − ⟨H⟩(θᵢ − π/2)]
+const hamiltonian = [{ coeff: 1, ops: 'ZZ' }, { coeff: 0.5, ops: 'ZI' }]
+const grad = gradient(ansatz, hamiltonian, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+
+// Gradient descent optimizer — converges when gradient L2 norm < tol
+const { energy: groundEnergy, params, converged } = minimize(
+  ansatz, hamiltonian, Array(ansatz.paramCount).fill(0.1), { lr: 0.2, steps: 500 },
+)
+// groundEnergy → −1.5  (ground state of ZZ + 0.5·ZI)
+
+// Pauli operator algebra — compose Hamiltonians, check commutativity, compute products
+const H1 = PauliOp.from([{ coeff: 1, ops: 'ZI' }, { coeff: 1, ops: 'IZ' }])
+const H2 = PauliOp.from([{ coeff: 0.5, ops: 'XX' }])
+vqe(new Circuit(2), H1.add(H2).toTerms())    // ⟨H1 + H2⟩
+H1.scale(2).toTerms()                         // [{ coeff: 2, ops: 'ZI' }, ...]
+
+const X = PauliOp.from([{ coeff: 1, ops: 'X' }])
+const Y = PauliOp.from([{ coeff: 1, ops: 'Y' }])
+X.mul(Y)           // iZ — product with phase tracking
+X.commutator(Y)    // 2iZ — [X, Y] = XY − YX
+// .toTerms() throws on non-Hermitian results (imaginary coefficients)
 
 // Trotterized Hamiltonian simulation — e^{-iHt} ≈ (∏_j e^{-iH_j·t/r})^r
-const H = [{ coeff: 1.0, ops: 'ZZ' }, { coeff: 0.5, ops: 'XX' }]
-const evolution = trotter(2, H, Math.PI / 4, 4, 2)  // 4 steps, order 2
+const Htrotter = [{ coeff: 1.0, ops: 'ZZ' }, { coeff: 0.5, ops: 'XX' }]
+const evolution = trotter(2, Htrotter, Math.PI / 4, 4, 2)  // 4 steps, order 2
 
 // QAOA Max-Cut — 4-cycle graph, p=1
 const edges: [number, number][] = [[0,1],[1,2],[2,3],[3,0]]
@@ -363,6 +393,12 @@ vqe(circuit, maxCutHamiltonian(4, edges))  // → ~2.95  (random = 2.0, optimal 
 circuit.exactProbs()
 // Top states: '1010': 0.265, '0101': 0.265  ← the two optimal bipartitions
 ```
+
+`realAmplitudes(n, reps)` and `efficientSU2(n, reps)` return ansatz functions with a `.paramCount` property. Both use linear CNOT entanglement; `efficientSU2` adds Rz rotations for full SU(2) coverage per qubit.
+
+`gradient(ansatz, hamiltonian, params)` computes exact analytic gradients via the parameter shift rule — not finite differences. The rule is exact for any gate of the form e^{−iθP/2} (Rx, Ry, Rz, and all standard rotation gates). `minimize(ansatz, hamiltonian, initialParams, options?)` runs gradient descent until convergence or step budget exhaustion, returning `{ params, energy, steps, converged }`.
+
+`PauliOp` supports full complex-coefficient arithmetic: `.add()`, `.scale()`, `.mul()` (with phase tracking), and `.commutator()`. `.toTerms()` converts back to `PauliTerm[]` for use with `vqe()`, `gradient()`, and `minimize()`, and throws if the operator is not Hermitian.
 
 `trotter(n, hamiltonian, t, steps?, order?)` implements the Lie–Trotter product formula (`order=1`) and the symmetric Trotter–Suzuki decomposition (`order=2`). Error scales as O(t²/r) for order 1 and O(t³/r²) for order 2.
 
@@ -600,10 +636,10 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-1252 tests, ~600ms. Run with:
+1301 tests, ~600ms. Run with:
 
 ```bash
 npm test
 ```
 
-The suite covers: analytic correctness (known complex amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), math primitive unit tests (`add`, `mul`, `conj`, `norm2`, etc.), qubit index bounds checking, algorithm output correctness (QFT phase amplitudes, Grover, QPE, VQE, Pauli expectation values), BigInt correctness at qubit indices 30/31/40, Clifford word-boundary correctness at n=33, probability normalization invariants, backend consistency (statevector vs density matrix), JSON round-trips for all 13 op kinds, serializer contract matrix (every op kind × every export format), and full import/export round-trips for all 14 supported formats.
+The suite covers: analytic correctness (known complex amplitudes, not just "doesn't crash"), gate invertibility (U†U = I), math primitive unit tests (`add`, `mul`, `conj`, `norm2`, etc.), qubit index bounds checking, algorithm output correctness (QFT phase amplitudes, Grover, QPE, VQE, Pauli expectation values, gradient analytic match, minimize convergence), BigInt correctness at qubit indices 30/31/40, Clifford word-boundary correctness at n=33, probability normalization invariants, backend consistency (statevector vs density matrix), JSON round-trips for all 13 op kinds, serializer contract matrix (every op kind × every export format), and full import/export round-trips for all 14 supported formats.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
-import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian } from './algorithms.js'
+import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 import { add, mul, scale, conj, norm2, isNegligible, c } from './complex.js'
@@ -4140,6 +4140,32 @@ describe('gradient — parameter shift rule', () => {
     expect(grad[1]).toBeCloseTo(-Math.sin(p1), 10)
   })
 
+  it('∂⟨X⟩/∂θ = −sin(θ): exercises H-basis rotation in vqe()', () => {
+    // h·rz(θ)|0⟩ → ⟨X⟩ = cos(θ), ∂⟨X⟩/∂θ = −sin(θ)
+    const ansatz = (p: readonly number[]) => new Circuit(1).h(0).rz(p[0]!, 0)
+    const theta = Math.PI / 4
+    const [g] = gradient(ansatz, [{ coeff: 1, ops: 'X' }], [theta])
+    expect(g).toBeCloseTo(-Math.sin(theta), 10)
+  })
+
+  it('∂⟨Y⟩/∂θ = −cos(θ): exercises S†H-basis rotation in vqe()', () => {
+    // rx(θ)|0⟩ → ⟨Y⟩ = −sin(θ), ∂⟨Y⟩/∂θ = −cos(θ)
+    const ansatz = (p: readonly number[]) => new Circuit(1).rx(p[0]!, 0)
+    const theta = Math.PI / 4
+    const [g] = gradient(ansatz, [{ coeff: 1, ops: 'Y' }], [theta])
+    expect(g).toBeCloseTo(-Math.cos(theta), 10)
+  })
+
+  it('entangled ansatz: Ry(p0)·CNOT·Ry(p1) with ZZ — grad[0]=0, grad[1]=−sin(p1)', () => {
+    // ⟨ZZ⟩ = cos(p1) regardless of p0 through the CNOT layer
+    const ansatz = (p: readonly number[]) =>
+      new Circuit(2).ry(p[0]!, 0).cnot(0, 1).ry(p[1]!, 1)
+    const p1 = Math.PI / 4
+    const grad = gradient(ansatz, [{ coeff: 1, ops: 'ZZ' }], [0.5, p1])
+    expect(grad[0]).toBeCloseTo(0, 10)
+    expect(grad[1]).toBeCloseTo(-Math.sin(p1), 10)
+  })
+
   it('coefficient scaling: doubling coeff doubles the gradient', () => {
     const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
     const theta = Math.PI / 5
@@ -4186,6 +4212,120 @@ describe('minimize — gradient descent VQE optimizer', () => {
     const { steps, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [Math.PI])
     expect(converged).toBe(true)
     expect(steps).toBe(0)
+  })
+})
+
+// ─── realAmplitudes ───────────────────────────────────────────────────────────
+
+describe('realAmplitudes', () => {
+  it('paramCount = n × (reps + 1)', () => {
+    expect(realAmplitudes(3, 2).paramCount).toBe(9)
+    expect(realAmplitudes(4, 0).paramCount).toBe(4)
+  })
+
+  it('wrong param count throws RangeError', () => {
+    expect(() => realAmplitudes(2, 1)([])).toThrow(RangeError)
+  })
+
+  it('finds ground state of Z with minimize()', () => {
+    const ansatz = realAmplitudes(1, 1)
+    const { energy, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], Array(ansatz.paramCount).fill(0.1))
+    expect(energy).toBeCloseTo(-1, 4)
+    expect(converged).toBe(true)
+  })
+
+  it('2-qubit entangled ansatz reaches ZZ ground state (energy → −1)', () => {
+    // Linear CNOT layer creates entanglement; ground state of ZZ is any Bell state
+    const ansatz = realAmplitudes(2, 1)
+    const { energy, converged } = minimize(ansatz, [{ coeff: 1, ops: 'ZZ' }], Array(ansatz.paramCount).fill(0.1), { lr: 0.2, steps: 500 })
+    expect(energy).toBeCloseTo(-1, 3)
+    expect(converged).toBe(true)
+  })
+})
+
+// ─── efficientSU2 ─────────────────────────────────────────────────────────────
+
+describe('efficientSU2', () => {
+  it('paramCount = 2n × (reps + 1)', () => {
+    expect(efficientSU2(3, 2).paramCount).toBe(18)
+    expect(efficientSU2(2, 0).paramCount).toBe(4)
+  })
+
+  it('wrong param count throws RangeError', () => {
+    expect(() => efficientSU2(2, 1)([])).toThrow(RangeError)
+  })
+
+  it('finds ground state of Z with minimize()', () => {
+    const ansatz = efficientSU2(1, 1)
+    const { energy, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], Array(ansatz.paramCount).fill(0.1))
+    expect(energy).toBeCloseTo(-1, 4)
+    expect(converged).toBe(true)
+  })
+})
+
+// ─── PauliOp ─────────────────────────────────────────────────────────────────
+
+describe('PauliOp', () => {
+  it('from() / toTerms() round-trips real coefficients', () => {
+    const terms: PauliTerm[] = [{ coeff: 2, ops: 'ZI' }, { coeff: -0.5, ops: 'IZ' }]
+    const result = PauliOp.from(terms).toTerms()
+    expect(result).toHaveLength(2)
+    expect(result.find(t => t.ops === 'ZI')?.coeff).toBeCloseTo(2, 10)
+    expect(result.find(t => t.ops === 'IZ')?.coeff).toBeCloseTo(-0.5, 10)
+  })
+
+  it('add() combines terms', () => {
+    const A = PauliOp.from([{ coeff: 1, ops: 'ZI' }])
+    const B = PauliOp.from([{ coeff: 1, ops: 'IZ' }])
+    expect(A.add(B).toTerms()).toHaveLength(2)
+  })
+
+  it('add() collects like terms', () => {
+    const A = PauliOp.from([{ coeff: 1, ops: 'Z' }])
+    const [term] = A.add(A).toTerms()
+    expect(term?.coeff).toBeCloseTo(2, 10)
+  })
+
+  it('scale() multiplies all coefficients', () => {
+    const A = PauliOp.from([{ coeff: 3, ops: 'X' }])
+    const [term] = A.scale(2).toTerms()
+    expect(term?.coeff).toBeCloseTo(6, 10)
+  })
+
+  it('mul(): X·X = I', () => {
+    const X = PauliOp.from([{ coeff: 1, ops: 'X' }])
+    const [term] = X.mul(X).toTerms()
+    expect(term?.ops).toBe('I')
+    expect(term?.coeff).toBeCloseTo(1, 10)
+  })
+
+  it('mul(): X·Y = iZ (imaginary coefficient)', () => {
+    const X = PauliOp.from([{ coeff: 1, ops: 'X' }])
+    const Y = PauliOp.from([{ coeff: 1, ops: 'Y' }])
+    expect(() => X.mul(Y).toTerms()).toThrow(TypeError)
+  })
+
+  it('commutator(): [X, Y] = 2iZ — toTerms() throws', () => {
+    const X = PauliOp.from([{ coeff: 1, ops: 'X' }])
+    const Y = PauliOp.from([{ coeff: 1, ops: 'Y' }])
+    expect(() => X.commutator(Y).toTerms()).toThrow(TypeError)
+  })
+
+  it('commutator(): commuting operators give zero', () => {
+    const Z = PauliOp.from([{ coeff: 1, ops: 'Z' }])
+    expect(Z.commutator(Z).toTerms()).toEqual([])
+  })
+
+  it('mul() ops length mismatch throws', () => {
+    const A = PauliOp.from([{ coeff: 1, ops: 'Z' }])
+    const B = PauliOp.from([{ coeff: 1, ops: 'ZI' }])
+    expect(() => A.mul(B)).toThrow(TypeError)
+  })
+
+  it('integrates with vqe() via toTerms()', () => {
+    const H = PauliOp.from([{ coeff: 1, ops: 'ZI' }]).add(PauliOp.from([{ coeff: 0.5, ops: 'IZ' }]))
+    // |00⟩: ZI=+1, IZ=+1 → energy = 1 + 0.5 = 1.5
+    expect(vqe(new Circuit(2), H.toTerms())).toBeCloseTo(1.5, 10)
   })
 })
 
