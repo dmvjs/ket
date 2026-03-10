@@ -334,3 +334,92 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
 
   return energy
 }
+
+// ── Parameter shift rule ──────────────────────────────────────────────────────
+
+/**
+ * Compute the exact analytic gradient of ⟨ψ(params)|H|ψ(params)⟩ w.r.t. each
+ * parameter using the parameter shift rule:
+ *
+ *   ∂⟨H⟩/∂θᵢ = ½[⟨H⟩(θᵢ + π/2) − ⟨H⟩(θᵢ − π/2)]
+ *
+ * This is exact (not finite-difference) for any gate of the form e^{−iθP/2}
+ * where P is a Pauli operator — i.e. Rx, Ry, Rz, and all standard rotation
+ * gates.  It returns 2N evaluations of `vqe()` for N parameters.
+ *
+ * @param ansatz      Function mapping a parameter vector to a Circuit.
+ * @param hamiltonian Pauli-string Hamiltonian (same format as `vqe()`).
+ * @param params      Current parameter values θ.
+ * @returns           Gradient vector — `result[i]` = ∂⟨H⟩/∂params[i].
+ *
+ * @example
+ * const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+ * const H = [{ coeff: 1, ops: 'Z' }]
+ * gradient(ansatz, H, [Math.PI / 4])  // ≈ [-0.7071]  (= −sin(π/4))
+ */
+export function gradient(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  params: readonly number[],
+): number[] {
+  const shift = Math.PI / 2
+  return Array.from({ length: params.length }, (_, i) => {
+    const plus  = params.map((p, j) => j === i ? p + shift : p)
+    const minus = params.map((p, j) => j === i ? p - shift : p)
+    return 0.5 * (vqe(ansatz(plus), hamiltonian) - vqe(ansatz(minus), hamiltonian))
+  })
+}
+
+/** Options for {@link minimize}. */
+export interface MinimizeOptions {
+  /** Gradient descent learning rate (default `0.1`). */
+  lr?: number
+  /** Maximum number of gradient steps (default `200`). */
+  steps?: number
+  /** Convergence threshold: stops when gradient L2 norm < tol (default `1e-6`). */
+  tol?: number
+}
+
+/** Result returned by {@link minimize}. */
+export interface MinimizeResult {
+  /** Optimal parameters found. */
+  params: number[]
+  /** ⟨ψ(params)|H|ψ(params)⟩ at those parameters. */
+  energy: number
+  /** Number of gradient steps taken. */
+  steps: number
+  /** True if the gradient norm dropped below `tol` before exhausting `steps`. */
+  converged: boolean
+}
+
+/**
+ * Minimize ⟨ψ(params)|H|ψ(params)⟩ with gradient descent + parameter shift.
+ *
+ * Runs until the gradient L2 norm drops below `tol` or the step budget is
+ * exhausted.  Use `gradient()` directly if you need a different optimizer
+ * (Adam, L-BFGS, etc.).
+ *
+ * @example
+ * const ansatz = (p: readonly number[]) =>
+ *   new Circuit(2).ry(p[0]!, 0).cnot(0, 1).ry(p[1]!, 1)
+ * const { energy, params, converged } = minimize(ansatz, H, [0, 0])
+ */
+export function minimize(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  initialParams: readonly number[],
+  { lr = 0.1, steps = 200, tol = 1e-6 }: MinimizeOptions = {},
+): MinimizeResult {
+  let params = [...initialParams]
+
+  for (let step = 0; step < steps; step++) {
+    const grad     = gradient(ansatz, hamiltonian, params)
+    const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
+    if (gradNorm < tol) {
+      return { params, energy: vqe(ansatz(params), hamiltonian), steps: step, converged: true }
+    }
+    params = params.map((p, i) => p - lr * grad[i]!)
+  }
+
+  return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false }
+}
