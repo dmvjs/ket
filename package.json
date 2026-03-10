@@ -37,7 +37,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --minify --format=esm --outfile=dist/ket.js",
     "test": "vitest run",
     "dev": "vitest"
   },
