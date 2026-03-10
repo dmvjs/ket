@@ -4,6 +4,8 @@
 [![npm](https://img.shields.io/npm/v/@kirkelliott/ket)](https://www.npmjs.com/package/@kirkelliott/ket)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+**[dmvjs.com/ket](https://dmvjs.com/ket/) · [npm](https://www.npmjs.com/package/@kirkelliott/ket) · [GitHub](https://github.com/dmvjs/ket)**
+
 TypeScript quantum circuit simulator. Immutable API, four backends, 14 import/export formats, zero dependencies.
 
 ## Bitstring convention
