@@ -1,6 +1,6 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, three backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/dmvjs/ket.git"
   },
-  "homepage": "https://github.com/dmvjs/ket#readme",
+  "homepage": "https://dmvjs.com/ket/",
   "bugs": {
     "url": "https://github.com/dmvjs/ket/issues"
   },
