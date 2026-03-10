@@ -31,13 +31,13 @@
     }
   },
   "types": "dist/index.d.ts",
-  "unpkg": "dist/ket.js",
+  "unpkg": "dist/ket.min.js",
   "module": "dist/ket.js",
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --outfile=dist/ket.min.js",
     "test": "vitest run",
     "dev": "vitest"
   },
