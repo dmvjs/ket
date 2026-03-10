@@ -335,6 +335,182 @@ export function vqe(ansatz: Circuit, hamiltonian: PauliTerm[]): number {
   return energy
 }
 
+// ── Ansatz circuits ───────────────────────────────────────────────────────────
+
+/** An ansatz function paired with its known parameter count. */
+export interface AnsatzFn {
+  (params: readonly number[]): Circuit
+  /** Total number of trainable parameters. */
+  paramCount: number
+}
+
+function makeAnsatz(paramCount: number, fn: (params: readonly number[]) => Circuit): AnsatzFn {
+  return Object.assign(fn, { paramCount })
+}
+
+/**
+ * Hardware-efficient ansatz with real amplitudes.
+ *
+ * Alternating layers of Ry(θ) rotations and linear CNOT entanglement,
+ * with a final Ry layer.  All state amplitudes remain real throughout.
+ * Total parameters: `n × (reps + 1)`.
+ *
+ * @example
+ * const ansatz = realAmplitudes(2, 2)
+ * const { energy } = minimize(ansatz, hamiltonian, Array(ansatz.paramCount).fill(0))
+ */
+export function realAmplitudes(n: number, reps = 3): AnsatzFn {
+  const paramCount = n * (reps + 1)
+  return makeAnsatz(paramCount, params => {
+    if (params.length !== paramCount)
+      throw new RangeError(`realAmplitudes(${n}, ${reps}) needs ${paramCount} params, got ${params.length}`)
+    let c = new Circuit(n), p = 0
+    for (let r = 0; r < reps; r++) {
+      for (let q = 0; q < n; q++) c = c.ry(params[p++]!, q)
+      for (let q = 0; q < n - 1; q++) c = c.cnot(q, q + 1)
+    }
+    for (let q = 0; q < n; q++) c = c.ry(params[p++]!, q)
+    return c
+  })
+}
+
+/**
+ * Hardware-efficient ansatz with full SU(2) single-qubit rotations.
+ *
+ * Alternating layers of Ry(θ)·Rz(φ) rotations and linear CNOT entanglement,
+ * with a final Ry·Rz layer.  Total parameters: `2n × (reps + 1)`.
+ *
+ * Strictly more expressive than `realAmplitudes` — can reach any product state
+ * and, with entanglement, arbitrary entangled states.
+ */
+export function efficientSU2(n: number, reps = 3): AnsatzFn {
+  const paramCount = 2 * n * (reps + 1)
+  return makeAnsatz(paramCount, params => {
+    if (params.length !== paramCount)
+      throw new RangeError(`efficientSU2(${n}, ${reps}) needs ${paramCount} params, got ${params.length}`)
+    let c = new Circuit(n), p = 0
+    for (let r = 0; r < reps; r++) {
+      for (let q = 0; q < n; q++) { c = c.ry(params[p++]!, q); c = c.rz(params[p++]!, q) }
+      for (let q = 0; q < n - 1; q++) c = c.cnot(q, q + 1)
+    }
+    for (let q = 0; q < n; q++) { c = c.ry(params[p++]!, q); c = c.rz(params[p++]!, q) }
+    return c
+  })
+}
+
+// ── Pauli operator algebra ────────────────────────────────────────────────────
+
+// Pauli indices: I=0, X=1, Y=2, Z=3
+// PAULI_PROD[a][b] = [resultIdx, phaseExp] where physical phase = i^phaseExp
+const PAULI_IDX: Readonly<Record<string, number>> = { I: 0, X: 1, Y: 2, Z: 3 }
+const PAULI_CHR = 'IXYZ'
+const PAULI_PROD: readonly (readonly [number, number][])[] = [
+  [[0,0],[1,0],[2,0],[3,0]], // I·{I,X,Y,Z}
+  [[1,0],[0,0],[3,1],[2,3]], // X·{I,X,Y,Z}: XX=I, XY=iZ, XZ=-iY
+  [[2,0],[3,3],[0,0],[1,1]], // Y·{I,X,Y,Z}: YX=-iZ, YY=I, YZ=iX
+  [[3,0],[2,1],[1,3],[0,0]], // Z·{I,X,Y,Z}: ZX=iY, ZY=-iX, ZZ=I
+]
+
+type CCoeff = { re: number; im: number }
+
+function addC(a: CCoeff, b: CCoeff): CCoeff { return { re: a.re + b.re, im: a.im + b.im } }
+function mulC(a: CCoeff, b: CCoeff): CCoeff {
+  return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }
+}
+function scaleC(c: CCoeff, s: number): CCoeff { return { re: c.re * s, im: c.im * s } }
+function phaseC(c: CCoeff, exp: number): CCoeff {
+  switch (exp & 3) {
+    case 1: return { re: -c.im, im:  c.re }
+    case 2: return { re: -c.re, im: -c.im }
+    case 3: return { re:  c.im, im: -c.re }
+    default: return c
+  }
+}
+
+interface InternalTerm { ops: string; coeff: CCoeff }
+
+/**
+ * Pauli-string operator with full complex-coefficient arithmetic.
+ *
+ * Use `PauliOp.from()` to build from a real Hamiltonian and `.toTerms()` to
+ * convert back for `vqe()`, `gradient()`, and `minimize()`.
+ *
+ * @example
+ * const H = PauliOp.from([{ coeff: 1, ops: 'ZI' }, { coeff: 1, ops: 'IZ' }])
+ * const V = PauliOp.from([{ coeff: 0.5, ops: 'XX' }])
+ * const energy = vqe(circuit, H.add(V).toTerms())
+ */
+export class PauliOp {
+  readonly #terms: readonly InternalTerm[]
+
+  private constructor(terms: readonly InternalTerm[]) { this.#terms = terms }
+
+  /** Construct from a real-coefficient Pauli Hamiltonian. */
+  static from(terms: PauliTerm[]): PauliOp {
+    return new PauliOp(
+      terms.map(({ ops, coeff }) => ({ ops: ops.toUpperCase(), coeff: { re: coeff, im: 0 } })),
+    )
+  }
+
+  static #collect(terms: InternalTerm[]): PauliOp {
+    const map = new Map<string, CCoeff>()
+    for (const { ops, coeff } of terms) {
+      const acc = map.get(ops)
+      map.set(ops, acc ? addC(acc, coeff) : { ...coeff })
+    }
+    return new PauliOp(
+      [...map.entries()]
+        .filter(([, c]) => Math.abs(c.re) > 1e-15 || Math.abs(c.im) > 1e-15)
+        .map(([ops, coeff]) => ({ ops, coeff })),
+    )
+  }
+
+  /** A + B */
+  add(other: PauliOp): PauliOp {
+    return PauliOp.#collect([...this.#terms, ...other.#terms])
+  }
+
+  /** c · A */
+  scale(factor: number): PauliOp {
+    return new PauliOp(this.#terms.map(t => ({ ...t, coeff: scaleC(t.coeff, factor) })))
+  }
+
+  /** A · B  (Pauli string product with phase tracking) */
+  mul(other: PauliOp): PauliOp {
+    const result: InternalTerm[] = []
+    for (const a of this.#terms) {
+      for (const b of other.#terms) {
+        if (a.ops.length !== b.ops.length)
+          throw new TypeError(`ops length mismatch: '${a.ops}' vs '${b.ops}'`)
+        let phaseExp = 0, ops = ''
+        for (let i = 0; i < a.ops.length; i++) {
+          const [r, pe] = PAULI_PROD[PAULI_IDX[a.ops[i]!]!]![PAULI_IDX[b.ops[i]!]!]!
+          phaseExp = (phaseExp + pe) & 3
+          ops += PAULI_CHR[r]
+        }
+        result.push({ ops, coeff: phaseC(mulC(a.coeff, b.coeff), phaseExp) })
+      }
+    }
+    return PauliOp.#collect(result)
+  }
+
+  /** [A, B] = AB − BA */
+  commutator(other: PauliOp): PauliOp {
+    return this.mul(other).add(other.mul(this).scale(-1))
+  }
+
+  /**
+   * Convert to `PauliTerm[]` for use with `vqe()`, `gradient()`, and `minimize()`.
+   * Throws if any imaginary coefficients exceed `tol` (operator is not Hermitian).
+   */
+  toTerms(tol = 1e-10): PauliTerm[] {
+    for (const { ops, coeff } of this.#terms)
+      if (Math.abs(coeff.im) > tol)
+        throw new TypeError(`PauliOp has imaginary coefficient on '${ops}' — operator is not Hermitian`)
+    return this.#terms.map(({ ops, coeff }) => ({ ops, coeff: coeff.re }))
+  }
+}
+
 // ── Parameter shift rule ──────────────────────────────────────────────────────
 
 /**
