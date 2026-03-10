@@ -436,6 +436,32 @@ Bell state:
 
 ![QFT circuit](examples/svg/qft4.svg)
 
+### Measurement histogram
+
+`result.toSVG()` returns a self-contained SVG bar chart of measurement outcomes — same visual style as the QAOA Max-Cut diagram above. Bars are sorted by bitstring; dominant peaks (≥ 80 % of the max probability) are highlighted in blue with a percentage label.
+
+Bell state (1024 shots):
+
+![Bell histogram](examples/svg/bell_histogram.svg)
+
+QAOA Max-Cut standalone histogram:
+
+![QAOA histogram](examples/svg/qaoa_histogram.svg)
+
+```typescript
+import fs from 'fs'
+import { Circuit, qaoa } from '@kirkelliott/ket'
+
+// Bell state
+const result = new Circuit(2).h(0).cnot(0, 1)
+  .creg('out', 2).measure(0, 'out', 0).measure(1, 'out', 1)
+  .run({ shots: 1024, seed: 42 })
+fs.writeFileSync('bell.svg', result.toSVG())
+
+// Custom title and explicit highlight list
+result.toSVG({ title: 'my experiment', highlight: ['00', '11'] })
+```
+
 ### Bloch sphere
 
 `circuit.blochSphere(q)` returns a self-contained SVG showing the single-qubit state for qubit `q` as an arrow on the Bloch sphere. Internally uses `blochAngles(q)`, which partial-traces the statevector over all other qubits.

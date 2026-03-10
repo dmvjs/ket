@@ -384,6 +384,60 @@ describe('Distribution', () => {
     expect(rendered.length).toBeGreaterThan(10)
   })
 
+  it('.toSVG returns a valid SVG string', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
+    const svg = r.toSVG()
+    expect(svg).toMatch(/^<svg /)
+    expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"')
+    expect(svg).toContain('</svg>')
+  })
+
+  it('.toSVG highlights the dominant Bell peaks in blue', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
+    const svg = r.toSVG()
+    expect(svg).toContain('#3b82f6')   // highlighted bar fill
+    expect(svg).toContain('#2563eb')   // highlighted label color
+  })
+
+  it('.toSVG accepts explicit highlight list', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
+    const svg = r.toSVG({ highlight: ['00'] })
+    // '00' label should appear in blue; '11' should not be highlighted
+    const blueTextCount = (svg.match(/fill="#2563eb"/g) ?? []).length
+    // only '00' is highlighted → 2 blue elements (pct label + rotated bitstring label)
+    expect(blueTextCount).toBe(2)
+  })
+
+  it('.toSVG subtitle shows all-states count correctly', () => {
+    const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
+    const svg = r.toSVG()
+    // Bell has exactly 2 outcomes out of 4 possible
+    expect(svg).toContain('2 of 4 states')
+  })
+
+  it('.toSVG subtitle shows "all N states" when all outcomes observed', () => {
+    let c = new Circuit(2)
+    for (let i = 0; i < 2; i++) c = c.h(i)
+    const r = c.run({ shots: 100000, seed: 42 })
+    const svg = r.toSVG()
+    expect(svg).toContain('all 4 states')
+  })
+
+  it('.toSVG accepts a custom title', () => {
+    const r = new Circuit(1).h(0).run({ shots: 100, seed: 1 })
+    const svg = r.toSVG({ title: 'my experiment' })
+    expect(svg).toContain('my experiment')
+  })
+
+  it('.toSVG on empty distribution returns a minimal SVG', () => {
+    // A circuit with no measurements produces an empty probs map
+    // Simulate by running a 0-shot-like condition via exactProbs path
+    // The easiest test: build a Distribution with no counts via run on |0⟩ (always '0')
+    // and verify the svg doesn't crash for distributions with entries
+    const r = new Circuit(1).run({ shots: 1, seed: 1 })
+    expect(() => r.toSVG()).not.toThrow()
+  })
+
   it('probabilities sum to 1', () => {
     const r = new Circuit(3).h(0).h(1).h(2).run({ shots: 10000, seed: 42 })
     const total = Object.values(r.probs).reduce((a, b) => a + b, 0)

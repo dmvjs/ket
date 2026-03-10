@@ -840,6 +840,94 @@ export class Distribution {
     })
     return lines.join('\n')
   }
+
+  /**
+   * SVG bar chart of measurement outcomes — same visual style as the QAOA Max-Cut diagram.
+   *
+   * Bars are sorted by bitstring. Dominant peaks (≥ 80 % of the max probability) are
+   * highlighted in blue with a percentage label; the rest render in slate.
+   *
+   * @param opts.title     Override the subtitle line (default: `"measurement outcomes"`).
+   * @param opts.highlight Explicit set of bitstrings to highlight instead of auto-detecting.
+   *
+   * @example
+   * import fs from 'fs'
+   * const result = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
+   * fs.writeFileSync('bell.svg', result.toSVG())
+   */
+  toSVG(opts: { title?: string; highlight?: readonly string[] } = {}): string {
+    const entries = Object.entries(this.probs).toSorted(([a], [b]) => a.localeCompare(b))
+    if (entries.length === 0) {
+      return '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="215" viewBox="0 0 300 215"><rect width="300" height="215" fill="#fff"/></svg>'
+    }
+
+    const n       = entries.length
+    const barW    = 14
+    const barStep = 16   // bar + 2px gap
+    const ml      = 30   // left margin
+    const mr      = 20   // right margin
+    const baseline = 175
+    const maxBarH  = 120 // tallest possible bar (leaves room above for pct label)
+    const totalH   = 215
+    const totalW   = Math.max(320, ml + n * barStep + mr)
+
+    const maxP = Math.max(...entries.map(([, p]) => p))
+
+    // Auto-detect dominant peaks or use caller-supplied list
+    const highlighted: Set<string> = opts.highlight
+      ? new Set(opts.highlight)
+      : new Set(entries.filter(([, p]) => p >= maxP * 0.8).map(([bs]) => bs))
+
+    const shown    = n
+    const possible = 2 ** this.qubits
+    const countLabel = shown === possible ? `all ${shown}` : `${shown} of ${possible}`
+    const subtitle = `${opts.title ?? 'measurement outcomes'} (${countLabel} state${shown !== 1 ? 's' : ''})`
+
+    const els: string[] = []
+
+    // Background
+    els.push(`<rect width="${totalW}" height="${totalH}" fill="#fff"/>`)
+
+    // Subtitle
+    els.push(
+      `<text x="${(totalW / 2).toFixed(0)}" y="18" text-anchor="middle"` +
+      ` font-family="ui-sans-serif,sans-serif" font-size="11" fill="#94a3b8">${subtitle}</text>`,
+    )
+
+    // Bars + labels
+    for (let i = 0; i < entries.length; i++) {
+      const [bs, p] = entries[i]!
+      const x    = ml + i * barStep
+      const cx   = x + barW / 2
+      const barH = (p / maxP) * maxBarH
+      const y    = baseline - barH
+      const isHi = highlighted.has(bs)
+      const fill = isHi ? '#3b82f6' : '#e2e8f0'
+
+      els.push(`<rect x="${x}" y="${y.toFixed(2)}" width="${barW}" height="${barH.toFixed(2)}" rx="2" fill="${fill}"/>`)
+
+      if (isHi) {
+        // Percentage label above bar
+        const pct = `${(p * 100).toFixed(0)}%`
+        els.push(
+          `<text x="${cx.toFixed(0)}" y="${(y - 4).toFixed(0)}" text-anchor="middle"` +
+          ` font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">${pct}</text>`,
+        )
+        // Rotated bitstring label in blue
+        els.push(
+          `<text x="${cx.toFixed(0)}" y="${baseline + 14}" text-anchor="middle"` +
+          ` font-family="ui-monospace,monospace" font-size="9" fill="#2563eb"` +
+          ` transform="rotate(-45 ${cx.toFixed(0)} ${baseline + 14})">${bs}</text>`,
+        )
+      }
+    }
+
+    // Baseline
+    const lineX2 = ml + n * barStep - 2
+    els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${lineX2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n${els.join('\n')}\n</svg>`
+  }
 }
 
 // ─── Parametric gate helpers ──────────────────────────────────────────────────
