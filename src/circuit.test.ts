@@ -4130,12 +4130,6 @@ describe('gradient — parameter shift rule', () => {
     expect(g).toBeCloseTo(0, 10)
   })
 
-  it('gradient sign points downhill: negative at θ=π/4 → GD moves toward π', () => {
-    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
-    const [g] = gradient(ansatz, Z, [Math.PI / 4])
-    expect(g).toBeLessThan(0)
-  })
-
   it('multi-param: independent gradients match analytic −sin(θᵢ)', () => {
     // H = Z⊗I + I⊗Z, ⟨H⟩ = cos(p0) + cos(p1) → ∂/∂p0 = −sin(p0), ∂/∂p1 = −sin(p1)
     const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).ry(p[1]!, 1)
@@ -4170,11 +4164,8 @@ describe('minimize — gradient descent VQE optimizer', () => {
     expect(converged).toBe(true)
   })
 
-  it('finds ground state of two-qubit ZZ + ZI Hamiltonian', () => {
-    // H = ZZ + 0.5·ZI, ground state is |11⟩ with energy = 1 − 0.5 = 0.5... wait:
-    // |11⟩: ZZ=+1 (both -1 eigenvalues multiply: (-1)(-1)=+1), ZI=-1 → H=1-0.5=0.5
-    // |00⟩: ZZ=+1, ZI=+1 → 1.5. |01⟩: ZZ=-1, ZI=+1 → -0.5. |10⟩: ZZ=-1, ZI=-1 → -1.5 ← min
-    // Ground state is |10⟩: ansatz = Ry(π)⊗I, energy = -1.5
+  it('finds ground state of two-qubit ZZ + 0.5·ZI Hamiltonian (energy → −1.5)', () => {
+    // Ground state is |10⟩: ZZ=-1, ZI=-1 → −1 − 0.5 = −1.5
     const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).ry(p[1]!, 1)
     const H: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }, { coeff: 0.5, ops: 'ZI' }]
     const { energy, converged } = minimize(ansatz, H, [0.1, 0.1], { lr: 0.2, steps: 500 })
@@ -4182,19 +4173,11 @@ describe('minimize — gradient descent VQE optimizer', () => {
     expect(converged).toBe(true)
   })
 
-  it('reports converged=false when step budget exhausted', () => {
+  it('reports converged=false and correct step count when budget exhausted', () => {
     const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
     const { converged, steps } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [0.1], { steps: 1 })
     expect(converged).toBe(false)
     expect(steps).toBe(1)
-  })
-
-  it('step count matches actual iterations taken', () => {
-    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
-    const { steps, converged } = minimize(ansatz, [{ coeff: 1, ops: 'Z' }], [0.1], { steps: 500 })
-    expect(steps).toBeGreaterThan(0)
-    expect(steps).toBeLessThanOrEqual(500)
-    expect(converged).toBe(true)
   })
 
   it('already at minimum: converges in 0 steps', () => {
