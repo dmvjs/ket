@@ -556,6 +556,26 @@ describe('amplitude correctness — known states', () => {
     }
   })
 
+  it('Z²=I: double Z leaves |+⟩ unchanged', () => {
+    // Z=diag(1,-1). Z²=I. Missing from the involution tests alongside X² and H².
+    let mps = mpsApply1(mpsInit(2), 0, H)
+    const before = mpsContract(mps).slice()
+    mps = mpsApply1(mps, 0, Z)
+    mps = mpsApply1(mps, 0, Z)
+    const after = mpsContract(mps)
+    for (let i = 0; i < after.length; i++) expect(after[i]!).toBeCloseTo(before[i]!, 14)
+  })
+
+  it('Y²=I: double Y leaves |+⟩ unchanged', () => {
+    // Y²=I. Also implicitly checks that Y·Y cancels the imaginary phase.
+    let mps = mpsApply1(mpsInit(2), 0, H)
+    const before = mpsContract(mps).slice()
+    mps = mpsApply1(mps, 0, Y)
+    mps = mpsApply1(mps, 0, Y)
+    const after = mpsContract(mps)
+    for (let i = 0; i < after.length; i++) expect(after[i]!).toBeCloseTo(before[i]!, 14)
+  })
+
   it('iSWAP|10⟩ = i|01⟩: verifies XY-type gate complex phase (Xy imported separately)', () => {
     // iSWAP = XY(π). Acts as SWAP on computational basis but with an i phase factor.
     // iSWAP|01⟩ = i|10⟩, iSWAP|10⟩ = i|01⟩. Diagonal elements are 1 (|00⟩,|11⟩ unchanged).
@@ -855,6 +875,44 @@ describe('QR decomposition — via black-box mpsApply2 output', () => {
       expect(t.data.length).toBe(t.chiL * 2 * t.chiR * 2)
     }
   })
+
+  it('left-orthogonality: tensor A satisfies A†A = I after mpsApply2', () => {
+    // After QR decomposition, the Q matrix (tensor A) must be left-orthogonal:
+    //   sum_{l,p} conj(A[l,p,r1]) · A[l,p,r2] = δ_{r1,r2}
+    // This is guaranteed by Modified Gram-Schmidt but must be verified — a bug in
+    // the index formula or QR loop would break orthogonality silently.
+    const checkLeftOrtho = (mps: MPS, site: number) => {
+      const t = mpsTensor(mps, site)
+      const { chiL, chiR, data } = t
+      for (let r1 = 0; r1 < chiR; r1++) {
+        for (let r2 = 0; r2 < chiR; r2++) {
+          let sumRe = 0, sumIm = 0
+          for (let l = 0; l < chiL; l++) {
+            for (let p = 0; p < 2; p++) {
+              const i1 = ((l * 2 + p) * chiR + r1) * 2
+              const i2 = ((l * 2 + p) * chiR + r2) * 2
+              // conj(A[l,p,r1]) · A[l,p,r2] = (re1 - i·im1)(re2 + i·im2)
+              sumRe += data[i1]! * data[i2]! + data[i1 + 1]! * data[i2 + 1]!
+              sumIm += data[i1]! * data[i2 + 1]! - data[i1 + 1]! * data[i2]!
+            }
+          }
+          expect(sumRe).toBeCloseTo(r1 === r2 ? 1 : 0, 12)
+          expect(sumIm).toBeCloseTo(0, 12)
+        }
+      }
+    }
+    // Bell state: bond=2, chiL=1 for site 0
+    const bell = bellState()
+    checkLeftOrtho(bell, 0)
+    // GHZ n=5: bond grows to 2 at interior sites
+    const ghz = ghzState(5)
+    for (let q = 0; q < 4; q++) checkLeftOrtho(ghz, q)
+    // Entangled circuit with higher bond
+    let mps = mpsInit(4)
+    for (let q = 0; q < 4; q++) mps = mpsApply1(mps, q, H)
+    for (let q = 0; q < 3; q++) mps = mpsApply2(mps, q, q + 1, CNOT4, 8)
+    for (let q = 0; q < 3; q++) checkLeftOrtho(mps, q)
+  })
 })
 
 // ── Group 6: Non-adjacent gate correctness ────────────────────────────────────
@@ -998,6 +1056,32 @@ describe('sampling — statistical correctness', () => {
     const p1 = (freq.get('1') ?? 0) / (SHOTS * 2)
     expect(p0).toBeGreaterThan(0.45)
     expect(p1).toBeGreaterThan(0.45)
+  })
+
+  it('|01⟩ 2-qubit basis state: mpsSample always returns "01"', () => {
+    // Verifies that multi-qubit product states sample deterministically.
+    // Single-qubit |0⟩/|1⟩ are already covered; this tests q0=0, q1=1 together.
+    let mps = mpsInit(2)
+    mps = mpsApply1(mps, 1, X)  // q1=1, q0=0 → |01⟩ in qubit notation
+    const freq = sampleMPS(mps, 50, SEED)
+    expect(freq.size).toBe(1)
+    expect(freq.get('01')).toBe(50)  // q0-leftmost: q0='0', q1='1' → "01"
+  })
+
+  it('Bell state single-qubit marginals: each qubit is 50/50 independently', () => {
+    // In |Φ+⟩ = (|00⟩+|11⟩)/√2, both qubits are maximally mixed individually.
+    // Qubit 0 alone should be 50% |0⟩ and 50% |1⟩ regardless of qubit 1 outcome.
+    const mps = bellState()
+    const freq = sampleMPS(mps, SHOTS, SEED)
+    let q0zero = 0, q0one = 0, q1zero = 0, q1one = 0
+    for (const [k, v] of freq) {
+      if (k[0] === '0') q0zero += v; else q0one += v
+      if (k[1] === '0') q1zero += v; else q1one += v
+    }
+    expect(q0zero / SHOTS).toBeGreaterThan(0.45)
+    expect(q0zero / SHOTS).toBeLessThan(0.55)
+    expect(q1zero / SHOTS).toBeGreaterThan(0.45)
+    expect(q1zero / SHOTS).toBeLessThan(0.55)
   })
 })
 
