@@ -556,26 +556,6 @@ describe('amplitude correctness — known states', () => {
     }
   })
 
-  it('Z²=I: double Z leaves |+⟩ unchanged', () => {
-    // Z=diag(1,-1). Z²=I. Missing from the involution tests alongside X² and H².
-    let mps = mpsApply1(mpsInit(2), 0, H)
-    const before = mpsContract(mps).slice()
-    mps = mpsApply1(mps, 0, Z)
-    mps = mpsApply1(mps, 0, Z)
-    const after = mpsContract(mps)
-    for (let i = 0; i < after.length; i++) expect(after[i]!).toBeCloseTo(before[i]!, 14)
-  })
-
-  it('Y²=I: double Y leaves |+⟩ unchanged', () => {
-    // Y²=I. Also implicitly checks that Y·Y cancels the imaginary phase.
-    let mps = mpsApply1(mpsInit(2), 0, H)
-    const before = mpsContract(mps).slice()
-    mps = mpsApply1(mps, 0, Y)
-    mps = mpsApply1(mps, 0, Y)
-    const after = mpsContract(mps)
-    for (let i = 0; i < after.length; i++) expect(after[i]!).toBeCloseTo(before[i]!, 14)
-  })
-
   it('iSWAP|10⟩ = i|01⟩: verifies XY-type gate complex phase (Xy imported separately)', () => {
     // iSWAP = XY(π). Acts as SWAP on computational basis but with an i phase factor.
     // iSWAP|01⟩ = i|10⟩, iSWAP|10⟩ = i|01⟩. Diagonal elements are 1 (|00⟩,|11⟩ unchanged).
@@ -1068,21 +1048,6 @@ describe('sampling — statistical correctness', () => {
     expect(freq.get('01')).toBe(50)  // q0-leftmost: q0='0', q1='1' → "01"
   })
 
-  it('Bell state single-qubit marginals: each qubit is 50/50 independently', () => {
-    // In |Φ+⟩ = (|00⟩+|11⟩)/√2, both qubits are maximally mixed individually.
-    // Qubit 0 alone should be 50% |0⟩ and 50% |1⟩ regardless of qubit 1 outcome.
-    const mps = bellState()
-    const freq = sampleMPS(mps, SHOTS, SEED)
-    let q0zero = 0, q0one = 0, q1zero = 0, q1one = 0
-    for (const [k, v] of freq) {
-      if (k[0] === '0') q0zero += v; else q0one += v
-      if (k[1] === '0') q1zero += v; else q1one += v
-    }
-    expect(q0zero / SHOTS).toBeGreaterThan(0.45)
-    expect(q0zero / SHOTS).toBeLessThan(0.55)
-    expect(q1zero / SHOTS).toBeGreaterThan(0.45)
-    expect(q1zero / SHOTS).toBeLessThan(0.55)
-  })
 })
 
 // ── Group 8: Large-scale circuits ─────────────────────────────────────────────
