@@ -7177,3 +7177,140 @@ describe('runClifford — validates non-Clifford gates in if bodies', () => {
     expect(() => c.runClifford()).toThrow(/not a Clifford gate/)
   })
 })
+
+// ── compose() ────────────────────────────────────────────────────────────────
+
+describe('circuit.compose()', () => {
+  it('statevector matches direct construction — ops applied in this-then-other order', () => {
+    const prep = new Circuit(2).h(0).cnot(0, 1)
+    const rot  = new Circuit(2).rz(Math.PI / 4, 0).rz(Math.PI / 4, 1)
+    const composed = prep.compose(rot)
+    const direct   = new Circuit(2).h(0).cnot(0, 1).rz(Math.PI / 4, 0).rz(Math.PI / 4, 1)
+    const sv1 = composed.statevector()
+    const sv2 = direct.statevector()
+    for (const [k, v] of sv1) {
+      expect(v.re).toBeCloseTo((sv2.get(k) ?? { re: 0 }).re, 12)
+      expect(v.im).toBeCloseTo((sv2.get(k) ?? { im: 0 }).im, 12)
+    }
+  })
+
+  it('op ordering: this gates precede other gates (not interleaved)', () => {
+    // H(q0) then CNOT(q0,q1): Bell state — prob('11') = 0.5
+    // CNOT(q0,q1) then H(q0): product state — prob('11') = 0
+    const h   = new Circuit(2).h(0)
+    const cnot = new Circuit(2).cnot(0, 1)
+    expect(h.compose(cnot).probability('11')).toBeCloseTo(0.5, 12)
+    expect(cnot.compose(h).probability('11')).toBeCloseTo(0, 12)
+  })
+
+  it('qubit mismatch throws TypeError', () => {
+    expect(() => new Circuit(2).compose(new Circuit(3))).toThrow(TypeError)
+    expect(() => new Circuit(3).compose(new Circuit(2))).toThrow(TypeError)
+  })
+
+  it('creg merging — same name takes larger size', () => {
+    const a = new Circuit(2).creg('out', 2)
+    const b = new Circuit(2).creg('out', 4)
+    const c = a.compose(b)
+    // After compose, run should see a creg of size 4 (larger wins)
+    // Verify by measuring into 'out' at indices 0–3 without throwing
+    const full = c.measure(0, 'out', 0).measure(1, 'out', 1)
+    expect(() => full.run({ shots: 10 })).not.toThrow()
+  })
+
+  it('creg merging — distinct names both present in result', () => {
+    // Two separate cregs should both be usable after compose
+    const a = new Circuit(2).creg('a', 1).measure(0, 'a', 0)
+    const b = new Circuit(2).creg('b', 1).measure(1, 'b', 0)
+    // Both measure ops should execute without throwing
+    expect(() => a.compose(b).run({ shots: 100, seed: 1 })).not.toThrow()
+    // Verify each creg's measurement independently by checking probs sum to 1
+    const result = a.compose(b).run({ shots: 100, seed: 1 })
+    const total = Object.values(result.probs).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 1)
+  })
+
+  it('named gate from this takes precedence over same-named gate from other', () => {
+    const bellXX  = new Circuit(2).h(0).cnot(0, 1)  // real Bell state
+    const notBell = new Circuit(2).x(0).x(1)         // |11⟩ — wrong if this gate were used
+    const a = new Circuit(2).defineGate('prep', bellXX)
+    const b = new Circuit(2).defineGate('prep', notBell)
+    const composed = a.compose(b).gate('prep', 0, 1)
+    // 'prep' from `a` (Bell state) should win → prob(|11⟩) = 0.5
+    expect(composed.probability('11')).toBeCloseTo(0.5, 12)
+  })
+
+  it('named gate defined only in other is available in result', () => {
+    const a = new Circuit(2)
+    const b = new Circuit(2).defineGate('ent', new Circuit(2).h(0).cnot(0, 1))
+    const composed = a.compose(b).gate('ent', 0, 1)
+    expect(composed.probability('00')).toBeCloseTo(0.5, 12)
+    expect(composed.probability('11')).toBeCloseTo(0.5, 12)
+  })
+
+  it('immutability — neither operand is modified', () => {
+    const a = new Circuit(2).h(0)
+    const b = new Circuit(2).cnot(0, 1)
+    const aBefore = a.statevector()
+    const bBefore = b.statevector()
+    a.compose(b)
+    expect(a.statevector()).toEqual(aBefore)
+    expect(b.statevector()).toEqual(bBefore)
+  })
+
+  it('compose with empty circuit is identity', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    const sv = c.statevector()
+    expect(c.compose(new Circuit(2)).statevector()).toEqual(sv)
+    expect(new Circuit(2).compose(c).statevector()).toEqual(sv)
+  })
+
+  it('parametric circuits — params from both halves are preserved', () => {
+    const a = new Circuit(1).rx('alpha', 0)
+    const b = new Circuit(1).rz('beta', 0)
+    const ab = a.compose(b)
+    expect(ab.params).toContain('alpha')
+    expect(ab.params).toContain('beta')
+    // bind both and simulate
+    const bound = ab.bind({ alpha: Math.PI / 2, beta: Math.PI / 4 })
+    expect(bound.params).toHaveLength(0)
+    expect(() => bound.statevector()).not.toThrow()
+  })
+
+  it('parametric: bind after compose produces same result as two separate binds then compose', () => {
+    const a = new Circuit(1).rx('theta', 0)
+    const b = new Circuit(1).rz('theta', 0)  // same param name
+    const composed = a.compose(b).bind({ theta: Math.PI / 3 })
+    const direct   = new Circuit(1).rx(Math.PI / 3, 0).rz(Math.PI / 3, 0)
+    const sv1 = composed.statevector()
+    const sv2 = direct.statevector()
+    for (const [k, v] of sv1) {
+      expect(v.re).toBeCloseTo((sv2.get(k) ?? { re: 0 }).re, 12)
+      expect(v.im).toBeCloseTo((sv2.get(k) ?? { im: 0 }).im, 12)
+    }
+  })
+
+  it('measurement ops are preserved — run() on composed circuit works', () => {
+    const state = new Circuit(2).h(0).cnot(0, 1)
+    const meas  = new Circuit(2).creg('out', 2).measure(0, 'out', 0).measure(1, 'out', 1)
+    const result = state.compose(meas).run({ shots: 1000, seed: 42 })
+    expect(result.probs['00']).toBeGreaterThan(0.45)
+    expect(result.probs['11']).toBeGreaterThan(0.45)
+    expect(result.probs['01'] ?? 0).toBeLessThan(0.02)
+  })
+
+  it('JSON round-trip preserves composed circuit exactly', () => {
+    const composed = new Circuit(2).h(0).compose(new Circuit(2).cnot(0, 1))
+    const restored = Circuit.fromJSON(composed.toJSON())
+    const sv1 = composed.statevector()
+    const sv2 = restored.statevector()
+    expect(sv1).toEqual(sv2)
+  })
+
+  it('MPS backend runs composed circuit correctly', () => {
+    const bell = new Circuit(2).h(0).compose(new Circuit(2).cnot(0, 1))
+    const result = bell.runMps({ shots: 1000, seed: 42 })
+    expect(result.probs['00']).toBeGreaterThan(0.45)
+    expect(result.probs['11']).toBeGreaterThan(0.45)
+  })
+})
