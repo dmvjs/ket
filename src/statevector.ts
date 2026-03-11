@@ -210,6 +210,7 @@ export function applyCsrSwap(sv: StateVector, control: number, a: number, b: num
  * Apply a controlled single-qubit gate: if control = |1⟩, apply gate to target.
  */
 export function applyControlled(sv: StateVector, control: number, target: number, [[a,b],[c,d]]: Gate2x2): StateVector {
+  if (control === target) throw new TypeError(`control and target qubits must differ (got ${control})`)
   const next: StateVector = new Map()
   const cmask = 1n << BigInt(control)
   const tmask = 1n << BigInt(target)

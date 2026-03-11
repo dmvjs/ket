@@ -244,10 +244,12 @@ export function mpsSample(mps: MPS, rand: () => number): bigint {
 
     const prob0 = v[0]!.reduce((s, amp) => s + norm2(amp), 0)
     const prob1 = v[1]!.reduce((s, amp) => s + norm2(amp), 0)
-    const bit = rand() < prob0 / (prob0 + prob1) ? 0 : 1
+    const total = prob0 + prob1
+    const bit = total > 0 ? (rand() < prob0 / total ? 0 : 1) : 0
 
     if (bit === 1) result |= 1n << BigInt(q)
-    const inv = 1 / Math.sqrt(bit === 0 ? prob0 : prob1)
+    const chosen = bit === 0 ? prob0 : prob1
+    const inv = chosen > 0 ? 1 / Math.sqrt(chosen) : 0
     state = v[bit]!.map(amp => scale(inv, amp))
   }
 

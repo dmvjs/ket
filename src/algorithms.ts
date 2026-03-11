@@ -164,14 +164,14 @@ function pauliEvolution(c: Circuit, n: number, ops: string, theta: number): Circ
   if (active.length === 0) return c
   for (const [q, p] of active) {
     if (p === 'X') c = c.h(q)
-    else if (p === 'Y') c = c.rx(-Math.PI / 2, q)
+    else if (p === 'Y') c = c.rx(Math.PI / 2, q)
   }
   for (let i = 0; i < active.length - 1; i++) c = c.cnot(active[i]![0], active[i + 1]![0])
   c = c.rz(2 * theta, active[active.length - 1]![0])
   for (let i = active.length - 2; i >= 0; i--) c = c.cnot(active[i]![0], active[i + 1]![0])
   for (const [q, p] of active) {
     if (p === 'X') c = c.h(q)
-    else if (p === 'Y') c = c.rx(Math.PI / 2, q)
+    else if (p === 'Y') c = c.rx(-Math.PI / 2, q)
   }
   return c
 }
