@@ -374,7 +374,9 @@ function parseAngle(expr: string): number {
     }
     return v
   }
-  return parseExpr()
+  const result = parseExpr()
+  if (i !== s.length || !isFinite(result)) throw new TypeError(`Invalid angle expression: "${expr}"`)
+  return result
 }
 
 /**
@@ -1002,12 +1004,15 @@ export class Circuit {
       if (i < 0 || i >= this.qubits)
         throw new RangeError(`qubit index ${i} is out of range for a ${this.qubits}-qubit circuit`)
     }
+    const diff = (a: number, b: number) => {
+      if (a === b) throw new TypeError(`control and target qubits must differ (got ${a})`)
+    }
     switch (op.kind) {
       case 'single':     q(op.q); break
-      case 'cnot':       q(op.control); q(op.target); break
+      case 'cnot':       q(op.control); q(op.target); diff(op.control, op.target); break
       case 'swap':       q(op.a); q(op.b); break
       case 'two':        q(op.a); q(op.b); break
-      case 'controlled': q(op.control); q(op.target); break
+      case 'controlled': q(op.control); q(op.target); diff(op.control, op.target); break
       case 'toffoli':    q(op.c1); q(op.c2); q(op.target); break
       case 'cswap':      q(op.control); q(op.a); q(op.b); break
       case 'csrswap':    q(op.control); q(op.a); q(op.b); break
