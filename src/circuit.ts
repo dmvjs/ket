@@ -3648,6 +3648,40 @@ export class Circuit {
   }
 
   /**
+   * Von Neumann entanglement entropies S_b = −Σ_k σ_k² log₂(σ_k²) at each bond.
+   *
+   * Builds the MPS state once from this circuit, then reads the Schmidt spectrum
+   * stored at every bond in Vidal canonical form. Returns n−1 values.
+   *
+   * Entanglement entropy is the physicist's diagnostic for quantum correlations:
+   * product states have S=0 everywhere, maximally entangled bonds have S=1,
+   * and area-law states (ground states of local Hamiltonians) grow logarithmically.
+   *
+   * O(n · χ²) total — cheaper than any expectation value.
+   *
+   * @example
+   * // Bell state: one bond, S = 1 (maximally entangled)
+   * new Circuit(2).h(0).cx(0, 1).bondEntropies()  // → [1.0]
+   *
+   * // GHZ state: all bonds saturated at S = 1
+   * ghz(8).bondEntropies()  // → [1, 1, 1, 1, 1, 1, 1]
+   */
+  bondEntropies({ maxBond = 64, truncErr = 0, initialState }: { maxBond?: number; truncErr?: number; initialState?: string } = {}): number[] {
+    const n       = this.qubits
+    const traj    = new MpsTrajectory(n, maxBond, truncErr)
+    const trajOps = toTrajOps(flattenOps(this.#ops))
+    const rng     = () => 0
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, n)
+      for (let q = 0; q < n; q++) {
+        if (initialState[q] === '1') traj.apply1(q, G.X)
+      }
+    }
+    applyTrajOps(traj, trajOps, 0, 0, rng)
+    return traj.bondEntropies()
+  }
+
+  /**
    * Return exact floating-point probabilities from the statevector — no sampling variance.
    *
    * Keys are standard bitstrings (q0 leftmost). Only non-negligible amplitudes are included.

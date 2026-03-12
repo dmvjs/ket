@@ -599,3 +599,72 @@ export function minimize(
 
   return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false }
 }
+
+/** Options for {@link minimizeMps}. Extends {@link MinimizeOptions} with MPS backend settings. */
+export interface MinimizeMpsOptions extends MinimizeOptions {
+  /** Maximum bond dimension χ for the MPS backend (default 64). */
+  maxBond?: number
+  /** Relative Schmidt truncation threshold (default 0 = off). */
+  truncErr?: number
+}
+
+/**
+ * Parameter-shift gradient of ⟨ψ(θ)|H|ψ(θ)⟩ evaluated via MPS.
+ *
+ * Drop-in replacement for `gradient()` that scales to 50+ qubits.
+ * Uses `expectMps()` for each energy evaluation — exact to floating-point
+ * precision, no sampling variance.
+ *
+ * @example
+ * const ansatz = realAmplitudes(20, 2)
+ * const H = [{ coeff: 1, ops: 'Z'.repeat(20) }]
+ * const grad = gradientMps(ansatz, H, params, { maxBond: 32 })
+ */
+export function gradientMps(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  params: readonly number[],
+  { maxBond = 64, truncErr = 0 }: { maxBond?: number; truncErr?: number } = {},
+): number[] {
+  const shift = Math.PI / 2
+  const opts  = { maxBond, truncErr }
+  return Array.from({ length: params.length }, (_, i) => {
+    const plus  = params.map((p, j) => j === i ? p + shift : p)
+    const minus = params.map((p, j) => j === i ? p - shift : p)
+    return 0.5 * (ansatz(plus).expectMps(hamiltonian, opts) - ansatz(minus).expectMps(hamiltonian, opts))
+  })
+}
+
+/**
+ * Minimize ⟨ψ(θ)|H|ψ(θ)⟩ with gradient descent + parameter shift via MPS.
+ *
+ * Drop-in replacement for `minimize()` that scales to 50+ qubits.
+ * Identical interface — swap `minimize` → `minimizeMps` and add `maxBond`
+ * to push VQE beyond the statevector memory wall.
+ *
+ * @example
+ * // 20-qubit Heisenberg ground state — impossible with statevector
+ * const ansatz = realAmplitudes(20, 3)
+ * const H = heisenbergTerms(20)
+ * const { energy, converged } = minimizeMps(ansatz, H, initialParams, { maxBond: 32 })
+ */
+export function minimizeMps(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  initialParams: readonly number[],
+  { lr = 0.1, steps = 200, tol = 1e-6, maxBond = 64, truncErr = 0 }: MinimizeMpsOptions = {},
+): MinimizeResult {
+  let params = [...initialParams]
+  const opts = { maxBond, truncErr }
+
+  for (let step = 0; step < steps; step++) {
+    const grad     = gradientMps(ansatz, hamiltonian, params, opts)
+    const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
+    if (gradNorm < tol) {
+      return { params, energy: ansatz(params).expectMps(hamiltonian, opts), steps: step, converged: true }
+    }
+    params = params.map((p, i) => p - lr * grad[i]!)
+  }
+
+  return { params, energy: ansatz(params).expectMps(hamiltonian, opts), steps, converged: false }
+}

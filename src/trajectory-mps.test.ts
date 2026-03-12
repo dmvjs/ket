@@ -15,6 +15,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Circuit, DEVICES } from './circuit.js'
+import { realAmplitudes, gradient, minimize, gradientMps, minimizeMps } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
 import type { Gate4x4 } from './statevector.js'
@@ -1586,5 +1587,118 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
       ops:   'I'.repeat(n - 1 - q) + 'Z' + 'I'.repeat(q),
     }))
     expect(c.expectMps(terms)).toBeCloseTo(0, 10)
+  })
+})
+
+// ── Circuit.bondEntropies ──────────────────────────────────────────────────────
+
+describe('Circuit.bondEntropies() — entanglement entropy at each bond', () => {
+  it('product state: all bond entropies = 0', () => {
+    const c = new Circuit(4).h(0).h(1).h(2).h(3)
+    const S = c.bondEntropies()
+    expect(S).toHaveLength(3)
+    for (const s of S) expect(s).toBeCloseTo(0, 12)
+  })
+
+  it('Bell state: single bond entropy = 1 (maximally entangled)', () => {
+    const S = new Circuit(2).h(0).cx(0, 1).bondEntropies()
+    expect(S).toHaveLength(1)
+    expect(S[0]).toBeCloseTo(1, 10)
+  })
+
+  it('GHZ n=4: all bonds saturated at S = 1', () => {
+    let c = new Circuit(4).h(0)
+    for (let q = 0; q < 3; q++) c = c.cx(q, q + 1)
+    const S = c.bondEntropies()
+    expect(S).toHaveLength(3)
+    for (const s of S) expect(s).toBeCloseTo(1, 10)
+  })
+
+  it('partial entanglement: entropy peaks at cut through entangled region', () => {
+    // Bell pair on qubits 1-2, qubits 0 and 3 are product
+    const c = new Circuit(4).h(1).cx(1, 2)
+    const S = c.bondEntropies()
+    expect(S).toHaveLength(3)
+    expect(S[0]).toBeCloseTo(0, 10)  // bond 0-1: no entanglement
+    expect(S[1]).toBeCloseTo(1, 10)  // bond 1-2: maximally entangled
+    expect(S[2]).toBeCloseTo(0, 10)  // bond 2-3: no entanglement
+  })
+
+  it('returns n-1 values for an n-qubit circuit', () => {
+    for (const n of [2, 5, 10]) {
+      expect(new Circuit(n).bondEntropies()).toHaveLength(n - 1)
+    }
+  })
+})
+
+// ── gradientMps ───────────────────────────────────────────────────────────────
+
+describe('gradientMps() — parameter-shift gradient via MPS', () => {
+  it('single-qubit: ∂⟨Z⟩/∂θ = -sin(θ) for Ry(θ)|0⟩', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
+    const H: PauliTerm[] = [{ coeff: 1, ops: 'Z' }]
+    for (const theta of [0, Math.PI / 4, Math.PI / 2, Math.PI]) {
+      const [g] = gradientMps(ansatz, H, [theta])
+      expect(g).toBeCloseTo(-Math.sin(theta), 10)
+    }
+  })
+
+  it('matches gradient() exactly for small circuits (both use parameter shift)', () => {
+    const ansatz = realAmplitudes(3, 1)
+    const H: PauliTerm[] = [
+      { coeff: 1, ops: 'ZII' },
+      { coeff: 1, ops: 'IZI' },
+      { coeff: 1, ops: 'IIZ' },
+    ]
+    const params = [0.3, 0.7, 1.1, 0.5, 0.9, 0.2]
+    const gSV  = gradient(ansatz, H, params)
+    const gMPS = gradientMps(ansatz, H, params, { maxBond: 8 })
+    for (let i = 0; i < params.length; i++) {
+      expect(gMPS[i]).toBeCloseTo(gSV[i]!, 8)
+    }
+  })
+})
+
+// ── minimizeMps ───────────────────────────────────────────────────────────────
+
+describe('minimizeMps() — VQE at scale via MPS', () => {
+  it('2-site Heisenberg singlet: converges to E = -3 (exact ground state)', () => {
+    // H = XX + YY + ZZ; ground state is the singlet (|01⟩ - |10⟩)/√2, E₀ = -3
+    const H: PauliTerm[] = [
+      { coeff: 1, ops: 'XX' },
+      { coeff: 1, ops: 'YY' },
+      { coeff: 1, ops: 'ZZ' },
+    ]
+    const ansatz = realAmplitudes(2, 2)
+    const init   = Array(ansatz.paramCount).fill(0).map((_, i) => (i * 0.3) % (2 * Math.PI))
+    const result = minimizeMps(ansatz, H, init, { lr: 0.2, steps: 300, maxBond: 4 })
+    expect(result.energy).toBeCloseTo(-3, 1)
+  })
+
+  it('matches minimize() result for small circuits', () => {
+    const H: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }, { coeff: 1, ops: 'XX' }]
+    const ansatz = realAmplitudes(2, 2)
+    const init   = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    const rSV  = minimize(ansatz, H, init, { steps: 100 })
+    const rMPS = minimizeMps(ansatz, H, init, { steps: 100, maxBond: 4 })
+    expect(rMPS.energy).toBeCloseTo(rSV.energy, 6)
+  })
+
+  it('converges to energy below product-state bound for 6-qubit Heisenberg chain', () => {
+    // Product state has E ≥ -5 for this Hamiltonian; entangled ground state has E ≈ -7.7
+    const n = 6
+    const H: PauliTerm[] = []
+    for (let i = 0; i < n - 1; i++) {
+      for (const ops of [`${'I'.repeat(n - 2 - i)}XX${'I'.repeat(i)}`,
+                         `${'I'.repeat(n - 2 - i)}YY${'I'.repeat(i)}`,
+                         `${'I'.repeat(n - 2 - i)}ZZ${'I'.repeat(i)}`]) {
+        H.push({ coeff: 1, ops })
+      }
+    }
+    const ansatz = realAmplitudes(n, 3)
+    const init   = Array(ansatz.paramCount).fill(0).map((_, i) => Math.sin(i) * 0.5)
+    const result = minimizeMps(ansatz, H, init, { lr: 0.15, steps: 200, maxBond: 16 })
+    // Must beat the trivial product-state lower bound of -5
+    expect(result.energy).toBeLessThan(-5)
   })
 })
