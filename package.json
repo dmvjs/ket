@@ -37,7 +37,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --outfile=dist/ket.min.js",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js",
     "test": "vitest run",
     "dev": "vitest"
   },
@@ -45,6 +45,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@types/node": "^25.4.0",
     "esbuild": "^0.21.5",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

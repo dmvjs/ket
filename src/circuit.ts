@@ -8,7 +8,9 @@
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
-import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
+import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp } from './mps.js'
+import { wt } from './worker-shim.js'
+import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
 import { CliffordSim } from './clifford.js'
 
@@ -740,6 +742,71 @@ function opLabel(op: Op, q: number): string {
   }
 }
 
+// ─── MPS worker pool ──────────────────────────────────────────────────────────
+
+/**
+ * Persistent worker pool — threads stay alive between runMps calls.
+ *
+ * Thread spawn takes ~20ms on Linux/macOS, which dominates for any circuit
+ * under ~500ms total. Keeping workers alive amortises that cost to near-zero.
+ * Rebuilt only when pool size or worker URL changes.
+ */
+// Worker instances are typed as `any` — the WorkerJob protocol enforced at postMessage call sites.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _pool: { ws: any[]; size: number; url: string } | null = null
+
+function acquirePool(size: number, workerUrl: URL, WorkerClass: new (u: URL) => unknown): unknown[] {
+  const href = workerUrl.href
+  if (_pool !== null && _pool.size === size && _pool.url === href) return _pool.ws
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _pool?.ws.forEach((w: any) => void w.terminate())
+  _pool = { ws: Array.from({ length: size }, () => new WorkerClass(workerUrl)), size, url: href }
+  return _pool.ws
+}
+
+// ─── MPS trajectory helpers ───────────────────────────────────────────────────
+
+/**
+ * Convert a flat circuit op list into serializable TrajOps for trajectory execution.
+ * Normalizes `controlled` → `two` and `unitary` → `single`/`two` so the hot-path
+ * dispatch in workers and the single-threaded loop stays a flat switch.
+ * Throws for ops that are unsupported in MPS mode.
+ */
+function toTrajOps(flatOps: readonly FlatOp[]): TrajOp[] {
+  const out: TrajOp[] = []
+  for (const op of flatOps) {
+    switch (op.kind) {
+      case 'single':     out.push({ kind: 'single', q: op.q, gate: op.gate }); break
+      case 'cnot':       out.push({ kind: 'cnot', control: op.control, target: op.target }); break
+      case 'swap':       out.push({ kind: 'swap', a: op.a, b: op.b }); break
+      case 'two':        out.push({ kind: 'two', a: op.a, b: op.b, gate: op.gate }); break
+      case 'controlled': out.push({ kind: 'two', a: op.control, b: op.target, gate: controlledGate(op.gate) }); break
+      case 'unitary': {
+        const n = op.qubits.length
+        if      (n === 1) out.push({ kind: 'single', q: op.qubits[0]!, gate: op.matrix as Gate2x2 })
+        else if (n === 2) out.push({ kind: 'two', a: op.qubits[0]!, b: op.qubits[1]!, gate: op.matrix as Gate4x4 })
+        else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
+        break
+      }
+      case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
+      case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+      case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
+      case 'measure': case 'reset': case 'if':
+        throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+      case 'barrier': out.push({ kind: 'barrier' }); break
+      default: { const _exhaustive: never = op; break }
+    }
+  }
+  return out
+}
+
+/** Divide `shots` as evenly as possible into `n` slices. */
+function distributeShots(shots: number, n: number): number[] {
+  const base = Math.floor(shots / n)
+  const rem  = shots % n
+  return Array.from({ length: n }, (_, i) => base + (i < rem ? 1 : 0))
+}
+
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
 /** Seeded xorshift32 PRNG — same algorithm used by qsim for reproducibility. */
@@ -765,8 +832,42 @@ export interface MpsRunOptions {
   seed?: number
   /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
   maxBond?: number
+  /**
+   * Relative Schmidt truncation threshold (default 0 = off).
+   *
+   * Singular values σ_k < truncErr · σ_max are discarded in addition to the hard
+   * `maxBond` cap. Useful for structured circuits (VQE, chemistry, QFT) where the
+   * Schmidt spectrum decays quickly — a small `truncErr` (e.g. 1e-8) can reduce
+   * effective bond dimension dramatically with negligible error.
+   */
+  truncErr?: number
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
+  /**
+   * Depolarizing noise parameters, or a named device profile string (e.g. `'aria-1'`, `'ibm_sherbrooke'`).
+   *
+   * Enables the **quantum trajectory method**: each shot becomes an independent stochastic
+   * trajectory — the circuit is re-executed once per shot with random Pauli errors injected
+   * after each gate. Averaging over trajectories converges to the noisy mixed-state
+   * distribution at rate 1/√shots.
+   *
+   * This is the standard technique for simulating NISQ hardware at large qubit counts.
+   * Noise limits entanglement growth, keeping bond dimension χ tractable even at 100+ qubits.
+   */
+  noise?: string | NoiseParams
+  /**
+   * Number of parallel worker threads for the noisy trajectory path (default 0 = single-threaded).
+   *
+   * Workers run in true OS threads (Node.js `worker_threads`), giving an N× wall-time speedup
+   * for the embarrassingly parallel trajectory loop. Each worker handles `shots / workers`
+   * independent trajectories with a unique PRNG seed derived from the master seed.
+   *
+   * Only active when `noise` is set — the clean path builds the MPS once and samples are cheap.
+   * Silently falls back to single-threaded in browsers or environments without `worker_threads`,
+   * and also when running directly from `.ts` source (e.g. `tsx`, `ts-node`). Build the library
+   * first (`npm run build`) to enable the parallel path.
+   */
+  workers?: number
 }
 
 /**
@@ -782,15 +883,25 @@ export class Distribution {
   readonly histogram: Readonly<Record<string, number>>
   /** Classical register results: `cregs[name][bit]` = fraction of shots where that bit was 1. */
   readonly cregs: Readonly<Record<string, readonly number[]>>
+  /**
+   * `true` if the MPS bond dimension hit the `maxBond` cap during simulation and one or more
+   * significant singular values were discarded. Results are approximate in this case.
+   *
+   * Always `false` for `run()` and `runClifford()`.
+   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   */
+  readonly truncated: boolean
 
   constructor(
     qubits: number,
     shots: number,
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
+    truncated = false,
   ) {
-    this.qubits = qubits
-    this.shots  = shots
+    this.qubits    = qubits
+    this.shots     = shots
+    this.truncated = truncated
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -3377,56 +3488,207 @@ export class Circuit {
    * Memory: O(n · χ² · 2) vs O(2ⁿ) for full statevector.
    * Handles 50+ qubit circuits that would be intractable with the statevector backend.
    *
-   * Limitations: no noise, no mid-circuit measure/reset/if; Toffoli and CSWAP
+   * Limitations: no mid-circuit measure/reset/if; Toffoli and CSWAP
    * must be decomposed into single- and two-qubit gates first.
+   *
+   * With `noise`: switches to **quantum trajectory mode** — one full circuit execution per shot,
+   * with random Pauli errors injected after each gate. Noise limits entanglement growth so bond
+   * dimension stays tractable even at 100+ qubits. Simulates realistic NISQ hardware accurately.
    *
    * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
    */
-  runMps({ shots = 1024, seed, maxBond = 64, initialState }: MpsRunOptions = {}): Distribution {
-    const rng = makePrng(seed)
-    let state = mpsInit(this.qubits)
-    if (initialState !== undefined) {
-      svFromBitstring(initialState, this.qubits) // validate
-      const bits = initialState.split('') // bits[q] = bit for qubit q (q0 leftmost)
-      for (let q = 0; q < this.qubits; q++) {
-        if (bits[q] === '1') state = mpsApply1(state, q, G.X)
-      }
-    }
+  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
+    // Resolve noise: named device profile → NoiseParams, or use as-is
+    const noise: NoiseParams | undefined =
+      noiseRaw == null          ? undefined :
+      typeof noiseRaw === 'string' ? (() => {
+        const p = DEVICE_NOISE[noiseRaw]
+        if (!p) throw new TypeError(`Unknown device profile '${noiseRaw}'. Known: ${Object.keys(DEVICE_NOISE).join(', ')}`)
+        return p
+      })() : noiseRaw
 
-    for (const op of flattenOps(this.#ops)) {
-      switch (op.kind) {
-        case 'single':     state = mpsApply1(state, op.q, op.gate);                                        break
-        case 'cnot':       state = mpsApply2(state, op.control, op.target, CNOT4, maxBond);                break
-        case 'swap':       state = mpsApply2(state, op.a, op.b, SWAP4, maxBond);                           break
-        case 'two':        state = mpsApply2(state, op.a, op.b, op.gate, maxBond);                         break
-        case 'controlled': state = mpsApply2(state, op.control, op.target, controlledGate(op.gate), maxBond); break
-        case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
-        case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
-        case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
-        case 'unitary': {
-          const n = op.qubits.length
-          if (n === 1)      state = mpsApply1(state, op.qubits[0]!, op.matrix as Gate2x2)
-          else if (n === 2) state = mpsApply2(state, op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4, maxBond)
-          else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
-          break
+    const rng     = makePrng(seed)
+    const trajOps = toTrajOps(flattenOps(this.#ops))
+    const counts  = new Map<bigint, number>()
+
+    const traj = new MpsTrajectory(this.qubits, maxBond, truncErr)
+
+    if (!noise) {
+      // Clean path: build state once, sample shots times from the same MPS.
+      if (initialState !== undefined) {
+        svFromBitstring(initialState, this.qubits)
+        for (let q = 0; q < this.qubits; q++) {
+          if (initialState[q] === '1') traj.apply1(q, G.X)
         }
-        case 'measure': case 'reset': case 'if':
-          throw new TypeError(`'${op.kind}' not supported in MPS mode`)
-        case 'barrier': break
-        default: { const _exhaustive: never = op; break }
       }
-    }
+      applyTrajOps(traj, trajOps, 0, 0, rng)
+      for (let i = 0; i < shots; i++) {
+        const idx = traj.sample(rng)
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      }
+    } else {
+      // Noisy path: quantum trajectory method — one fresh circuit execution per shot.
+      const p1    = noise.p1    ?? 0
+      const p2    = noise.p2    ?? 0
+      const pMeas = noise.pMeas ?? 0
+      if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
 
-    const counts = new Map<bigint, number>()
-    for (let i = 0; i < shots; i++) {
-      const idx = mpsSample(state, rng)
-      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      // Parallel path: distribute shots across worker threads (Node.js ≥22 only).
+      // Only active when running from the built bundle and wt is available.
+      // MessageChannel gives a MessagePort pair for receiveMessageOnPort (synchronous recv).
+      const wtLocal = wt
+      const isBuilt = !import.meta.url.endsWith('.ts')
+      if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
+        console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
+      }
+      if (numWorkers > 1 && isBuilt && wtLocal !== null) {
+        const workerUrl = new URL('./mps.worker.js', import.meta.url)
+        const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
+        const slices    = distributeShots(shots, numWorkers)
+        const flags     = slices.map(() => new Int32Array(new SharedArrayBuffer(4)))
+
+        // Persistent pool: workers stay alive between calls — no spawn overhead.
+        // Each job gets a fresh MessageChannel so receiveMessageOnPort(port1)
+        // can synchronously dequeue this call's result after Atomics.wait wakes.
+        const ws       = acquirePool(numWorkers, workerUrl, wtLocal.Worker)
+        const channels = slices.map(() => new MessageChannel())
+
+        slices.forEach((sliceShots, i) => {
+          const job: WorkerJob = {
+            ops: trajOps, n: this.qubits, maxBond, truncErr, p1, p2, pMeas,
+            shots: sliceShots,
+            seed:  ((baseSeed * 0x9e3779b9 + i * 0x6c62272e) >>> 0) || 1,
+            initialState,
+            flag:  flags[i]!,
+            port:  channels[i]!.port2,
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ;(ws[i] as any).postMessage(job, [channels[i]!.port2])
+        })
+
+        for (let i = 0; i < ws.length; i++) {
+          Atomics.wait(flags[i]!, 0, 0)
+          const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
+          for (const [k, v] of message.counts as [bigint, number][]) {
+            counts.set(k, (counts.get(k) ?? 0) + v)
+          }
+        }
+      } else {
+        // Single-threaded trajectory loop (default, dev mode, or workers disabled).
+        for (let i = 0; i < shots; i++) {
+          traj.reset()
+          if (initialState !== undefined) {
+            for (let q = 0; q < this.qubits; q++) {
+              if (initialState[q] === '1') traj.apply1(q, G.X)
+            }
+          }
+          applyTrajOps(traj, trajOps, p1, p2, rng)
+          let idx = traj.sample(rng)
+          if (pMeas) {
+            for (let q = 0; q < this.qubits; q++) {
+              if (rng() < pMeas) idx ^= (1n << BigInt(q))
+            }
+          }
+          counts.set(idx, (counts.get(idx) ?? 0) + 1)
+        }
+      }
     }
 
     const cregCounts = new Map<string, number[]>(
       Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated)
+  }
+
+  /**
+   * Compute ⟨ψ|H|ψ⟩ for a Pauli-string Hamiltonian H = Σᵢ termᵢ.coeff · termᵢ.ops.
+   *
+   * Drop-in replacement for `vqe()` that scales to 50+ qubits via MPS.
+   * Builds the MPS state once, then sweeps each term via transfer matrix —
+   * exact to floating-point precision, O(|terms| · n · χ³).
+   *
+   * Uses the same `PauliTerm` convention as `vqe()`:
+   * `ops[0]` acts on qubit n-1 (MSB); `ops[n-1]` acts on qubit 0 (LSB).
+   * **Qubit 0 is the rightmost character** — `'ZZII'` means Z on qubits 3 and 2, identity on 1 and 0.
+   *
+   * @example
+   * // Heisenberg ZZ + XX chain on 4 qubits — same terms work with vqe() too
+   * const { energy } = circuit.expectMps([
+   *   { coeff: -0.5, ops: 'ZZII' },  // ZZ on qubits 3,2
+   *   { coeff: -0.5, ops: 'IZZI' },  // ZZ on qubits 2,1
+   *   { coeff: -0.5, ops: 'XXII' },  // XX on qubits 3,2
+   * ])
+   */
+  expectMps(
+    terms:    readonly { coeff: number; ops: string }[],
+    { maxBond = 64, truncErr = 0, initialState }: { maxBond?: number; truncErr?: number; initialState?: string } = {},
+  ): { energy: number; truncated: boolean } {
+    if (terms.length === 0) return { energy: 0, truncated: false }
+    const n       = this.qubits
+    const traj    = new MpsTrajectory(n, maxBond, truncErr)
+    const trajOps = toTrajOps(flattenOps(this.#ops))
+    const rng     = () => 0  // dummy — no noise on clean path
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, n)  // validate length/charset
+      for (let q = 0; q < n; q++) {
+        if (initialState[q] === '1') traj.apply1(q, G.X)
+      }
+    }
+    applyTrajOps(traj, trajOps, 0, 0, rng)
+    let energy = 0
+    for (const { coeff, ops } of terms) {
+      if (coeff === 0) continue
+      if (ops.length !== n)
+        throw new TypeError(`PauliTerm ops length ${ops.length} must equal circuit qubits (${n})`)
+      // Convert string ops to gate array: ops[0] acts on qubit n-1 (same as vqe convention)
+      const upper = ops.toUpperCase()
+      if (!/^[IXYZ]+$/.test(upper))
+        throw new TypeError(`PauliTerm ops '${ops}' contains characters outside {I, X, Y, Z}`)
+      const gateOps: (Gate2x2 | null)[] = Array.from({ length: n }, (_, q) => {
+        switch (upper[n - 1 - q]) {
+          case 'X': return G.X
+          case 'Y': return G.Y
+          case 'Z': return G.Z
+          default:  return null
+        }
+      })
+      energy += coeff * traj.expectation(gateOps).re
+    }
+    return { energy, truncated: traj.wasTruncated }
+  }
+
+  /**
+   * Von Neumann entanglement entropies S_b = −Σ_k σ_k² log₂(σ_k²) at each bond.
+   *
+   * Builds the MPS state once from this circuit, then reads the Schmidt spectrum
+   * stored at every bond in Vidal canonical form. Returns n−1 values.
+   *
+   * Entanglement entropy is the physicist's diagnostic for quantum correlations:
+   * product states have S=0 everywhere, maximally entangled bonds have S=1,
+   * and area-law states (ground states of local Hamiltonians) grow logarithmically.
+   *
+   * O(n · χ²) total — cheaper than any expectation value.
+   *
+   * @example
+   * // Bell state: one bond, S = 1 (maximally entangled)
+   * new Circuit(2).h(0).cnot(0, 1).bondEntropies()  // → [1.0]
+   *
+   * // GHZ state: all bonds saturated at S = 1
+   * ghz(8).bondEntropies()  // → [1, 1, 1, 1, 1, 1, 1]
+   */
+  bondEntropies({ maxBond = 64, truncErr = 0, initialState }: { maxBond?: number; truncErr?: number; initialState?: string } = {}): number[] {
+    const n       = this.qubits
+    const traj    = new MpsTrajectory(n, maxBond, truncErr)
+    const trajOps = toTrajOps(flattenOps(this.#ops))
+    const rng     = () => 0
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, n)
+      for (let q = 0; q < n; q++) {
+        if (initialState[q] === '1') traj.apply1(q, G.X)
+      }
+    }
+    applyTrajOps(traj, trajOps, 0, 0, rng)
+    return traj.bondEntropies()
   }
 
   /**

@@ -556,7 +556,7 @@ export interface MinimizeOptions {
   tol?: number
 }
 
-/** Result returned by {@link minimize}. */
+/** Result returned by {@link minimize} and {@link minimizeMps}. */
 export interface MinimizeResult {
   /** Optimal parameters found. */
   params: number[]
@@ -566,6 +566,14 @@ export interface MinimizeResult {
   steps: number
   /** True if the gradient norm dropped below `tol` before exhausting `steps`. */
   converged: boolean
+  /**
+   * True if any MPS energy evaluation during the optimization hit the `maxBond` cap and
+   * discarded significant singular values. Results are approximate in this case.
+   *
+   * Always `false` for `minimize()` (exact statevector path).
+   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   */
+  truncated: boolean
 }
 
 /**
@@ -592,10 +600,88 @@ export function minimize(
     const grad     = gradient(ansatz, hamiltonian, params)
     const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
     if (gradNorm < tol) {
-      return { params, energy: vqe(ansatz(params), hamiltonian), steps: step, converged: true }
+      return { params, energy: vqe(ansatz(params), hamiltonian), steps: step, converged: true, truncated: false }
     }
     params = params.map((p, i) => p - lr * grad[i]!)
   }
 
-  return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false }
+  return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false, truncated: false }
+}
+
+/** Options for {@link minimizeMps}. Extends {@link MinimizeOptions} with MPS backend settings. */
+export interface MinimizeMpsOptions extends MinimizeOptions {
+  /** Maximum bond dimension χ for the MPS backend (default 64). */
+  maxBond?: number
+  /** Relative Schmidt truncation threshold (default 0 = off). */
+  truncErr?: number
+}
+
+/**
+ * Parameter-shift gradient of ⟨ψ(θ)|H|ψ(θ)⟩ evaluated via MPS.
+ *
+ * Drop-in replacement for `gradient()` that scales to 50+ qubits.
+ * Uses `expectMps()` for each energy evaluation — exact to floating-point
+ * precision, no sampling variance.
+ *
+ * @example
+ * const ansatz = realAmplitudes(20, 2)
+ * const H = [{ coeff: 1, ops: 'Z'.repeat(20) }]
+ * const grad = gradientMps(ansatz, H, params, { maxBond: 32 })
+ */
+export function gradientMps(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  params: readonly number[],
+  { maxBond = 64, truncErr = 0 }: { maxBond?: number; truncErr?: number } = {},
+): { gradient: number[]; truncated: boolean } {
+  const shift = Math.PI / 2
+  const opts  = { maxBond, truncErr }
+  let truncated = false
+  const gradient = Array.from({ length: params.length }, (_, i) => {
+    const plus  = params.map((p, j) => j === i ? p + shift : p)
+    const minus = params.map((p, j) => j === i ? p - shift : p)
+    const ep = ansatz(plus).expectMps(hamiltonian, opts)
+    const em = ansatz(minus).expectMps(hamiltonian, opts)
+    truncated = truncated || ep.truncated || em.truncated
+    return 0.5 * (ep.energy - em.energy)
+  })
+  return { gradient, truncated }
+}
+
+/**
+ * Minimize ⟨ψ(θ)|H|ψ(θ)⟩ with gradient descent + parameter shift via MPS.
+ *
+ * Drop-in replacement for `minimize()` that scales to 50+ qubits.
+ * Identical interface — swap `minimize` → `minimizeMps` and add `maxBond`
+ * to push VQE beyond the statevector memory wall.
+ *
+ * @example
+ * // 20-qubit Heisenberg ground state — impossible with statevector
+ * const ansatz = realAmplitudes(20, 3)
+ * const H = heisenbergTerms(20)
+ * const { energy, converged } = minimizeMps(ansatz, H, initialParams, { maxBond: 32 })
+ */
+export function minimizeMps(
+  ansatz: (params: readonly number[]) => Circuit,
+  hamiltonian: PauliTerm[],
+  initialParams: readonly number[],
+  { lr = 0.1, steps = 200, tol = 1e-6, maxBond = 64, truncErr = 0 }: MinimizeMpsOptions = {},
+): MinimizeResult {
+  let params = [...initialParams]
+  const opts = { maxBond, truncErr }
+  let truncated = false
+
+  for (let step = 0; step < steps; step++) {
+    const { gradient: grad, truncated: gradTrunc } = gradientMps(ansatz, hamiltonian, params, opts)
+    truncated = truncated || gradTrunc
+    const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
+    if (gradNorm < tol) {
+      const { energy, truncated: eTrunc } = ansatz(params).expectMps(hamiltonian, opts)
+      return { params, energy, steps: step, converged: true, truncated: truncated || eTrunc }
+    }
+    params = params.map((p, i) => p - lr * grad[i]!)
+  }
+
+  const { energy, truncated: eTrunc } = ansatz(params).expectMps(hamiltonian, opts)
+  return { params, energy, steps, converged: false, truncated: truncated || eTrunc }
 }
