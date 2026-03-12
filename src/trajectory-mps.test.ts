@@ -13,7 +13,7 @@
  * don't flake under ordinary sampling variance.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Circuit, DEVICES } from './circuit.js'
 import type { PauliTerm } from './algorithms.js'
 import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
@@ -1315,33 +1315,47 @@ describe('workers option', () => {
   const noise = { p1: 0.01, p2: 0.02 }
 
   it('workers > 1 is accepted and returns a Distribution', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
     const dist = c.runMps({ shots: 256, seed: 1, noise, workers: 4 })
+    warn.mockRestore()
     expect(dist.shots).toBe(256)
     expect(dist.qubits).toBe(4)
-    // GHZ-like: must have non-trivial distribution
     const total = Object.values(dist.probs).reduce((a, b) => a + b, 0)
     expect(Math.abs(total - 1)).toBeLessThan(1e-9)
   })
 
   it('workers=4 and workers=0 produce statistically equivalent distributions', () => {
     // Under fallback both use the same single-threaded path with same seed → identical.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let c = new Circuit(4).h(0)
     for (let q = 0; q < 3; q++) c = c.cx(q, q + 1)
     const d0 = c.runMps({ shots: 512, seed: 7, noise, workers: 0 })
     const d4 = c.runMps({ shots: 512, seed: 7, noise, workers: 4 })
+    warn.mockRestore()
     // In test/dev mode both are single-threaded with the same seed → identical counts.
     for (const key of Object.keys(d0.probs)) {
       expect(d4.probs[key] ?? 0).toBeCloseTo(d0.probs[key]!, 5)
     }
   })
 
+  it('warns when workers > 1 but bundle is not built', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    new Circuit(2).h(0).cx(0, 1).runMps({ shots: 64, seed: 1, noise, workers: 4 })
+    // In test/ts-source mode the worker path is unavailable — warn fires exactly once.
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]![0]).toMatch(/workers option ignored/)
+    warn.mockRestore()
+  })
+
   it('repeated calls with workers use the persistent pool without errors', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let c = new Circuit(3).h(0).cx(0, 1).cx(1, 2)
     for (let i = 0; i < 4; i++) {
       const dist = c.runMps({ shots: 128, seed: i, noise, workers: 4 })
       expect(dist.shots).toBe(128)
     }
+    warn.mockRestore()
   })
 })
 
