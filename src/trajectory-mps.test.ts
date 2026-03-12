@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { Circuit, DEVICES } from './circuit.js'
-import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4 } from './mps.js'
+import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
 import * as G from './gates.js'
 
 // ── MpsTrajectory unit tests ──────────────────────────────────────────────────
@@ -1085,6 +1085,129 @@ describe('bondEntropies()', () => {
 //   3. The persistent pool does not break repeated calls
 //
 // Actual parallel execution is an integration concern (requires the built bundle).
+
+// ── Non-adjacent apply2() — SWAP network ──────────────────────────────────────
+//
+// MpsTrajectory.apply2(a, b) with b > a+1 routes through a SWAP network:
+//   bring b adjacent to a via b-1 SWAPs, apply gate, reverse SWAPs.
+// These tests prove the SWAP chain is correct and the Vidal canonical form
+// is preserved through the sequence of adjacent SVD decompositions.
+
+describe('non-adjacent apply2() — SWAP network', () => {
+  // Helper: sum of squares of active Schmidt values at bond b.
+  // Must equal 1 for a normalised state in Vidal canonical form.
+  function lambdaNormSq(traj: MpsTrajectory, b: number): number {
+    const lambda = traj.bondLambda[b]!
+    const chi    = traj.chiR[b]!
+    let s2 = 0
+    for (let k = 0; k < chi; k++) s2 += lambda[k]! * lambda[k]!
+    return s2
+  }
+
+  it('CNOT(0,2) on |+00⟩: amplitudes match mpsApply2 reference (gap=1)', () => {
+    // Validates SWAP(1,2)·CNOT(0,1)·SWAP(1,2) index arithmetic.
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 2, CNOT4)  // non-adjacent: control=q0, target=q2
+
+    let ref = mpsApply1(mpsInit(3), 0, G.H)
+    ref = mpsApply2(ref, 0, 2, CNOT4, 8)
+
+    const trajAmps = mpsContract(trajToMps(traj))
+    const refAmps  = mpsContract(ref)
+    for (let i = 0; i < trajAmps.length; i++) {
+      expect(Math.abs(trajAmps[i]! - refAmps[i]!)).toBeLessThan(1e-12)
+    }
+  })
+
+  it('CNOT(0,2) on |+00⟩: Vidal canonical preserved — both bonds have Schmidt values [1/√2, 1/√2]', () => {
+    // After CNOT(q0,q2)|+00⟩ = (|000⟩+|101⟩)/√2, qubit q1 is unentangled from {q0,q2}
+    // but q0 and q2 are entangled via both bonds: bipartition [q0]|[q1,q2] and [q0,q1]|[q2]
+    // both have Schmidt rank 2 with values 1/√2. Verifies SWAP chain preserved canonical form.
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 2, CNOT4)
+
+    const INV_SQRT2 = 1 / Math.sqrt(2)
+    for (let b = 0; b < 2; b++) {
+      expect(lambdaNormSq(traj, b)).toBeCloseTo(1, 10)
+      expect(traj.bondLambda[b]![0]!).toBeCloseTo(INV_SQRT2, 10)
+      expect(traj.bondLambda[b]![1]!).toBeCloseTo(INV_SQRT2, 10)
+    }
+  })
+
+  it('CNOT(0,2) sampling: only |000⟩ and |101⟩ outcomes (correct entanglement topology)', () => {
+    // q0=0 → q2=0, q0=1 → q2=1; q1 always 0. Any other outcome would indicate
+    // a wrong SWAP direction or wrong qubit labelling in the SWAP network.
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 2, CNOT4)
+
+    const rng = makeDeterministicRng(99)
+    const seen = new Set<number>()
+    for (let i = 0; i < 500; i++) seen.add(Number(traj.sample(rng)))
+
+    expect(seen.has(0)).toBe(true)   // |000⟩ — q0=0
+    expect(seen.has(5)).toBe(true)   // |101⟩ — q0=1, q2=1 (LSB=q0: 1+4=5)
+    expect(seen.size).toBe(2)
+  })
+
+  it('CNOT(0,3) on n=4: amplitudes match reference (gap=2)', () => {
+    // Exercises a two-step SWAP chain: SWAP(2,3)·SWAP(1,2)·CNOT(0,1)·SWAP(1,2)·SWAP(2,3).
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 3, CNOT4)
+
+    let ref = mpsApply1(mpsInit(4), 0, G.H)
+    ref = mpsApply2(ref, 0, 3, CNOT4, 8)
+
+    const trajAmps = mpsContract(trajToMps(traj))
+    const refAmps  = mpsContract(ref)
+    for (let i = 0; i < trajAmps.length; i++) {
+      expect(Math.abs(trajAmps[i]! - refAmps[i]!)).toBeLessThan(1e-12)
+    }
+  })
+
+  it('SWAP(0,2) on n=3: moves qubit 0 state to qubit 2 (amplitude + sampling)', () => {
+    // |100⟩ (q0=1) → |001⟩ (q2=1). A non-adjacent SWAP is itself routed through
+    // three adjacent SWAPs; the net result must be a transposition of q0 and q2.
+    // mpsContract returns interleaved re/im: amplitude at basis index k lives at amps[k*2].
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.X)  // |100⟩ — q0=1
+    traj.apply2(0, 2, SWAP4)
+
+    const amps = mpsContract(trajToMps(traj))
+    expect(Math.abs(amps[4 * 2]! - 1)).toBeLessThan(1e-12)  // re of |001⟩ (q2=1) = 1
+    expect(Math.abs(amps[1 * 2]!)).toBeLessThan(1e-12)       // re of |100⟩ (q0=1) = 0
+
+    // Confirm via sampling: every shot must be |001⟩ = index 4.
+    const rng = makeDeterministicRng(77)
+    const seen = new Set<number>()
+    for (let i = 0; i < 100; i++) seen.add(Number(traj.sample(rng)))
+    expect([...seen]).toEqual([4])
+  })
+
+  it('compound non-adjacent circuit — n=4, H⊗4 then CNOT(0,2)+CNOT(1,3): amplitudes match reference', () => {
+    // Two interleaved non-adjacent CNOTs exercise overlapping SWAP chains; any
+    // canonical-form corruption after the first gate would corrupt the second.
+    const n = 4
+    const traj = new MpsTrajectory(n, 16)
+    for (let q = 0; q < n; q++) traj.apply1(q, G.H)
+    traj.apply2(0, 2, CNOT4)
+    traj.apply2(1, 3, CNOT4)
+
+    let ref = mpsInit(n)
+    for (let q = 0; q < n; q++) ref = mpsApply1(ref, q, G.H)
+    ref = mpsApply2(ref, 0, 2, CNOT4, 16)
+    ref = mpsApply2(ref, 1, 3, CNOT4, 16)
+
+    const trajAmps = mpsContract(trajToMps(traj))
+    const refAmps  = mpsContract(ref)
+    for (let i = 0; i < trajAmps.length; i++) {
+      expect(Math.abs(trajAmps[i]! - refAmps[i]!)).toBeLessThan(1e-12)
+    }
+  })
+})
 
 describe('workers option', () => {
   const noise = { p1: 0.01, p2: 0.02 }
