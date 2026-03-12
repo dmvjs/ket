@@ -225,8 +225,8 @@ function trajToMps(traj: MpsTrajectory) {
           for (let r = 0; r < chiR; r++) {
             const s = lambda[r]!
             const i = ((l * 2 + p) * chiR + r) * 2
-            data[i]     *= s
-            data[i + 1] *= s
+            data[i]     = data[i]!     * s
+            data[i + 1] = data[i + 1]! * s
           }
         }
       }
