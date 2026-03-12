@@ -8,7 +8,7 @@
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
-import { CNOT4, controlledGate, MpsTrajectory, SWAP4, dep1Traj, dep2Traj, applyTrajOps, type TrajOp } from './mps.js'
+import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp } from './mps.js'
 import { wt } from './worker-shim.js'
 import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
@@ -302,7 +302,6 @@ function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): S
   if (pb) sv = applySingle(sv, b, pb)
   return sv
 }
-
 
 // ─── IonQ JSON types ──────────────────────────────────────────────────────────
 
@@ -3539,6 +3538,7 @@ export class Circuit {
             flag:  flags[i]!,
             port:  channels[i]!.port2,
           }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ;(ws[i] as any).postMessage(job, [channels[i]!.port2])
         })
 
