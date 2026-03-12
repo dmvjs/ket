@@ -1702,3 +1702,24 @@ describe('minimizeMps() — VQE at scale via MPS', () => {
     expect(result.energy).toBeLessThan(-5)
   })
 })
+
+// ── Distribution.truncated ─────────────────────────────────────────────────────
+
+describe('Distribution.truncated — maxBond cap signal', () => {
+  it('is false for run() (statevector path)', () => {
+    const d = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3).run({ shots: 64, seed: 1 })
+    expect(d.truncated).toBe(false)
+  })
+
+  it('is false when bond dimension is sufficient (GHZ stays at χ=2)', () => {
+    const d = new Circuit(6).h(0).cx(0, 1).cx(1, 2).cx(2, 3).cx(3, 4).cx(4, 5)
+      .runMps({ shots: 64, seed: 1, maxBond: 64 })
+    expect(d.truncated).toBe(false)
+  })
+
+  it('is true when maxBond is too small for the entanglement', () => {
+    // Bell state has χ=2; capping at χ=1 must truncate the second Schmidt value (≈0.707)
+    const d = new Circuit(2).h(0).cx(0, 1).runMps({ shots: 64, seed: 1, maxBond: 1 })
+    expect(d.truncated).toBe(true)
+  })
+})

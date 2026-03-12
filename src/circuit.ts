@@ -883,15 +883,25 @@ export class Distribution {
   readonly histogram: Readonly<Record<string, number>>
   /** Classical register results: `cregs[name][bit]` = fraction of shots where that bit was 1. */
   readonly cregs: Readonly<Record<string, readonly number[]>>
+  /**
+   * `true` if the MPS bond dimension hit the `maxBond` cap during simulation and one or more
+   * significant singular values were discarded. Results are approximate in this case.
+   *
+   * Always `false` for `run()` and `runClifford()`.
+   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   */
+  readonly truncated: boolean
 
   constructor(
     qubits: number,
     shots: number,
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
+    truncated = false,
   ) {
-    this.qubits = qubits
-    this.shots  = shots
+    this.qubits    = qubits
+    this.shots     = shots
+    this.truncated = truncated
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -3587,7 +3597,7 @@ export class Circuit {
     const cregCounts = new Map<string, number[]>(
       Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated)
   }
 
   /**

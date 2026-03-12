@@ -437,6 +437,11 @@ export class MpsTrajectory {
   private readonly exNxtBuf: Float64Array
   private readonly exDiag:   Float64Array
 
+  /** Set to true by svdDecompose whenever the hard maxBond cap truncates a significant singular value. */
+  private wasTruncated_ = false
+  /** True if any SVD during this trajectory discarded a singular value above the truncation threshold due to the maxBond cap. */
+  get wasTruncated(): boolean { return this.wasTruncated_ }
+
   constructor(n: number, maxChi: number, truncErr = 0) {
     this.n        = n
     this.maxChi   = maxChi
@@ -777,6 +782,10 @@ export class MpsTrajectory {
     let bond = 0
     while (bond < cols && bond < maxChi && sigmaBuf[orderBuf[bond]!]! > cutoff) bond++
     if (bond === 0) bond = 1  // always keep at least one component
+    // Flag if the hard maxBond cap discarded a significant singular value.
+    if (bond === maxChi && bond < cols && sigmaBuf[orderBuf[bond]!]! > cutoff) {
+      this.wasTruncated_ = true
+    }
 
     // Build qBuf: U (rows × bond, row-major) — normalised left singular vectors.
     // aBuf[:,col_k] = σ_k · U[:,col_k] after Jacobi convergence; divide by σ_k to get U.
