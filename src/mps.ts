@@ -59,6 +59,23 @@ export function controlledGate([[a, b], [cc, d]]: Gate2x2): Gate4x4 {
   ]
 }
 
+/**
+ * Swap the two-qubit ordering of a 4×4 gate.
+ *
+ * If G acts on (a, b) with a as MSB (first qubit), swapQubits(G) acts on
+ * (b, a) with b as MSB — used by apply2() to normalise a > b calls.
+ *
+ * Implementation: permute rows and cols by [0, 2, 1, 3] (swap |01⟩↔|10⟩).
+ */
+function swapQubits([[a,b,c,d],[e,f,g,h],[i,j,k,l],[m,n,o,p]]: Gate4x4): Gate4x4 {
+  return [
+    [a, c, b, d],
+    [i, k, j, l],
+    [e, g, f, h],
+    [m, o, n, p],
+  ]
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /** Create a new zero-filled tensor. */
@@ -495,8 +512,16 @@ export class MpsTrajectory {
     }
   }
 
-  /** Apply a two-qubit gate in place. Non-adjacent pairs handled via SWAP network. */
+  /**
+   * Apply a two-qubit gate in place.
+   *
+   * `a` and `b` may be given in either order — if `a > b` the gate matrix is
+   * qubit-transposed so the physical operation is identical regardless of argument order.
+   * Non-adjacent pairs are handled via a SWAP network at O(|b-a|) adjacent applications.
+   */
   apply2(a: number, b: number, gate: Gate4x4): void {
+    if (a === b) throw new RangeError(`apply2: a and b must differ (got ${a})`)
+    if (a > b)   { this.apply2(b, a, swapQubits(gate)); return }
     if (b === a + 1) { this.apply2Adjacent(a, gate); return }
     for (let q = b - 1; q > a; q--) this.apply2Adjacent(q, SWAP4)
     this.apply2Adjacent(a, gate)

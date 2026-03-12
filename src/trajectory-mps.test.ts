@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, DEVICES, type PauliTerm } from './circuit.js'
 import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
+import type { Gate4x4 } from './statevector.js'
 import * as G from './gates.js'
 
 // ── MpsTrajectory unit tests ──────────────────────────────────────────────────
@@ -1206,6 +1207,88 @@ describe('non-adjacent apply2() — SWAP network', () => {
     for (let i = 0; i < trajAmps.length; i++) {
       expect(Math.abs(trajAmps[i]! - refAmps[i]!)).toBeLessThan(1e-12)
     }
+  })
+})
+
+// ── apply2 — reversed qubit order (a > b) ────────────────────────────────────
+
+describe('apply2() — reversed qubit order (a > b)', () => {
+  it('CNOT(1, 0): |10⟩ → |11⟩ (control=q1 flips target=q0)', () => {
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(1, G.X)             // |10⟩
+    traj.apply2(1, 0, CNOT4)        // reversed: control=1, target=0
+    const amps = mpsContract(trajToMps(traj))
+    // Expect |11⟩ = index 3 in little-endian (q0 LSB): bit0=1, bit1=1 → idx=3
+    expect(Math.abs(amps[6]! - 1)).toBeLessThan(1e-12)  // re of |11⟩
+    expect(Math.abs(amps[7]!)).toBeLessThan(1e-12)       // im of |11⟩
+  })
+
+  it('CNOT(1, 0) and CNOT(0, 1) are distinct operations', () => {
+    // CNOT(0,1): control=q0, target=q1 — on |10⟩: q0=1 triggers X on q1 → |11⟩
+    // CNOT(1,0): control=q1, target=q0 — on |10⟩: q1=0, no flip → |10⟩ unchanged
+    const trajFwd = new MpsTrajectory(2, 4)
+    trajFwd.apply1(0, G.X)
+    trajFwd.apply2(0, 1, CNOT4)     // control=0, target=1: |10⟩ → |11⟩
+
+    const trajRev = new MpsTrajectory(2, 4)
+    trajRev.apply1(0, G.X)
+    trajRev.apply2(1, 0, CNOT4)     // control=1, target=0: |10⟩ → |10⟩ (q1=0, no flip)
+
+    const fwdAmps = mpsContract(trajToMps(trajFwd))
+    const revAmps = mpsContract(trajToMps(trajRev))
+    // Forward: |11⟩ has amplitude 1 at index 6/7 (re/im)
+    expect(Math.abs(fwdAmps[6]! - 1)).toBeLessThan(1e-12)
+    // Reversed: |10⟩ unchanged — q0=1,q1=0 → state index 1 (q0=LSB) → contract[2]=re
+    expect(Math.abs(revAmps[2]! - 1)).toBeLessThan(1e-12)
+  })
+
+  it('apply2(a,b,G) === apply2(b,a,swappedG) — forward and reversed give identical state', () => {
+    // Both calls should produce the same physical operation.
+    // Use a non-symmetric gate (CZ) to detect any qubit-swap error.
+    const CZ4: Gate4x4 = [
+      [{ re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: -1, im: 0 }],
+    ]
+    // CZ is symmetric, so apply2(0,1,CZ) === apply2(1,0,CZ). Prepare |++⟩.
+    const trajFwd = new MpsTrajectory(2, 4)
+    trajFwd.apply1(0, G.H); trajFwd.apply1(1, G.H)
+    trajFwd.apply2(0, 1, CZ4)
+
+    const trajRev = new MpsTrajectory(2, 4)
+    trajRev.apply1(0, G.H); trajRev.apply1(1, G.H)
+    trajRev.apply2(1, 0, CZ4)  // reversed
+
+    const fwdAmps = mpsContract(trajToMps(trajFwd))
+    const revAmps = mpsContract(trajToMps(trajRev))
+    for (let i = 0; i < fwdAmps.length; i++) {
+      expect(Math.abs(fwdAmps[i]! - revAmps[i]!)).toBeLessThan(1e-12)
+    }
+  })
+
+  it('non-adjacent reversed: CNOT(2, 0) on n=3 matches statevector', () => {
+    // Non-adjacent reversed: a=2, b=0, so internally normalised to apply2(0, 2, swappedCNOT)
+    // swappedCNOT has control on MSB site (q2) and target on q0.
+    // Prepare |001⟩ (q2=1), then CNOT(2,0) should flip q0 → |101⟩.
+    const n = 3
+    const traj = new MpsTrajectory(n, 8)
+    traj.apply1(2, G.X)             // |001⟩ (q0 LSB: q2=1,q1=0,q0=0 = 0b100 = 4 in decimal)
+    traj.apply2(2, 0, CNOT4)        // control=q2 (=1), target=q0: flip q0 → |101⟩
+
+    // Reference via statevector
+    const c = new Circuit(n).x(2).cx(2, 0)
+    const refProbs = c.exactProbs()
+    const trajAmps = mpsContract(trajToMps(traj))
+    // |101⟩ in q0-leftmost = '101', probability = 1
+    expect(refProbs['101']).toBeCloseTo(1, 12)
+    // Traj: |101⟩ bit pattern q0=1,q1=0,q2=1 → little-endian index = 0b101 = 5 → re at 10, im at 11
+    expect(Math.abs(trajAmps[10]! - 1)).toBeLessThan(1e-12)
+  })
+
+  it('apply2(a, a, gate) throws RangeError', () => {
+    const traj = new MpsTrajectory(3, 4)
+    expect(() => traj.apply2(1, 1, CNOT4)).toThrow(RangeError)
   })
 })
 

@@ -864,7 +864,9 @@ export interface MpsRunOptions {
    * independent trajectories with a unique PRNG seed derived from the master seed.
    *
    * Only active when `noise` is set — the clean path builds the MPS once and samples are cheap.
-   * Silently falls back to single-threaded in browsers or environments without `worker_threads`.
+   * Silently falls back to single-threaded in browsers or environments without `worker_threads`,
+   * and also when running directly from `.ts` source (e.g. `tsx`, `ts-node`). Build the library
+   * first (`npm run build`) to enable the parallel path.
    */
   workers?: number
 }
