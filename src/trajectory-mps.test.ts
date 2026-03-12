@@ -1494,12 +1494,12 @@ describe('MpsTrajectory.expectation() — product observables', () => {
 describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
   it('single-qubit: ⟨Z⟩ = 1 for |0⟩, -1 for |1⟩', () => {
     const term: PauliTerm = { coeff: 1, ops: 'Z' }
-    expect(new Circuit(1).expectMps([term])).toBeCloseTo(1, 12)
-    expect(new Circuit(1).x(0).expectMps([term])).toBeCloseTo(-1, 12)
+    expect(new Circuit(1).expectMps([term]).energy).toBeCloseTo(1, 12)
+    expect(new Circuit(1).x(0).expectMps([term]).energy).toBeCloseTo(-1, 12)
   })
 
   it('empty terms array returns 0 without building MPS', () => {
-    expect(new Circuit(4).h(0).cx(0, 1).expectMps([])).toBe(0)
+    expect(new Circuit(4).h(0).cnot(0, 1).expectMps([]).energy).toBe(0)
   })
 
   it('coeff=0 terms are skipped', () => {
@@ -1507,36 +1507,35 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
       { coeff: 0, ops: 'IZ' },   // Z on q0, skipped
       { coeff: 1, ops: 'ZI' },   // Z on q1 → ⟨Z₁⟩ = 1 for |00⟩
     ]
-    expect(new Circuit(2).expectMps(terms)).toBeCloseTo(1, 12)
+    expect(new Circuit(2).expectMps(terms).energy).toBeCloseTo(1, 12)
   })
 
   it('Bell state: ⟨ZZ⟩ = 1, ⟨ZI⟩ = 0 via expectMps()', () => {
-    const c = new Circuit(2).h(0).cx(0, 1)
-    expect(c.expectMps([{ coeff: 1, ops: 'ZZ' }])).toBeCloseTo(1, 12)
-    expect(c.expectMps([{ coeff: 1, ops: 'IZ' }])).toBeCloseTo(0, 12)
+    const c = new Circuit(2).h(0).cnot(0, 1)
+    expect(c.expectMps([{ coeff: 1, ops: 'ZZ' }]).energy).toBeCloseTo(1, 12)
+    expect(c.expectMps([{ coeff: 1, ops: 'IZ' }]).energy).toBeCloseTo(0, 12)
   })
 
   it('Heisenberg ZZ chain: energy matches analytical E₀ for 2-site singlet', () => {
     // 2-site Heisenberg ZZ+XX+YY ground state |singlet⟩ = (|01⟩ - |10⟩)/√2
     // Prepared as: Ry(-π/2) on q0, then CNOT(0,1), then X on q1
-    // (standard singlet preparation)
     // Ground energy for H = ZZ + XX + YY on singlet = -3
-    const c = new Circuit(2).ry(-Math.PI / 2, 0).cx(0, 1).x(1)
+    const c = new Circuit(2).ry(-Math.PI / 2, 0).cnot(0, 1).x(1)
     const terms: PauliTerm[] = [
       { coeff: 1, ops: 'ZZ' },
       { coeff: 1, ops: 'XX' },
       { coeff: 1, ops: 'YY' },
     ]
-    expect(c.expectMps(terms)).toBeCloseTo(-3, 10)
+    expect(c.expectMps(terms).energy).toBeCloseTo(-3, 10)
   })
 
   it('sum over identity terms = number of terms (each contributes coeff·1)', () => {
-    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
+    const c = new Circuit(4).h(0).cnot(0, 1).cnot(1, 2).cnot(2, 3)
     const terms: PauliTerm[] = [
       { coeff: 2, ops: 'IIII' },
       { coeff: 3, ops: 'IIII' },
     ]
-    expect(c.expectMps(terms)).toBeCloseTo(5, 12)
+    expect(c.expectMps(terms).energy).toBeCloseTo(5, 12)
   })
 
   it('throws TypeError when ops.length ≠ qubits', () => {
@@ -1545,25 +1544,22 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
   })
 
   it('agrees with statevector expectation() for random Ry circuit n=6', () => {
-    // Build a random but deterministic circuit
     const angles = [0.3, 0.7, 1.1, 1.5, 0.9, 0.4]
     let c = new Circuit(6)
     for (let q = 0; q < 6; q++) c = c.ry(angles[q]!, q)
-    for (let q = 0; q < 5; q++) c = c.cx(q, q + 1)
+    for (let q = 0; q < 5; q++) c = c.cnot(q, q + 1)
     for (let q = 0; q < 6; q++) c = c.ry(angles[5 - q]!, q)
 
     // Compute ⟨Z₀ Z₃⟩ via expectMps and via statevector expectation()
     // ops 'IIZIIZ': ops[2]→q3=Z, ops[5]→q0=Z (vqe convention: ops[n-1-q]→qubit q)
-    const mpsEv = c.expectMps([{ coeff: 1, ops: 'IIZIIZ' }])
-    const svEv  = c.expectation('ZIIZII')
-
+    const { energy: mpsEv } = c.expectMps([{ coeff: 1, ops: 'IIZIIZ' }])
+    const svEv = c.expectation('ZIIZII')
     expect(mpsEv).toBeCloseTo(svEv, 10)
   })
 
   it('expectMps and expect1 agree for single-site observables on entangled state', () => {
-    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).ry(0.8, 3)
+    const c = new Circuit(4).h(0).cnot(0, 1).cnot(1, 2).ry(0.8, 3)
     const traj = new MpsTrajectory(4, 8)
-    // Replicate circuit manually on traj for comparison
     traj.apply1(0, G.H)
     traj.apply2(0, 1, CNOT4)
     traj.apply2(1, 2, CNOT4)
@@ -1572,8 +1568,8 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     for (let q = 0; q < 4; q++) {
       // Z at position n-1-q in string (vqe convention: ops[n-1-q] acts on qubit q)
       const term: PauliTerm = { coeff: 1, ops: 'I'.repeat(3 - q) + 'Z' + 'I'.repeat(q) }
-      const fromCircuit = c.expectMps([term])
-      const fromTraj    = traj.expect1(q, G.Z).re
+      const { energy: fromCircuit } = c.expectMps([term])
+      const fromTraj                = traj.expect1(q, G.Z).re
       expect(fromCircuit).toBeCloseTo(fromTraj, 10)
     }
   })
@@ -1581,12 +1577,27 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
   it('GHZ n=8: total Z magnetization Σ⟨Zq⟩ = 0 (equal superposition)', () => {
     const n = 8
     let c = new Circuit(n).h(0)
-    for (let q = 0; q < n - 1; q++) c = c.cx(q, q + 1)
+    for (let q = 0; q < n - 1; q++) c = c.cnot(q, q + 1)
     const terms: PauliTerm[] = Array.from({ length: n }, (_, q) => ({
       coeff: 1,
       ops:   'I'.repeat(n - 1 - q) + 'Z' + 'I'.repeat(q),
     }))
-    expect(c.expectMps(terms)).toBeCloseTo(0, 10)
+    expect(c.expectMps(terms).energy).toBeCloseTo(0, 10)
+  })
+
+  it('truncated is false when bond dimension is sufficient', () => {
+    // Bell state has χ=2; maxBond=64 is more than enough
+    const { truncated } = new Circuit(2).h(0).cnot(0, 1).expectMps([{ coeff: 1, ops: 'ZZ' }])
+    expect(truncated).toBe(false)
+  })
+
+  it('truncated is true when maxBond cap discards significant singular values', () => {
+    // Bell state requires χ=2; maxBond=1 forces truncation
+    const { truncated } = new Circuit(2).h(0).cnot(0, 1).expectMps(
+      [{ coeff: 1, ops: 'ZZ' }],
+      { maxBond: 1 },
+    )
+    expect(truncated).toBe(true)
   })
 })
 
@@ -1638,7 +1649,7 @@ describe('gradientMps() — parameter-shift gradient via MPS', () => {
     const ansatz = (p: readonly number[]) => new Circuit(1).ry(p[0]!, 0)
     const H: PauliTerm[] = [{ coeff: 1, ops: 'Z' }]
     for (const theta of [0, Math.PI / 4, Math.PI / 2, Math.PI]) {
-      const [g] = gradientMps(ansatz, H, [theta])
+      const { gradient: [g] } = gradientMps(ansatz, H, [theta])
       expect(g).toBeCloseTo(-Math.sin(theta), 10)
     }
   })
@@ -1651,11 +1662,24 @@ describe('gradientMps() — parameter-shift gradient via MPS', () => {
       { coeff: 1, ops: 'IIZ' },
     ]
     const params = [0.3, 0.7, 1.1, 0.5, 0.9, 0.2]
-    const gSV  = gradient(ansatz, H, params)
-    const gMPS = gradientMps(ansatz, H, params, { maxBond: 8 })
+    const gSV                    = gradient(ansatz, H, params)
+    const { gradient: gMPS }     = gradientMps(ansatz, H, params, { maxBond: 8 })
     for (let i = 0; i < params.length; i++) {
       expect(gMPS[i]).toBeCloseTo(gSV[i]!, 8)
     }
+  })
+
+  it('truncated is false when bond dimension is sufficient', () => {
+    const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).cnot(0, 1)
+    const { truncated } = gradientMps(ansatz, [{ coeff: 1, ops: 'ZZ' }], [0.5], { maxBond: 8 })
+    expect(truncated).toBe(false)
+  })
+
+  it('truncated is true when any parameter-shift evaluation is truncated', () => {
+    // Bell-like circuit always has χ=2; maxBond=1 forces truncation on every eval
+    const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).cnot(0, 1)
+    const { truncated } = gradientMps(ansatz, [{ coeff: 1, ops: 'ZZ' }], [0.5], { maxBond: 1 })
+    expect(truncated).toBe(true)
   })
 })
 
@@ -1682,6 +1706,18 @@ describe('minimizeMps() — VQE at scale via MPS', () => {
     const rSV  = minimize(ansatz, H, init, { steps: 100 })
     const rMPS = minimizeMps(ansatz, H, init, { steps: 100, maxBond: 4 })
     expect(rMPS.energy).toBeCloseTo(rSV.energy, 6)
+    // statevector path is never truncated
+    expect(rSV.truncated).toBe(false)
+    // 2-qubit circuit with maxBond=4 has ample bond dimension
+    expect(rMPS.truncated).toBe(false)
+  })
+
+  it('truncated is true when maxBond is too small for the optimization', () => {
+    // Bell-like ansatz always has χ=2; maxBond=1 forces truncation on every energy eval
+    const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).cnot(0, 1)
+    const H: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }]
+    const { truncated } = minimizeMps(ansatz, H, [0.5], { steps: 5, maxBond: 1 })
+    expect(truncated).toBe(true)
   })
 
   it('converges to energy below product-state bound for 6-qubit Heisenberg chain', () => {

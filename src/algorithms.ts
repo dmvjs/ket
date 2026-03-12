@@ -556,7 +556,7 @@ export interface MinimizeOptions {
   tol?: number
 }
 
-/** Result returned by {@link minimize}. */
+/** Result returned by {@link minimize} and {@link minimizeMps}. */
 export interface MinimizeResult {
   /** Optimal parameters found. */
   params: number[]
@@ -566,6 +566,14 @@ export interface MinimizeResult {
   steps: number
   /** True if the gradient norm dropped below `tol` before exhausting `steps`. */
   converged: boolean
+  /**
+   * True if any MPS energy evaluation during the optimization hit the `maxBond` cap and
+   * discarded significant singular values. Results are approximate in this case.
+   *
+   * Always `false` for `minimize()` (exact statevector path).
+   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   */
+  truncated: boolean
 }
 
 /**
@@ -592,12 +600,12 @@ export function minimize(
     const grad     = gradient(ansatz, hamiltonian, params)
     const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
     if (gradNorm < tol) {
-      return { params, energy: vqe(ansatz(params), hamiltonian), steps: step, converged: true }
+      return { params, energy: vqe(ansatz(params), hamiltonian), steps: step, converged: true, truncated: false }
     }
     params = params.map((p, i) => p - lr * grad[i]!)
   }
 
-  return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false }
+  return { params, energy: vqe(ansatz(params), hamiltonian), steps, converged: false, truncated: false }
 }
 
 /** Options for {@link minimizeMps}. Extends {@link MinimizeOptions} with MPS backend settings. */
@@ -625,14 +633,19 @@ export function gradientMps(
   hamiltonian: PauliTerm[],
   params: readonly number[],
   { maxBond = 64, truncErr = 0 }: { maxBond?: number; truncErr?: number } = {},
-): number[] {
+): { gradient: number[]; truncated: boolean } {
   const shift = Math.PI / 2
   const opts  = { maxBond, truncErr }
-  return Array.from({ length: params.length }, (_, i) => {
+  let truncated = false
+  const gradient = Array.from({ length: params.length }, (_, i) => {
     const plus  = params.map((p, j) => j === i ? p + shift : p)
     const minus = params.map((p, j) => j === i ? p - shift : p)
-    return 0.5 * (ansatz(plus).expectMps(hamiltonian, opts) - ansatz(minus).expectMps(hamiltonian, opts))
+    const ep = ansatz(plus).expectMps(hamiltonian, opts)
+    const em = ansatz(minus).expectMps(hamiltonian, opts)
+    truncated = truncated || ep.truncated || em.truncated
+    return 0.5 * (ep.energy - em.energy)
   })
+  return { gradient, truncated }
 }
 
 /**
@@ -656,15 +669,19 @@ export function minimizeMps(
 ): MinimizeResult {
   let params = [...initialParams]
   const opts = { maxBond, truncErr }
+  let truncated = false
 
   for (let step = 0; step < steps; step++) {
-    const grad     = gradientMps(ansatz, hamiltonian, params, opts)
+    const { gradient: grad, truncated: gradTrunc } = gradientMps(ansatz, hamiltonian, params, opts)
+    truncated = truncated || gradTrunc
     const gradNorm = Math.sqrt(grad.reduce((s, g) => s + g * g, 0))
     if (gradNorm < tol) {
-      return { params, energy: ansatz(params).expectMps(hamiltonian, opts), steps: step, converged: true }
+      const { energy, truncated: eTrunc } = ansatz(params).expectMps(hamiltonian, opts)
+      return { params, energy, steps: step, converged: true, truncated: truncated || eTrunc }
     }
     params = params.map((p, i) => p - lr * grad[i]!)
   }
 
-  return { params, energy: ansatz(params).expectMps(hamiltonian, opts), steps, converged: false }
+  const { energy, truncated: eTrunc } = ansatz(params).expectMps(hamiltonian, opts)
+  return { params, energy, steps, converged: false, truncated: truncated || eTrunc }
 }

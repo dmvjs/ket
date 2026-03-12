@@ -3613,7 +3613,7 @@ export class Circuit {
    *
    * @example
    * // Heisenberg ZZ + XX chain on 4 qubits — same terms work with vqe() too
-   * const energy = circuit.expectMps([
+   * const { energy } = circuit.expectMps([
    *   { coeff: -0.5, ops: 'ZZII' },  // ZZ on qubits 3,2
    *   { coeff: -0.5, ops: 'IZZI' },  // ZZ on qubits 2,1
    *   { coeff: -0.5, ops: 'XXII' },  // XX on qubits 3,2
@@ -3622,8 +3622,8 @@ export class Circuit {
   expectMps(
     terms:    readonly { coeff: number; ops: string }[],
     { maxBond = 64, truncErr = 0, initialState }: { maxBond?: number; truncErr?: number; initialState?: string } = {},
-  ): number {
-    if (terms.length === 0) return 0
+  ): { energy: number; truncated: boolean } {
+    if (terms.length === 0) return { energy: 0, truncated: false }
     const n       = this.qubits
     const traj    = new MpsTrajectory(n, maxBond, truncErr)
     const trajOps = toTrajOps(flattenOps(this.#ops))
@@ -3635,7 +3635,7 @@ export class Circuit {
       }
     }
     applyTrajOps(traj, trajOps, 0, 0, rng)
-    let result = 0
+    let energy = 0
     for (const { coeff, ops } of terms) {
       if (coeff === 0) continue
       if (ops.length !== n)
@@ -3652,9 +3652,9 @@ export class Circuit {
           default:  return null
         }
       })
-      result += coeff * traj.expectation(gateOps).re
+      energy += coeff * traj.expectation(gateOps).re
     }
-    return result
+    return { energy, truncated: traj.wasTruncated }
   }
 
   /**
@@ -3671,7 +3671,7 @@ export class Circuit {
    *
    * @example
    * // Bell state: one bond, S = 1 (maximally entangled)
-   * new Circuit(2).h(0).cx(0, 1).bondEntropies()  // → [1.0]
+   * new Circuit(2).h(0).cnot(0, 1).bondEntropies()  // → [1.0]
    *
    * // GHZ state: all bonds saturated at S = 1
    * ghz(8).bondEntropies()  // → [1, 1, 1, 1, 1, 1, 1]
