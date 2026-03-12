@@ -16,6 +16,7 @@
 
 import { type Complex, ONE, ZERO } from './complex.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
+import * as G from './gates.js'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -356,21 +357,42 @@ export function mpsSample(mps: MPS, rand: () => number): bigint {
  * Usage: construct once, then call reset() + circuit ops + sample() per shot.
  */
 export class MpsTrajectory {
-  readonly n:      number
-  readonly maxChi: number
+  readonly n:        number
+  readonly maxChi:   number
+  /**
+   * Relative Schmidt truncation threshold. Singular values σ_k < truncErr · σ_max
+   * are discarded in addition to the hard `maxChi` cap.
+   *
+   * 0 (default) means truncate by absolute tolerance only (1e-14).
+   * Typical values: 1e-8 for chemistry/VQE circuits with rapidly decaying Schmidt spectra.
+   */
+  readonly truncErr: number
 
   // Per-site tensor storage. data[q] holds up to maxChi × 2 × maxChi complex values.
   // Layout: data[q][((l*2+p)*chiR+r)*2] = re, +1 = im, where chiR = this.chiR[q].
-  readonly data: Float64Array[]
-  readonly chiL: Int32Array
-  readonly chiR: Int32Array
+  //
+  // Vidal canonical (Γ-Λ) form:
+  //   data[q]       = Γ[q]      — left-isometric in the Vidal sense: Γ†Γ = I after
+  //                               weighting by the boundary lambdas (not plain U†U=I)
+  //   bondLambda[b] = Λ[b]      — Schmidt values at bond (b, b+1), sorted descending
+  //
+  // The state amplitude is: ψ = Γ[0] · Λ[0] · Γ[1] · Λ[1] · ... · Γ[n-1]
+  // (boundary lambdas Λ[-1] = Λ[n] = 1 are implicit).
+  //
+  // This form ensures:
+  //   • apply2Adjacent includes all three boundary lambdas in theta → optimal truncation
+  //   • bondLambda holds the true Schmidt spectrum at every bond → correct bondEntropies()
+  //   • sample() weighted by bondLambda[q] gives exact marginals (right environment = Λ²)
+  readonly data:       Float64Array[]
+  readonly chiL:       Int32Array
+  readonly chiR:       Int32Array
+  readonly bondLambda: Float64Array[]  // n-1 entries; bondLambda[b][k] = σ_k at bond b
 
   // Workspace for apply2Adjacent — sized for worst-case maxChi bonds.
-  private readonly mBuf:    Float64Array  // contracted matrix, rows × cols
-  private readonly aBuf:    Float64Array  // column-major copy of mBuf for MGS
-  private readonly qColBuf: Float64Array  // MGS Q columns, packed: col k at k*rows
-  private readonly qBuf:    Float64Array  // Q output, row-major: rows × bond
-  private readonly rBuf:    Float64Array  // R output, row-major: bond × cols
+  private readonly mBuf: Float64Array  // contracted θ matrix, rows × cols
+  private readonly aBuf: Float64Array  // column-major working copy for Jacobi
+  private readonly qBuf: Float64Array  // U·Σ output, row-major: rows × bond
+  private readonly rBuf: Float64Array  // V†   output, row-major: bond × cols
 
   // Workspace for SVD (one-sided complex Jacobi).
   // vBuf: V matrix (cols × cols, column-major), cols = maxChi * 2.
@@ -388,22 +410,23 @@ export class MpsTrajectory {
   private readonly stRe:  Float64Array
   private readonly stIm:  Float64Array
 
-  constructor(n: number, maxChi: number) {
-    this.n      = n
-    this.maxChi = maxChi
+  constructor(n: number, maxChi: number, truncErr = 0) {
+    this.n        = n
+    this.maxChi   = maxChi
+    this.truncErr = truncErr
 
     const maxRows = maxChi * 2
     const maxCols = maxChi * 2
 
-    this.data = Array.from({ length: n }, () => new Float64Array(maxRows * maxCols * 2))
-    this.chiL = new Int32Array(n)
-    this.chiR = new Int32Array(n)
+    this.data       = Array.from({ length: n }, () => new Float64Array(maxRows * maxCols * 2))
+    this.chiL       = new Int32Array(n)
+    this.chiR       = new Int32Array(n)
+    this.bondLambda = Array.from({ length: Math.max(n - 1, 0) }, () => new Float64Array(maxChi))
 
-    this.mBuf    = new Float64Array(maxRows * maxCols * 2)
-    this.aBuf    = new Float64Array(maxCols * maxRows * 2)
-    this.qColBuf = new Float64Array(maxChi  * maxRows * 2)
-    this.qBuf    = new Float64Array(maxRows * maxChi  * 2)
-    this.rBuf    = new Float64Array(maxChi  * maxCols * 2)
+    this.mBuf = new Float64Array(maxRows * maxCols * 2)
+    this.aBuf = new Float64Array(maxCols * maxRows * 2)
+    this.qBuf = new Float64Array(maxRows * maxChi  * 2)
+    this.rBuf = new Float64Array(maxChi  * maxCols * 2)
 
     this.vBuf     = new Float64Array(maxCols * maxCols * 2)
     this.sigmaBuf = new Float64Array(maxCols)
@@ -426,6 +449,10 @@ export class MpsTrajectory {
       this.data[q]![0] = 1
       this.chiL[q] = 1
       this.chiR[q] = 1
+    }
+    for (let b = 0; b < this.n - 1; b++) {
+      this.bondLambda[b]!.fill(0)
+      this.bondLambda[b]![0] = 1
     }
   }
 
@@ -471,24 +498,37 @@ export class MpsTrajectory {
     const dB   = this.data[b]!
     const mBuf = this.mBuf
 
+    // Vidal canonical boundary lambdas:
+    //   lambdaL = Λ[a-1] — left  boundary of Γ[a]   (null → trivial scalar 1)
+    //   lambdaM = Λ[a]   — bond  shared by Γ[a],Γ[b] (always present)
+    //   lambdaR = Λ[a+1] — right boundary of Γ[b]    (null → trivial scalar 1)
+    // Theta = Λ[a-1] · Γ[a] · Λ[a] · Γ[b] · Λ[a+1]
+    const lambdaL: Float64Array | null = a     > 0         ? this.bondLambda[a - 1]! : null
+    const lambdaM: Float64Array        =                      this.bondLambda[a]!
+    const lambdaR: Float64Array | null = b     < this.n - 1 ? this.bondLambda[b]!    : null
+
     // Clear the used region of mBuf before accumulating.
     const mSize = rows * cols * 2
     for (let i = 0; i < mSize; i++) mBuf[i] = 0
 
-    // Contract dA ⊗ dB through gate into mBuf.
-    // mBuf[(la*2+pa2) * cols + pb2*chiR + rb)[*2] += gate[pa2*2+pb2][pa*2+pb] * theta
-    // where theta = sum_m dA[la][pa][m] * dB[m][pb][rb]
+    // Contract Γ[a] ⊗ Γ[b] through (lambdas + gate) into mBuf.
+    // theta = Λ_L[la] · (Σ_m Γ[a][la,pa,m] · Λ_M[m] · Γ[b][m,pb,rb]) · Λ_R[rb]
     for (let la = 0; la < chiL; la++) {
+      const scaleL = lambdaL ? lambdaL[la]! : 1
       for (let pa = 0; pa < 2; pa++) {
         for (let pb = 0; pb < 2; pb++) {
           for (let rb = 0; rb < chiR; rb++) {
+            const scaleR = lambdaR ? lambdaR[rb]! : 1
             let tre = 0, tim = 0
             for (let m = 0; m < chiM; m++) {
+              const scaleM = lambdaM[m]!
               const ai = ((la * 2 + pa) * chiM + m) * 2
               const bi = ((m  * 2 + pb) * chiR + rb) * 2
-              tre += dA[ai]! * dB[bi]! - dA[ai + 1]! * dB[bi + 1]!
-              tim += dA[ai]! * dB[bi + 1]! + dA[ai + 1]! * dB[bi]!
+              tre += scaleM * (dA[ai]! * dB[bi]! - dA[ai + 1]! * dB[bi + 1]!)
+              tim += scaleM * (dA[ai]! * dB[bi + 1]! + dA[ai + 1]! * dB[bi]!)
             }
+            const scale = scaleL * scaleR
+            tre *= scale; tim *= scale
             for (let pa2 = 0; pa2 < 2; pa2++) {
               for (let pb2 = 0; pb2 < 2; pb2++) {
                 const g  = gate[pa2 * 2 + pb2]![pa * 2 + pb]!
@@ -502,102 +542,46 @@ export class MpsTrajectory {
       }
     }
 
-    // SVD-decompose mBuf and write results directly into dA and dB.
-    // SVD gives the optimal Schmidt truncation at each bond cut.
-    const bond  = this.svdDecompose(rows, cols)
-    const qSize = rows * bond * 2
-    const rSize = bond * cols * 2
-    for (let i = 0; i < qSize; i++) dA[i] = this.qBuf[i]!
-    for (let i = 0; i < rSize; i++) dB[i] = this.rBuf[i]!
+    // SVD: theta = U · Σ · V†. Vidal canonical tensors:
+    //   Γ[a]  = U / Λ[a-1]   (divide each row la by lambdaL[la])
+    //   Λ[a]  = Σ             (stored in bondLambda[a])
+    //   Γ[b]  = V† / Λ[a+1]  (divide each col rb by lambdaR[rb])
+    const bond = this.svdDecompose(rows, cols)
+
+    // Extract Γ[a] from qBuf (= U after normalization in svdDecompose).
+    // Divide row la by lambdaL[la] to remove the left boundary lambda absorbed into theta.
+    const qBuf = this.qBuf
+    for (let la = 0; la < chiL; la++) {
+      const invL = lambdaL ? (lambdaL[la]! > 1e-14 ? 1 / lambdaL[la]! : 0) : 1
+      for (let p = 0; p < 2; p++) {
+        for (let k = 0; k < bond; k++) {
+          const i = ((la * 2 + p) * bond + k) * 2
+          dA[i]     = qBuf[i]!     * invL
+          dA[i + 1] = qBuf[i + 1]! * invL
+        }
+      }
+    }
+
+    // Extract Γ[b] from rBuf (= V†). Divide col rb by lambdaR[rb].
+    const rBuf = this.rBuf
+    for (let k = 0; k < bond; k++) {
+      for (let p = 0; p < 2; p++) {
+        for (let rb = 0; rb < chiR; rb++) {
+          const invR = lambdaR ? (lambdaR[rb]! > 1e-14 ? 1 / lambdaR[rb]! : 0) : 1
+          const i = (k * cols + p * chiR + rb) * 2
+          dB[i]     = rBuf[i]!     * invR
+          dB[i + 1] = rBuf[i + 1]! * invR
+        }
+      }
+    }
+
     this.chiR[a] = bond
     this.chiL[b] = bond
-  }
 
-  /**
-   * MGS QR decomposition of this.mBuf (rows × cols, row-major) into this.qBuf
-   * (rows × bond) and this.rBuf (bond × cols). Returns bond dimension.
-   */
-  private qrDecompose(rows: number, cols: number): number {
-    const mBuf    = this.mBuf
-    const aBuf    = this.aBuf
-    const qColBuf = this.qColBuf
-    const maxChi  = this.maxChi
-
-    // Transpose mBuf into aBuf (column-major) for column-by-column iteration.
-    for (let j = 0; j < cols; j++) {
-      for (let i = 0; i < rows; i++) {
-        const src = (i * cols + j) * 2
-        const dst = (j * rows + i) * 2
-        aBuf[dst]     = mBuf[src]!
-        aBuf[dst + 1] = mBuf[src + 1]!
-      }
-    }
-
-    let bond = 0
-    for (let j = 0; j < cols && bond < maxChi; j++) {
-      let n2 = 0
-      for (let i = 0; i < rows; i++) {
-        const re = aBuf[(j * rows + i) * 2]!, im = aBuf[(j * rows + i) * 2 + 1]!
-        n2 += re * re + im * im
-      }
-      if (n2 < 1e-28) continue
-
-      const inv   = 1 / Math.sqrt(n2)
-      const qBase = bond * rows
-      for (let i = 0; i < rows; i++) {
-        qColBuf[(qBase + i) * 2]     = aBuf[(j * rows + i) * 2]!     * inv
-        qColBuf[(qBase + i) * 2 + 1] = aBuf[(j * rows + i) * 2 + 1]! * inv
-      }
-
-      // Project out the new Q column from all remaining columns.
-      for (let l = j + 1; l < cols; l++) {
-        let dre = 0, dim = 0
-        for (let i = 0; i < rows; i++) {
-          const qre = qColBuf[(qBase + i) * 2]!, qim = qColBuf[(qBase + i) * 2 + 1]!
-          const are = aBuf[(l * rows + i) * 2]!, aim = aBuf[(l * rows + i) * 2 + 1]!
-          dre += qre * are + qim * aim
-          dim += qre * aim - qim * are
-        }
-        for (let i = 0; i < rows; i++) {
-          const qre = qColBuf[(qBase + i) * 2]!, qim = qColBuf[(qBase + i) * 2 + 1]!
-          const idx = (l * rows + i) * 2
-          aBuf[idx]     = (aBuf[idx]     ?? 0) - (dre * qre - dim * qim)
-          aBuf[idx + 1] = (aBuf[idx + 1] ?? 0) - (dre * qim + dim * qre)
-        }
-      }
-      bond++
-    }
-
-    // Build qBuf (row-major) from packed Q columns.
-    const qBuf = this.qBuf
-    for (let k = 0; k < bond; k++) {
-      const qBase = k * rows
-      for (let i = 0; i < rows; i++) {
-        qBuf[(i * bond + k) * 2]     = qColBuf[(qBase + i) * 2]!
-        qBuf[(i * bond + k) * 2 + 1] = qColBuf[(qBase + i) * 2 + 1]!
-      }
-    }
-
-    // Build rBuf (row-major): R = Q† · M.
-    const rBuf = this.rBuf
-    const rSize = bond * cols * 2
-    for (let i = 0; i < rSize; i++) rBuf[i] = 0
-    for (let k = 0; k < bond; k++) {
-      const qBase = k * rows
-      for (let j = 0; j < cols; j++) {
-        let rre = 0, rim = 0
-        for (let i = 0; i < rows; i++) {
-          const qre = qColBuf[(qBase + i) * 2]!, qim = qColBuf[(qBase + i) * 2 + 1]!
-          const mre = mBuf[(i * cols + j) * 2]!, mim = mBuf[(i * cols + j) * 2 + 1]!
-          rre += qre * mre + qim * mim
-          rim += qre * mim - qim * mre
-        }
-        rBuf[(k * cols + j) * 2]     = rre
-        rBuf[(k * cols + j) * 2 + 1] = rim
-      }
-    }
-
-    return bond
+    // Store true Schmidt values Λ[a] = Σ in bondLambda[a].
+    const lambda = this.bondLambda[a]!
+    for (let k = 0; k < bond; k++)           lambda[k] = this.sigmaBuf[this.orderBuf[k]!]!
+    for (let k = bond; k < this.maxChi; k++) lambda[k] = 0
   }
 
   /**
@@ -614,10 +598,10 @@ export class MpsTrajectory {
    * All buffers pre-allocated; zero heap allocation in this method.
    */
   private svdDecompose(rows: number, cols: number): number {
-    const mBuf    = this.mBuf
-    const aBuf    = this.aBuf    // column-major working copy of M
-    const vBuf    = this.vBuf    // V matrix, column-major (cols × cols)
-    const maxChi  = this.maxChi
+    const mBuf   = this.mBuf
+    const aBuf   = this.aBuf    // column-major working copy of M
+    const vBuf   = this.vBuf    // V matrix, column-major (cols × cols)
+    const maxChi = this.maxChi
 
     // Copy mBuf (row-major) → aBuf (column-major).
     for (let j = 0; j < cols; j++) {
@@ -633,6 +617,17 @@ export class MpsTrajectory {
     const vSize = cols * cols * 2
     for (let k = 0; k < vSize; k++) vBuf[k] = 0
     for (let k = 0; k < cols; k++) vBuf[(k * cols + k) * 2] = 1
+
+    // Frobenius norm² of M = trace of G = A†A, invariant under Jacobi rotations.
+    // Used for a scale-relative convergence test so the threshold holds for any
+    // bond matrix magnitude (product-state tensors vs deep-circuit tensors).
+    let frobSq = 0
+    for (let k = 0; k < cols; k++) {
+      for (let i = 0; i < rows; i++) {
+        const re = aBuf[(k * rows + i) * 2]!, im = aBuf[(k * rows + i) * 2 + 1]!
+        frobSq += re * re + im * im
+      }
+    }
 
     // Jacobi sweeps: for each column pair (p,q), find and apply the rotation
     // that zeros the (p,q) off-diagonal of the Gram matrix A†A.
@@ -679,10 +674,8 @@ export class MpsTrajectory {
             const pi = (p * rows + i) * 2, qi = (q * rows + i) * 2
             const Apr = aBuf[pi]!, Api = aBuf[pi + 1]!
             const Aqr = aBuf[qi]!, Aqi = aBuf[qi + 1]!
-            // s · e^{-iα} · A[q]
             const seqr = s * (epre * Aqr - epim * Aqi)
             const seqi = s * (epre * Aqi + epim * Aqr)
-            // c · e^{-iα} · A[q]
             const ceqr = c * (epre * Aqr - epim * Aqi)
             const ceqi = c * (epre * Aqi + epim * Aqr)
             aBuf[pi]     = c * Apr + seqr
@@ -708,10 +701,12 @@ export class MpsTrajectory {
         }
       }
 
-      if (maxOff < 1e-14) break
+      // Relative convergence: off-diagonal coupling negligible vs total energy.
+      // Guard frobSq=0 (zero input matrix) so the condition doesn't become maxOff<0.
+      if (frobSq < 1e-28 || maxOff < 1e-14 * frobSq) break
     }
 
-    // Singular values = column norms of aBuf.
+    // Singular values = column norms of aBuf after Jacobi convergence.
     const sigmaBuf = this.sigmaBuf
     for (let k = 0; k < cols; k++) {
       let s2 = 0
@@ -732,29 +727,33 @@ export class MpsTrajectory {
       }
     }
 
-    // Bond = number of non-negligible singular values, capped at maxChi.
+    // Bond dimension: keep singular values above the cutoff, capped at maxChi.
+    // cutoff = max(absolute floor, relative fraction of σ_max).
+    const sigma0 = sigmaBuf[orderBuf[0]!]!
+    const cutoff = sigma0 > 0
+      ? Math.max(1e-14, this.truncErr * sigma0)
+      : 1e-14
     let bond = 0
-    while (bond < cols && bond < maxChi && sigmaBuf[orderBuf[bond]!]! > 1e-14) bond++
+    while (bond < cols && bond < maxChi && sigmaBuf[orderBuf[bond]!]! > cutoff) bond++
     if (bond === 0) bond = 1  // always keep at least one component
 
-    // Build qBuf: U·Σ (rows × bond, row-major).
-    // After Jacobi convergence aBuf[:,col_k] = sigma_k * U[:,col_k], so we copy
-    // directly without normalising.  Storing U·Σ in the left tensor and V† in the
-    // right tensor ensures sample() computes correct marginal probabilities via the
-    // Schmidt weights: P(phys=p) = ||ΣU[p,:]||² = Σ_k σ_k² |U[p][k]|².
+    // Build qBuf: U (rows × bond, row-major) — normalised left singular vectors.
+    // aBuf[:,col_k] = σ_k · U[:,col_k] after Jacobi convergence; divide by σ_k to get U.
+    // apply2Adjacent then divides further by Λ[a-1] to produce Γ[a] = U/Λ[a-1].
     const qBuf = this.qBuf
     for (let k = 0; k < bond; k++) {
-      const col = orderBuf[k]!
+      const col   = orderBuf[k]!
+      const sigma = sigmaBuf[col]!
+      const inv   = sigma > 1e-14 ? 1 / sigma : 0
       for (let i = 0; i < rows; i++) {
         const src = (col * rows + i) * 2
-        qBuf[(i * bond + k) * 2]     = aBuf[src]!
-        qBuf[(i * bond + k) * 2 + 1] = aBuf[src + 1]!
+        qBuf[(i * bond + k) * 2]     = aBuf[src]!     * inv
+        qBuf[(i * bond + k) * 2 + 1] = aBuf[src + 1]! * inv
       }
     }
 
     // Build rBuf: V† (bond × cols, row-major).
-    // rBuf[k][j] = conj(V[j][col_k]) — no sigma factor here; weights live in qBuf.
-    //   V[j][col_k] = vBuf[(col_k * cols + j) * 2] (column-major V)
+    // rBuf[k][j] = conj(V[j][col_k]);  V is column-major: V[j][col_k] = vBuf[(col_k*cols+j)*2].
     const rBuf = this.rBuf
     for (let k = 0; k < bond; k++) {
       const col = orderBuf[k]!
@@ -797,6 +796,20 @@ export class MpsTrajectory {
         }
       }
 
+      // Vidal canonical: data[q] = Γ[q] (isometry); right environment = Λ[q]².
+      // Weight v_p by bondLambda[q] so that P(p) = ||v_p · Λ[q]||² gives the correct marginal.
+      // For q = n-1 (last site) there is no right bond lambda — no weighting needed.
+      if (q < this.n - 1) {
+        const lambda = this.bondLambda[q]!
+        for (let r = 0; r < chiR; r++) {
+          const s = lambda[r]!
+          v0re[r] = (v0re[r] ?? 0) * s
+          v0im[r] = (v0im[r] ?? 0) * s
+          v1re[r] = (v1re[r] ?? 0) * s
+          v1im[r] = (v1im[r] ?? 0) * s
+        }
+      }
+
       let p0 = 0, p1 = 0
       for (let r = 0; r < chiR; r++) {
         p0 += v0re[r]! * v0re[r]! + v0im[r]! * v0im[r]!
@@ -825,6 +838,103 @@ export class MpsTrajectory {
       if (this.chiR[q]! > max) max = this.chiR[q]!
     }
     return max
+  }
+
+  /**
+   * Von Neumann entanglement entropies S_b = -Σ_k σ_k² log₂(σ_k²) at each bond.
+   * Returns n-1 values. Uses the stored bondLambda Schmidt values (left-canonical).
+   * O(n · χ) — suitable for circuit monitoring and truncation diagnostics.
+   */
+  bondEntropies(): number[] {
+    const result: number[] = new Array(this.n - 1)
+    for (let b = 0; b < this.n - 1; b++) {
+      const lambda = this.bondLambda[b]!
+      const chi    = this.chiR[b]!
+      let S = 0
+      for (let k = 0; k < chi; k++) {
+        const s = lambda[k]!
+        if (s > 1e-14) S -= s * s * Math.log2(s * s)
+      }
+      result[b] = S
+    }
+    return result
+  }
+}
+
+// ── Trajectory depolarizing channels ─────────────────────────────────────────
+
+const TWO_PAULI_TRAJ: readonly (readonly [Gate2x2 | null, Gate2x2 | null])[] = [
+  [null, G.X], [null, G.Y], [null, G.Z],
+  [G.X, null], [G.X, G.X], [G.X, G.Y], [G.X, G.Z],
+  [G.Y, null], [G.Y, G.X], [G.Y, G.Y], [G.Y, G.Z],
+  [G.Z, null], [G.Z, G.X], [G.Z, G.Y], [G.Z, G.Z],
+]
+
+/** Apply single-qubit depolarizing channel to a trajectory MPS in place. */
+export function dep1Traj(traj: MpsTrajectory, q: number, p: number, rand: number): void {
+  if (rand >= p) return
+  const r = rand / p
+  if      (r < 1/3) traj.apply1(q, G.X)
+  else if (r < 2/3) traj.apply1(q, G.Y)
+  else               traj.apply1(q, G.Z)
+}
+
+/** Apply two-qubit depolarizing channel to a trajectory MPS in place. */
+export function dep2Traj(traj: MpsTrajectory, a: number, b: number, p: number, rand: number): void {
+  if (rand >= p) return
+  const [pa, pb] = TWO_PAULI_TRAJ[Math.min(Math.floor(rand / p * 15), 14)]!
+  if (pa) traj.apply1(a, pa)
+  if (pb) traj.apply1(b, pb)
+}
+
+// ── Serializable trajectory ops ───────────────────────────────────────────────
+
+/**
+ * Normalized, serializable gate operation for trajectory execution.
+ *
+ * `controlled` and multi-qubit `unitary` ops from Circuit are pre-expanded
+ * into `single` / `two` before being stored as TrajOp, so the worker dispatch
+ * loop stays a flat switch with no helper calls.
+ */
+export type TrajOp =
+  | { kind: 'single'; q: number;              gate: Gate2x2     }
+  | { kind: 'cnot';   control: number; target: number           }
+  | { kind: 'swap';   a: number;       b: number                }
+  | { kind: 'two';    a: number;       b: number; gate: Gate4x4 }
+  | { kind: 'barrier'                                           }
+
+/**
+ * Execute one trajectory: apply all ops with optional depolarizing noise.
+ * rng() is only called when p1 or p2 is non-zero.
+ */
+export function applyTrajOps(
+  traj: MpsTrajectory,
+  ops: readonly TrajOp[],
+  p1: number,
+  p2: number,
+  rng: () => number,
+): void {
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'single':
+        traj.apply1(op.q, op.gate)
+        if (p1) dep1Traj(traj, op.q, p1, rng())
+        break
+      case 'cnot':
+        traj.apply2(op.control, op.target, CNOT4)
+        if (p2) dep2Traj(traj, op.control, op.target, p2, rng())
+        break
+      case 'swap':
+        traj.apply2(op.a, op.b, SWAP4)
+        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        break
+      case 'two':
+        traj.apply2(op.a, op.b, op.gate)
+        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        break
+      case 'barrier': break
+      default: { const _exhaustive: never = op; break }
+    }
   }
 }
 

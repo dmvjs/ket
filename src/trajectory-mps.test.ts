@@ -204,13 +204,35 @@ describe('MpsTrajectory — unit tests', () => {
 
 // ── Helpers used only by MpsTrajectory unit tests ─────────────────────────────
 
-/** Convert MpsTrajectory internal state to an immutable MPS array for mpsContract. */
+/**
+ * Convert MpsTrajectory internal state to an immutable MPS array for mpsContract.
+ *
+ * In Vidal canonical, data[q] = Γ[q] and bondLambda[q] = Λ[q].
+ * The state is Γ[0]·Λ[0]·Γ[1]·Λ[1]·...·Γ[n-1].
+ * mpsContract expects plain tensor products, so we embed Λ[q] into the right
+ * bond of Γ[q] to get Γ[q]·Λ[q], making the contraction (Γ[0]·Λ[0])·(Γ[1]·Λ[1])·...·Γ[n-1].
+ * Matrix product associativity ensures this equals the correct state amplitude.
+ */
 function trajToMps(traj: MpsTrajectory) {
-  return Array.from({ length: traj.n }, (_, q) => ({
-    data: traj.data[q]!.slice(),  // copy so mpsContract can't mutate
-    chiL: traj.chiL[q]!,
-    chiR: traj.chiR[q]!,
-  }))
+  return Array.from({ length: traj.n }, (_, q) => {
+    const chiL = traj.chiL[q]!
+    const chiR = traj.chiR[q]!
+    const data = traj.data[q]!.slice()
+    if (q < traj.n - 1) {
+      const lambda = traj.bondLambda[q]!
+      for (let l = 0; l < chiL; l++) {
+        for (let p = 0; p < 2; p++) {
+          for (let r = 0; r < chiR; r++) {
+            const s = lambda[r]!
+            const i = ((l * 2 + p) * chiR + r) * 2
+            data[i]     *= s
+            data[i + 1] *= s
+          }
+        }
+      }
+    }
+    return { data, chiL, chiR }
+  })
 }
 
 /** Simple seeded LCG for deterministic test sampling. */
@@ -755,11 +777,12 @@ describe('SVD regression — svdDecompose bug guards', () => {
   })
 
   /**
-   * Bug 2 — qBuf stores U instead of U·Σ: sample() computes ||U_row_p||² = 1 for
-   * all p, producing uniform marginals regardless of state.  Fix: copy aBuf columns
-   * directly (already σ_k·U[:,k] after Jacobi) so P(qubit=p) = Σ_k σ_k²|U[p][k]|².
+   * Bug 2 — missing Vidal lambda weighting in sample(): without weighting v_p by
+   * bondLambda[q], P(p) = ||Γ_row_p||² = 1 for all p (isometry norm), giving
+   * uniform 50/50 output regardless of state.  Fix: weight v_p by bondLambda[q]
+   * so P(p) = ||Γ_row_p · Λ||² = Σ_k σ_k²|Γ[p][k]|² gives the correct marginal.
    */
-  it('UΣ sampling: Ry(π/3)+CNOT gives P(q0=0)≈0.75, not 0.5', () => {
+  it('Vidal lambda sampling: Ry(π/3)+CNOT gives P(q0=0)≈0.75, not 0.5', () => {
     // |ψ⟩ = cos(π/6)|00⟩ + sin(π/6)|11⟩  →  P(q0=0) = cos²(π/6) = 3/4.
     // With the U bug, ||U_row_p||² = 1 for both p=0 and p=1 → always 50/50.
     const traj  = new MpsTrajectory(2, 8)
@@ -840,5 +863,259 @@ describe('large-scale noisy brickwork — simulability via noise-limited entangl
     expect(uniqueCounts[1]).toBeGreaterThanOrEqual(uniqueCounts[0]!)
     // Both should be spread (not concentrated like GHZ which gives 2 outcomes)
     expect(uniqueCounts[0]).toBeGreaterThan(10)
+  })
+})
+
+// ── 10. Noise coverage — every gate kind receives depolarizing errors ─────────
+
+describe('noise coverage — all gate kinds inject depolarizing errors', () => {
+  /**
+   * For each gate kind, run with moderate noise and verify the resulting distribution
+   * matches dm() at the same noise level (χ²/dof < 2.5).
+   *
+   * If noise were NOT applied after a gate kind, runMps would produce the clean-circuit
+   * distribution, which is statistically incompatible with the dm() noisy distribution
+   * at these noise rates — the χ²/dof would blow past the threshold.
+   */
+  const shots = 8192
+  const p1 = 0.02, p2 = 0.04
+
+  it('single-qubit gates receive p1 noise', () => {
+    const c = new Circuit(3).h(0).ry(1.1, 1).rz(0.7, 2)
+    expect(chiSq(
+      c.runMps({ shots, seed: 1, noise: { p1 } }).probs,
+      c.dm({ noise: { p1 } }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('cnot gates receive p2 noise', () => {
+    const c = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2)
+    expect(chiSq(
+      c.runMps({ shots, seed: 2, noise: { p2 } }).probs,
+      c.dm({ noise: { p2 } }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('swap gates receive p2 noise', () => {
+    // swap(0,1) after X(0) moves excitation from q0 to q1 — noise spreads it.
+    const c = new Circuit(3).x(0).swap(0, 1).h(2)
+    expect(chiSq(
+      c.runMps({ shots, seed: 3, noise: { p1, p2 } }).probs,
+      c.dm({ noise: { p1, p2 } }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('two-qubit (ZZ/XX) gates receive p2 noise', () => {
+    // ZZ(π/4) creates entanglement; noise at p2 measurably degrades fidelity.
+    const c = new Circuit(3).h(0).h(1).zz(Math.PI / 4, 0, 1).h(2)
+    expect(chiSq(
+      c.runMps({ shots, seed: 4, noise: { p1, p2 } }).probs,
+      c.dm({ noise: { p1, p2 } }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('controlled gates receive p2 noise', () => {
+    // CRZ creates conditional phase; noise degrades coherence.
+    const c = new Circuit(3).h(0).h(1).crz(Math.PI / 3, 0, 1).h(2)
+    expect(chiSq(
+      c.runMps({ shots, seed: 5, noise: { p1, p2 } }).probs,
+      c.dm({ noise: { p1, p2 } }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('unitary 1-qubit gates receive p1 noise', () => {
+    // H expressed as a unitary matrix — noise behaviour must match named H gate.
+    const inv = 1 / Math.sqrt(2)
+    const H = [[{ re: inv, im: 0 }, { re: inv, im: 0 }], [{ re: inv, im: 0 }, { re: -inv, im: 0 }]]
+    const cNamed   = new Circuit(3).h(0).cnot(0, 1).h(2)
+    const cUnitary = new Circuit(3).unitary(H, 0).cnot(0, 1).unitary(H, 2)
+    const noise = { p1 }
+    // Both circuits are identical in logic; their noisy distributions must match.
+    expect(chiSq(
+      cUnitary.runMps({ shots, seed: 6, noise }).probs,
+      cNamed.dm({ noise }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('unitary 2-qubit gates receive p2 noise', () => {
+    // CNOT expressed as a unitary matrix — noise behaviour must match named CNOT.
+    const CNOT = [
+      [{ re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }],
+      [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }],
+    ]
+    const cNamed   = new Circuit(3).h(0).cnot(0, 1).h(2)
+    const cUnitary = new Circuit(3).h(0).unitary(CNOT, 0, 1).h(2)
+    const noise = { p2 }
+    expect(chiSq(
+      cUnitary.runMps({ shots, seed: 7, noise }).probs,
+      cNamed.dm({ noise }).probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+})
+
+// ── 11. truncErr — relative Schmidt truncation ────────────────────────────────
+
+describe('truncErr — relative Schmidt truncation threshold', () => {
+  /**
+   * For circuits whose Schmidt spectrum decays quickly, a non-zero truncErr
+   * discards small singular values early, reducing bond dimension.
+   * For circuits with flat spectra (GHZ), truncErr has no effect.
+   */
+
+  it('truncErr=0 (default) gives exact brickwork results (χ²/dof < 2.5)', () => {
+    const c     = makeBrickwork(5, 4, 42)
+    const shots = 8192
+    expect(chiSq(
+      c.runMps({ shots, seed: 70, maxBond: 64, truncErr: 0 }).probs,
+      c.dm().probabilities(),
+      shots,
+    )).toBeLessThan(2.5)
+  })
+
+  it('truncErr=0.5 degrades brickwork accuracy vs truncErr=0', () => {
+    // Aggressive 50% relative truncation introduces approximation error that
+    // is statistically detectable against the exact dm() reference.
+    const c     = makeBrickwork(5, 6, 42)
+    const shots = 8192
+    const dmRef = c.dm().probabilities()
+
+    const cqExact  = chiSq(c.runMps({ shots, seed: 71, maxBond: 64, truncErr: 0   }).probs, dmRef, shots)
+    const cqTrunc  = chiSq(c.runMps({ shots, seed: 71, maxBond: 64, truncErr: 0.5 }).probs, dmRef, shots)
+
+    expect(cqTrunc).toBeGreaterThan(cqExact + 1)
+  })
+
+  it('truncErr has no effect on GHZ: Schmidt spectrum is flat (both SVs equal)', () => {
+    // GHZ bond dim = 2 with σ₀ = σ₁ = 1/√2. truncErr < 1 never cuts either value.
+    const n    = 10
+    const traj = new MpsTrajectory(n, 64, 0.9)  // aggressive 90% relative cutoff
+    traj.apply1(0, G.H)
+    for (let i = 0; i < n - 1; i++) traj.apply2(i, i + 1, CNOT4)
+    // Both Schmidt values survive the relative cut; bond must stay at 2.
+    expect(traj.maxBondUsed()).toBe(2)
+  })
+
+  it('truncErr reduces bond dimension for high-entanglement circuits', () => {
+    // Random brickwork has a non-flat Schmidt spectrum — larger truncErr → smaller bond.
+    const n = 8
+    const bondExact = (() => {
+      const t = new MpsTrajectory(n, 64, 0)
+      applyBrickworkToTraj(t, 6, 42)
+      return t.maxBondUsed()
+    })()
+    const bondTrunc = (() => {
+      const t = new MpsTrajectory(n, 64, 0.1)
+      applyBrickworkToTraj(t, 6, 42)
+      return t.maxBondUsed()
+    })()
+
+    expect(bondTrunc).toBeLessThan(bondExact)
+  })
+})
+
+// ── 12. bondEntropies() ───────────────────────────────────────────────────────
+
+describe('bondEntropies()', () => {
+  it('product state: all entropies are 0', () => {
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.H)
+    traj.apply1(2, G.X)
+    const S = traj.bondEntropies()
+    expect(S).toHaveLength(3)
+    for (const s of S) expect(s).toBeLessThan(1e-10)
+  })
+
+  it('Bell state: bond-0 entropy = 1 ebit, bond-1 = 0', () => {
+    // |Φ+⟩ = (|00⟩ + |11⟩)/√2 on qubits 0,1; qubit 2 in |0⟩.
+    // Schmidt values at bond 0: σ = [1/√2, 1/√2] → S = 1 bit.
+    // Schmidt values at bond 1: qubit 2 is unentangled → S = 0.
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    const S = traj.bondEntropies()
+    expect(S[0]).toBeCloseTo(1.0, 6)  // 1 ebit
+    expect(S[1]).toBeLessThan(1e-10)   // qubit 2 unentangled
+  })
+
+  it('GHZ n=5: all bond entropies = 1 ebit', () => {
+    const n = 5
+    const traj = new MpsTrajectory(n, 8)
+    traj.apply1(0, G.H)
+    for (let i = 0; i < n - 1; i++) traj.apply2(i, i + 1, CNOT4)
+    for (const s of traj.bondEntropies()) expect(s).toBeCloseTo(1.0, 5)
+  })
+
+  it('brickwork circuit: entropies positive and grow with depth', () => {
+    const n = 8
+    const traj1 = new MpsTrajectory(n, 64)
+    const traj4 = new MpsTrajectory(n, 64)
+    applyBrickworkToTraj(traj1, 1, 42)
+    applyBrickworkToTraj(traj4, 4, 42)
+
+    // Entropies after 4 layers must be ≥ after 1 layer at every bond
+    const S1 = traj1.bondEntropies()
+    const S4 = traj4.bondEntropies()
+    expect(S4.reduce((a, b) => a + b, 0)).toBeGreaterThan(S1.reduce((a, b) => a + b, 0))
+  })
+
+  it('after reset(): all entropies return to 0', () => {
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    traj.reset()
+    for (const s of traj.bondEntropies()) expect(s).toBeLessThan(1e-10)
+  })
+})
+
+// ── workers option ────────────────────────────────────────────────────────────
+//
+// In test mode (TypeScript source), import.meta.url ends in '.ts' so isBuilt=false
+// and the workers path gracefully falls back to single-threaded. These tests verify:
+//   1. The `workers` option is accepted without error (no throw, correct result type)
+//   2. Fallback produces statistically correct results (same quality as workers=0)
+//   3. The persistent pool does not break repeated calls
+//
+// Actual parallel execution is an integration concern (requires the built bundle).
+
+describe('workers option', () => {
+  const noise = { p1: 0.01, p2: 0.02 }
+
+  it('workers > 1 is accepted and returns a Distribution', () => {
+    let c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
+    const dist = c.runMps({ shots: 256, seed: 1, noise, workers: 4 })
+    expect(dist.shots).toBe(256)
+    expect(dist.qubits).toBe(4)
+    // GHZ-like: must have non-trivial distribution
+    const total = Object.values(dist.probs).reduce((a, b) => a + b, 0)
+    expect(Math.abs(total - 1)).toBeLessThan(1e-9)
+  })
+
+  it('workers=4 and workers=0 produce statistically equivalent distributions', () => {
+    // Under fallback both use the same single-threaded path with same seed → identical.
+    let c = new Circuit(4).h(0)
+    for (let q = 0; q < 3; q++) c = c.cx(q, q + 1)
+    const d0 = c.runMps({ shots: 512, seed: 7, noise, workers: 0 })
+    const d4 = c.runMps({ shots: 512, seed: 7, noise, workers: 4 })
+    // In test/dev mode both are single-threaded with the same seed → identical counts.
+    for (const key of Object.keys(d0.probs)) {
+      expect(d4.probs[key] ?? 0).toBeCloseTo(d0.probs[key]!, 5)
+    }
+  })
+
+  it('repeated calls with workers use the persistent pool without errors', () => {
+    let c = new Circuit(3).h(0).cx(0, 1).cx(1, 2)
+    for (let i = 0; i < 4; i++) {
+      const dist = c.runMps({ shots: 128, seed: i, noise, workers: 4 })
+      expect(dist.shots).toBe(128)
+    }
   })
 })
