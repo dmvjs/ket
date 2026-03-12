@@ -859,6 +859,177 @@ export class MpsTrajectory {
     }
     return result
   }
+
+  /**
+   * Single-site expectation value ⟨ψ|I⊗…⊗O_q⊗…⊗I|ψ⟩ directly from MPS tensors.
+   *
+   * Exploits the Vidal canonical form: the left environment at site q is Λ[q-1]² and
+   * the right environment is Λ[q]², so the result is exact with no sampling variance.
+   * O(χ²) per call.
+   *
+   * @param q  Site index (0-based).
+   * @param op 2×2 gate matrix representing the observable.
+   */
+  expect1(q: number, op: Gate2x2): Complex {
+    const data = this.data[q]!
+    const chiL = this.chiL[q]!, chiR = this.chiR[q]!
+    const lamL = q > 0          ? this.bondLambda[q - 1]! : null
+    const lamR = q < this.n - 1 ? this.bondLambda[q]!     : null
+    const [[a, b], [c, d]] = op
+    const are = a.re, aim = a.im, bre = b.re, bim = b.im
+    const cre = c.re, cim = c.im, dre = d.re, dim = d.im
+    let re = 0, im = 0
+    for (let l = 0; l < chiL; l++) {
+      const wl = lamL !== null ? lamL[l]! * lamL[l]! : 1
+      for (let r = 0; r < chiR; r++) {
+        const w  = wl * (lamR !== null ? lamR[r]! * lamR[r]! : 1)
+        const i0 = ((l * 2 + 0) * chiR + r) * 2
+        const i1 = ((l * 2 + 1) * chiR + r) * 2
+        const g0re = data[i0]!, g0im = data[i0 + 1]!
+        const g1re = data[i1]!, g1im = data[i1 + 1]!
+        // (O·Γ)[p',r]: p'=0 → a·g0 + b·g1, p'=1 → c·g0 + d·g1
+        const og0re = are*g0re - aim*g0im + bre*g1re - bim*g1im
+        const og0im = are*g0im + aim*g0re + bre*g1im + bim*g1re
+        const og1re = cre*g0re - cim*g0im + dre*g1re - dim*g1im
+        const og1im = cre*g0im + cim*g0re + dre*g1im + dim*g1re
+        // Σ_{p'} conj(Γ[l,p',r]) · (O·Γ)[p',r]
+        re += w * (g0re*og0re + g0im*og0im + g1re*og1re + g1im*og1im)
+        im += w * (g0re*og0im - g0im*og0re + g1re*og1im - g1im*og1re)
+      }
+    }
+    return { re, im }
+  }
+
+  /**
+   * Expectation value ⟨ψ|O₀⊗O₁⊗…⊗O_{n-1}|ψ⟩ for a product observable.
+   *
+   * Pass `null` for identity at a site. Uses a left-to-right transfer matrix sweep in the
+   * Vidal Γ-Λ basis. O(n·χ³) — far cheaper than building a density matrix or sampling.
+   *
+   * Fast path: leading identity sites cost O(χ) each (E stays diagonal).
+   * After the first non-identity site the full O(χ³) contraction runs for remaining sites.
+   *
+   * Typical use: Hamiltonian terms in VQE, two-point correlators, Pauli strings.
+   *
+   * @param ops Array of length n. null = identity at that site.
+   */
+  expectation(ops: readonly (Gate2x2 | null)[]): Complex {
+    if (ops.length !== this.n)
+      throw new TypeError(`ops.length (${ops.length}) must equal n (${this.n})`)
+    const n = this.n, mc = this.maxChi
+    // All buffers allocated once — no per-site allocation.
+    const diagBuf = new Float64Array(mc)             // diagonal of E when isDiag
+    const ogBuf   = new Float64Array(mc * 2 * mc * 2) // OΓ scratch [l][p'][r], complex
+    const fBuf    = new Float64Array(mc * 2 * mc * 2) // F scratch [p'][r][l'], complex
+    const curBuf  = new Float64Array(mc * mc * 2)     // current E[l][l'], complex
+    const nxtBuf  = new Float64Array(mc * mc * 2)     // next E'[r][r'], complex
+
+    diagBuf[0] = 1
+    let isDiag = true
+    let curDim = 1  // current E is curDim × curDim (== chiL[q] at entry to site q)
+
+    for (let q = 0; q < n; q++) {
+      const op   = ops[q] ?? null
+      const data = this.data[q]!
+      const chiL = this.chiL[q]!, chiR = this.chiR[q]!
+      const lam  = q < n - 1 ? this.bondLambda[q]! : null
+
+      if (op === null && isDiag) {
+        // Fast path: identity site, E diagonal with Λ[q-1]² → E' diagonal with Λ[q]²
+        if (lam !== null) {
+          for (let r = 0; r < chiR; r++) { const s = lam[r]!; diagBuf[r] = s * s }
+        } else {
+          diagBuf[0] = 1  // last site, implicit λ = 1
+        }
+        curDim = chiR
+        continue
+      }
+
+      // Step 1: OΓ[l][p'][r] = Σ_p O_{p',p} Γ[l,p,r]  (skip if op === null: use Γ directly)
+      if (op !== null) {
+        const [[a, b], [c, d]] = op
+        const are = a.re, aim = a.im, bre = b.re, bim = b.im
+        const cre = c.re, cim = c.im, dre = d.re, dim = d.im
+        for (let l = 0; l < chiL; l++) {
+          for (let r = 0; r < chiR; r++) {
+            const i0 = ((l * 2 + 0) * chiR + r) * 2
+            const i1 = ((l * 2 + 1) * chiR + r) * 2
+            const g0re = data[i0]!, g0im = data[i0 + 1]!
+            const g1re = data[i1]!, g1im = data[i1 + 1]!
+            const oi0 = ((l * 2 + 0) * chiR + r) * 2
+            const oi1 = ((l * 2 + 1) * chiR + r) * 2
+            ogBuf[oi0]     = are*g0re - aim*g0im + bre*g1re - bim*g1im
+            ogBuf[oi0 + 1] = are*g0im + aim*g0re + bre*g1im + bim*g1re
+            ogBuf[oi1]     = cre*g0re - cim*g0im + dre*g1re - dim*g1im
+            ogBuf[oi1 + 1] = cre*g0im + cim*g0re + dre*g1im + dim*g1re
+          }
+        }
+      }
+
+      // Step 2: F[p'][r][l'] = Σ_l E[l,l'] · src[l,p',r]   where src = OΓ (op≠null) or Γ
+      // fBuf layout: ((p'*chiR+r)*chiL+l')*2
+      const src = op !== null ? ogBuf : data
+      for (let pp = 0; pp < 2; pp++) {
+        for (let r = 0; r < chiR; r++) {
+          for (let lp = 0; lp < chiL; lp++) {
+            let fRe = 0, fIm = 0
+            if (isDiag) {
+              // E[l,l'] = diagBuf[l] · δ[l,l'] → sum over l collapses to l=l'
+              const si = ((lp * 2 + pp) * chiR + r) * 2
+              fRe = diagBuf[lp]! * src[si]!
+              fIm = diagBuf[lp]! * src[si + 1]!
+            } else {
+              for (let l = 0; l < chiL; l++) {
+                const eIdx = (l * curDim + lp) * 2
+                const eRe  = curBuf[eIdx]!, eIm = curBuf[eIdx + 1]!
+                const si   = ((l * 2 + pp) * chiR + r) * 2
+                const sRe  = src[si]!, sIm = src[si + 1]!
+                fRe += eRe*sRe - eIm*sIm
+                fIm += eRe*sIm + eIm*sRe
+              }
+            }
+            const fi = ((pp * chiR + r) * chiL + lp) * 2
+            fBuf[fi] = fRe; fBuf[fi + 1] = fIm
+          }
+        }
+      }
+
+      // Step 3: E'[r][r'] = Σ_{l',p'} F[p'][r][l'] · Γ*[l',p',r'] · λ[q]_r · λ[q]_r'
+      nxtBuf.fill(0, 0, chiR * chiR * 2)
+      for (let r = 0; r < chiR; r++) {
+        const lamR = lam !== null ? lam[r]! : 1
+        for (let rp = 0; rp < chiR; rp++) {
+          const w = lamR * (lam !== null ? lam[rp]! : 1)
+          let accRe = 0, accIm = 0
+          for (let pp = 0; pp < 2; pp++) {
+            for (let lp = 0; lp < chiL; lp++) {
+              const fi  = ((pp * chiR + r) * chiL + lp) * 2
+              const fRe = fBuf[fi]!, fIm = fBuf[fi + 1]!
+              const gi  = ((lp * 2 + pp) * chiR + rp) * 2
+              const gRe =  data[gi]!, gIm = -data[gi + 1]!  // conj(Γ*)
+              accRe += fRe*gRe - fIm*gIm
+              accIm += fRe*gIm + fIm*gRe
+            }
+          }
+          const ni = (r * chiR + rp) * 2
+          nxtBuf[ni] = w * accRe; nxtBuf[ni + 1] = w * accIm
+        }
+      }
+
+      curBuf.set(nxtBuf.subarray(0, chiR * chiR * 2))
+      isDiag = false
+      curDim = chiR
+    }
+
+    // Final result: trace of E. chiR[n-1] = 1 so this is just E[0,0].
+    if (isDiag) return { re: diagBuf[0]!, im: 0 }
+    let re = 0, im = 0
+    for (let r = 0; r < curDim; r++) {
+      re += curBuf[(r * curDim + r) * 2]!
+      im += curBuf[(r * curDim + r) * 2 + 1]!
+    }
+    return { re, im }
+  }
 }
 
 // ── Trajectory depolarizing channels ─────────────────────────────────────────
@@ -902,6 +1073,20 @@ export type TrajOp =
   | { kind: 'swap';   a: number;       b: number                }
   | { kind: 'two';    a: number;       b: number; gate: Gate4x4 }
   | { kind: 'barrier'                                           }
+
+/**
+ * One term in a sum-of-products Hamiltonian: `coeff · ⊗_q ops[q]`.
+ *
+ * Used with `Circuit.expectMps()`. Pass `null` for identity on qubit q.
+ *
+ * @example
+ * // Heisenberg ZZ coupling between qubits 0 and 1
+ * const term: PauliTerm = { coeff: -0.5, ops: [G.Z, G.Z, null, null] }
+ */
+export type PauliTerm = {
+  readonly coeff: number
+  readonly ops:   readonly (Gate2x2 | null)[]
+}
 
 /**
  * Execute one trajectory: apply all ops with optional depolarizing noise.

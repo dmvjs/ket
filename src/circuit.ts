@@ -8,7 +8,8 @@
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
-import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp } from './mps.js'
+import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp, type PauliTerm } from './mps.js'
+export type { PauliTerm } from './mps.js'
 import { wt } from './worker-shim.js'
 import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
@@ -3574,6 +3575,50 @@ export class Circuit {
       Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
     return new Distribution(this.qubits, shots, counts, cregCounts)
+  }
+
+  /**
+   * Compute ⟨ψ|H|ψ⟩ for a sum-of-products observable H = Σᵢ termᵢ.coeff · ⊗_q termᵢ.ops[q].
+   *
+   * Builds the MPS state once from this circuit, then evaluates each term directly from
+   * tensors — no sampling, no variance, exact to floating-point precision.
+   *
+   * O(|terms| · n · χ³) total. Typically milliseconds for 50-qubit circuits with χ ≤ 64.
+   *
+   * Use for VQE cost functions, Hamiltonian energy evaluation, and multi-site correlators.
+   * Each term uses `null` to denote identity on a qubit.
+   *
+   * @example
+   * // Heisenberg ZZ + XX Hamiltonian on 4 qubits
+   * const energy = circuit.expectMps([
+   *   { coeff: -0.5, ops: [G.Z, G.Z, null, null] },
+   *   { coeff: -0.5, ops: [null, G.Z, G.Z, null] },
+   *   { coeff: -0.5, ops: [G.X, G.X, null, null] },
+   * ])
+   */
+  expectMps(
+    terms:    readonly PauliTerm[],
+    { maxBond = 64, truncErr = 0, initialState }: { maxBond?: number; truncErr?: number; initialState?: string } = {},
+  ): number {
+    if (terms.length === 0) return 0
+    const traj    = new MpsTrajectory(this.qubits, maxBond, truncErr)
+    const trajOps = toTrajOps(flattenOps(this.#ops))
+    const rng     = () => 0  // dummy — no noise on clean path
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, this.qubits)  // validate length/charset
+      for (let q = 0; q < this.qubits; q++) {
+        if (initialState[q] === '1') traj.apply1(q, G.X)
+      }
+    }
+    applyTrajOps(traj, trajOps, 0, 0, rng)
+    let result = 0
+    for (const { coeff, ops } of terms) {
+      if (coeff === 0) continue
+      if (ops.length !== this.qubits)
+        throw new TypeError(`PauliTerm ops.length (${ops.length}) must equal circuit qubits (${this.qubits})`)
+      result += coeff * traj.expectation(ops).re
+    }
+    return result
   }
 
   /**

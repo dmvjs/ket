@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Circuit, DEVICES } from './circuit.js'
+import { Circuit, DEVICES, type PauliTerm } from './circuit.js'
 import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
 import * as G from './gates.js'
 
@@ -1240,5 +1240,233 @@ describe('workers option', () => {
       const dist = c.runMps({ shots: 128, seed: i, noise, workers: 4 })
       expect(dist.shots).toBe(128)
     }
+  })
+})
+
+// ── expect1 — single-site expectation values ──────────────────────────────────
+
+describe('MpsTrajectory.expect1() — single-site expectation values', () => {
+  it('|0⟩: ⟨Z⟩ = 1, ⟨X⟩ = 0', () => {
+    const traj = new MpsTrajectory(1, 4)
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(1, 12)
+    expect(traj.expect1(0, G.X).re).toBeCloseTo(0, 12)
+  })
+
+  it('|1⟩: ⟨Z⟩ = -1, ⟨X⟩ = 0', () => {
+    const traj = new MpsTrajectory(1, 4)
+    traj.apply1(0, G.X)
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(-1, 12)
+    expect(traj.expect1(0, G.X).re).toBeCloseTo(0, 12)
+  })
+
+  it('|+⟩ = H|0⟩: ⟨X⟩ = 1, ⟨Z⟩ = 0', () => {
+    const traj = new MpsTrajectory(1, 4)
+    traj.apply1(0, G.H)
+    expect(traj.expect1(0, G.X).re).toBeCloseTo(1, 12)
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(0, 12)
+  })
+
+  it('Ry(θ): ⟨Z⟩ = cos(θ) analytically', () => {
+    const theta = 1.1
+    const traj  = new MpsTrajectory(1, 4)
+    traj.apply1(0, G.Ry(theta))
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(Math.cos(theta), 12)
+  })
+
+  it('n=3 Bell-like: ⟨Z₀⟩ = 0, ⟨Z₁⟩ = 0 after H+CNOT', () => {
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(0, 10)
+    expect(traj.expect1(1, G.Z).re).toBeCloseTo(0, 10)
+  })
+
+  it('n=3 product state: ⟨Z₀⟩ = cos(0.8), ⟨Z₁⟩ = cos(1.3) independently', () => {
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.Ry(0.8))
+    traj.apply1(1, G.Ry(1.3))
+    expect(traj.expect1(0, G.Z).re).toBeCloseTo(Math.cos(0.8), 12)
+    expect(traj.expect1(1, G.Z).re).toBeCloseTo(Math.cos(1.3), 12)
+    expect(traj.expect1(2, G.Z).re).toBeCloseTo(1, 12)  // untouched qubit stays |0⟩
+  })
+
+  it('imaginary part is 0 for Z, X, Y on real states', () => {
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.Ry(0.7))
+    traj.apply1(1, G.Ry(1.2))
+    expect(Math.abs(traj.expect1(0, G.Z).im)).toBeLessThan(1e-14)
+    expect(Math.abs(traj.expect1(0, G.X).im)).toBeLessThan(1e-14)
+    expect(Math.abs(traj.expect1(0, G.Y).im)).toBeLessThan(1e-14)
+  })
+})
+
+// ── expectation — product observable transfer matrix ─────────────────────────
+
+describe('MpsTrajectory.expectation() — product observables', () => {
+  it('all-identity: expectation = 1 (normalization check)', () => {
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    traj.apply2(1, 2, CNOT4)
+    traj.apply2(2, 3, CNOT4)
+    const ev = traj.expectation([null, null, null, null])
+    expect(ev.re).toBeCloseTo(1, 12)
+    expect(Math.abs(ev.im)).toBeLessThan(1e-14)
+  })
+
+  it('Bell state n=2: ⟨ZZ⟩ = 1, ⟨ZI⟩ = 0, ⟨XX⟩ = 1', () => {
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    expect(traj.expectation([G.Z, G.Z]).re).toBeCloseTo( 1, 12)
+    expect(traj.expectation([G.Z, null]).re).toBeCloseTo( 0, 12)
+    expect(traj.expectation([null, G.Z]).re).toBeCloseTo( 0, 12)
+    expect(traj.expectation([G.X, G.X]).re).toBeCloseTo( 1, 12)
+    expect(traj.expectation([G.Y, G.Y]).re).toBeCloseTo(-1, 12)
+  })
+
+  it('product state: ⟨Z₀Z₁⟩ = cos(θ₀)·cos(θ₁) (factorizes)', () => {
+    const t0 = 0.9, t1 = 1.4
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.Ry(t0))
+    traj.apply1(1, G.Ry(t1))
+    const expected = Math.cos(t0) * Math.cos(t1)
+    expect(traj.expectation([G.Z, G.Z]).re).toBeCloseTo(expected, 12)
+  })
+
+  it('single non-null op matches expect1()', () => {
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.Ry(0.6))
+    traj.apply1(1, G.Ry(1.1))
+    traj.apply2(0, 1, CNOT4)
+    traj.apply2(1, 2, CNOT4)
+    // ⟨I Z I I⟩ should equal expect1(1, Z)
+    const e1  = traj.expect1(1, G.Z).re
+    const eOp = traj.expectation([null, G.Z, null, null]).re
+    expect(eOp).toBeCloseTo(e1, 12)
+  })
+
+  it('throws TypeError when ops.length ≠ n', () => {
+    const traj = new MpsTrajectory(3, 4)
+    expect(() => traj.expectation([G.Z, G.Z])).toThrow(TypeError)
+  })
+
+  it('GHZ n=4: ⟨ZZZZ⟩ = 1, ⟨ZZZI⟩ = 0', () => {
+    const traj = new MpsTrajectory(4, 8)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    traj.apply2(1, 2, CNOT4)
+    traj.apply2(2, 3, CNOT4)
+    expect(traj.expectation([G.Z, G.Z, G.Z, G.Z]).re).toBeCloseTo(1, 12)
+    expect(traj.expectation([G.Z, G.Z, G.Z, null]).re).toBeCloseTo(0, 12)
+    expect(traj.expectation([G.X, G.X, G.X, G.X]).re).toBeCloseTo(1, 12)
+  })
+
+  it('GHZ n=10: ⟨Z…Z⟩ = 1 — validates transfer matrix at larger n', () => {
+    const n = 10
+    const traj = new MpsTrajectory(n, 4)
+    traj.apply1(0, G.H)
+    for (let q = 0; q < n - 1; q++) traj.apply2(q, q + 1, CNOT4)
+    const allZ = Array.from({ length: n }, () => G.Z as typeof G.Z | null)
+    expect(traj.expectation(allZ).re).toBeCloseTo(1, 10)
+  })
+})
+
+// ── Circuit.expectMps — VQE / Hamiltonian interface ───────────────────────────
+
+describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
+  it('single-qubit: ⟨Z⟩ = 1 for |0⟩, -1 for |1⟩', () => {
+    const term: PauliTerm = { coeff: 1, ops: [G.Z] }
+    expect(new Circuit(1).expectMps([term])).toBeCloseTo(1, 12)
+    expect(new Circuit(1).x(0).expectMps([term])).toBeCloseTo(-1, 12)
+  })
+
+  it('empty terms array returns 0 without building MPS', () => {
+    expect(new Circuit(4).h(0).cx(0, 1).expectMps([])).toBe(0)
+  })
+
+  it('coeff=0 terms are skipped', () => {
+    const terms: PauliTerm[] = [
+      { coeff: 0, ops: [G.Z, null] },
+      { coeff: 1, ops: [null, G.Z] },
+    ]
+    expect(new Circuit(2).expectMps(terms)).toBeCloseTo(1, 12)
+  })
+
+  it('Bell state: ⟨ZZ⟩ = 1, ⟨ZI⟩ = 0 via expectMps()', () => {
+    const c = new Circuit(2).h(0).cx(0, 1)
+    expect(c.expectMps([{ coeff: 1, ops: [G.Z, G.Z] }])).toBeCloseTo(1, 12)
+    expect(c.expectMps([{ coeff: 1, ops: [G.Z, null] }])).toBeCloseTo(0, 12)
+  })
+
+  it('Heisenberg ZZ chain: energy matches analytical E₀ for 2-site singlet', () => {
+    // 2-site Heisenberg ZZ+XX+YY ground state |singlet⟩ = (|01⟩ - |10⟩)/√2
+    // Prepared as: Ry(-π/2) on q0, then CNOT(0,1), then X on q1
+    // (standard singlet preparation)
+    // Ground energy for H = ZZ + XX + YY on singlet = -3
+    const c = new Circuit(2).ry(-Math.PI / 2, 0).cx(0, 1).x(1)
+    const terms: PauliTerm[] = [
+      { coeff: 1, ops: [G.Z, G.Z] },
+      { coeff: 1, ops: [G.X, G.X] },
+      { coeff: 1, ops: [G.Y, G.Y] },
+    ]
+    expect(c.expectMps(terms)).toBeCloseTo(-3, 10)
+  })
+
+  it('sum over identity terms = number of terms (each contributes coeff·1)', () => {
+    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
+    const terms: PauliTerm[] = [
+      { coeff: 2, ops: [null, null, null, null] },
+      { coeff: 3, ops: [null, null, null, null] },
+    ]
+    expect(c.expectMps(terms)).toBeCloseTo(5, 12)
+  })
+
+  it('throws TypeError when ops.length ≠ qubits', () => {
+    const c = new Circuit(3)
+    expect(() => c.expectMps([{ coeff: 1, ops: [G.Z, G.Z] }])).toThrow(TypeError)
+  })
+
+  it('agrees with statevector expectation() for random Ry circuit n=6', () => {
+    // Build a random but deterministic circuit
+    const angles = [0.3, 0.7, 1.1, 1.5, 0.9, 0.4]
+    let c = new Circuit(6)
+    for (let q = 0; q < 6; q++) c = c.ry(angles[q]!, q)
+    for (let q = 0; q < 5; q++) c = c.cx(q, q + 1)
+    for (let q = 0; q < 6; q++) c = c.ry(angles[5 - q]!, q)
+
+    // Compute ⟨Z₀ Z₃⟩ via expectMps and via statevector expectation()
+    const mpsEv = c.expectMps([{ coeff: 1, ops: [G.Z, null, null, G.Z, null, null] }])
+    const svEv  = c.expectation('ZIIZII')
+
+    expect(mpsEv).toBeCloseTo(svEv, 10)
+  })
+
+  it('expectMps and expect1 agree for single-site observables on entangled state', () => {
+    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).ry(0.8, 3)
+    const traj = new MpsTrajectory(4, 8)
+    // Replicate circuit manually on traj for comparison
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    traj.apply2(1, 2, CNOT4)
+    traj.apply1(3, G.Ry(0.8))
+
+    for (let q = 0; q < 4; q++) {
+      const term: PauliTerm = { coeff: 1, ops: Array.from({ length: 4 }, (_, i) => i === q ? G.Z : null) }
+      const fromCircuit = c.expectMps([term])
+      const fromTraj    = traj.expect1(q, G.Z).re
+      expect(fromCircuit).toBeCloseTo(fromTraj, 10)
+    }
+  })
+
+  it('GHZ n=8: total Z magnetization Σ⟨Zq⟩ = 0 (equal superposition)', () => {
+    const n = 8
+    let c = new Circuit(n).h(0)
+    for (let q = 0; q < n - 1; q++) c = c.cx(q, q + 1)
+    const terms: PauliTerm[] = Array.from({ length: n }, (_, q) => ({
+      coeff: 1,
+      ops:   Array.from({ length: n }, (_, i) => i === q ? G.Z : null) as (typeof G.Z | null)[],
+    }))
+    expect(c.expectMps(terms)).toBeCloseTo(0, 10)
   })
 })
