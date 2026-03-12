@@ -14,7 +14,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Circuit, DEVICES, type PauliTerm } from './circuit.js'
+import { Circuit, DEVICES } from './circuit.js'
+import type { PauliTerm } from './algorithms.js'
 import { MpsTrajectory, mpsContract, mpsApply1, mpsApply2, mpsInit, mpsSample, CNOT4, SWAP4 } from './mps.js'
 import type { Gate4x4 } from './statevector.js'
 import * as G from './gates.js'
@@ -1459,7 +1460,7 @@ describe('MpsTrajectory.expectation() — product observables', () => {
 
 describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
   it('single-qubit: ⟨Z⟩ = 1 for |0⟩, -1 for |1⟩', () => {
-    const term: PauliTerm = { coeff: 1, ops: [G.Z] }
+    const term: PauliTerm = { coeff: 1, ops: 'Z' }
     expect(new Circuit(1).expectMps([term])).toBeCloseTo(1, 12)
     expect(new Circuit(1).x(0).expectMps([term])).toBeCloseTo(-1, 12)
   })
@@ -1470,16 +1471,16 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
 
   it('coeff=0 terms are skipped', () => {
     const terms: PauliTerm[] = [
-      { coeff: 0, ops: [G.Z, null] },
-      { coeff: 1, ops: [null, G.Z] },
+      { coeff: 0, ops: 'IZ' },   // Z on q0, skipped
+      { coeff: 1, ops: 'ZI' },   // Z on q1 → ⟨Z₁⟩ = 1 for |00⟩
     ]
     expect(new Circuit(2).expectMps(terms)).toBeCloseTo(1, 12)
   })
 
   it('Bell state: ⟨ZZ⟩ = 1, ⟨ZI⟩ = 0 via expectMps()', () => {
     const c = new Circuit(2).h(0).cx(0, 1)
-    expect(c.expectMps([{ coeff: 1, ops: [G.Z, G.Z] }])).toBeCloseTo(1, 12)
-    expect(c.expectMps([{ coeff: 1, ops: [G.Z, null] }])).toBeCloseTo(0, 12)
+    expect(c.expectMps([{ coeff: 1, ops: 'ZZ' }])).toBeCloseTo(1, 12)
+    expect(c.expectMps([{ coeff: 1, ops: 'IZ' }])).toBeCloseTo(0, 12)
   })
 
   it('Heisenberg ZZ chain: energy matches analytical E₀ for 2-site singlet', () => {
@@ -1489,9 +1490,9 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     // Ground energy for H = ZZ + XX + YY on singlet = -3
     const c = new Circuit(2).ry(-Math.PI / 2, 0).cx(0, 1).x(1)
     const terms: PauliTerm[] = [
-      { coeff: 1, ops: [G.Z, G.Z] },
-      { coeff: 1, ops: [G.X, G.X] },
-      { coeff: 1, ops: [G.Y, G.Y] },
+      { coeff: 1, ops: 'ZZ' },
+      { coeff: 1, ops: 'XX' },
+      { coeff: 1, ops: 'YY' },
     ]
     expect(c.expectMps(terms)).toBeCloseTo(-3, 10)
   })
@@ -1499,15 +1500,15 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
   it('sum over identity terms = number of terms (each contributes coeff·1)', () => {
     const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
     const terms: PauliTerm[] = [
-      { coeff: 2, ops: [null, null, null, null] },
-      { coeff: 3, ops: [null, null, null, null] },
+      { coeff: 2, ops: 'IIII' },
+      { coeff: 3, ops: 'IIII' },
     ]
     expect(c.expectMps(terms)).toBeCloseTo(5, 12)
   })
 
   it('throws TypeError when ops.length ≠ qubits', () => {
     const c = new Circuit(3)
-    expect(() => c.expectMps([{ coeff: 1, ops: [G.Z, G.Z] }])).toThrow(TypeError)
+    expect(() => c.expectMps([{ coeff: 1, ops: 'ZZ' }])).toThrow(TypeError)
   })
 
   it('agrees with statevector expectation() for random Ry circuit n=6', () => {
@@ -1519,7 +1520,8 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     for (let q = 0; q < 6; q++) c = c.ry(angles[5 - q]!, q)
 
     // Compute ⟨Z₀ Z₃⟩ via expectMps and via statevector expectation()
-    const mpsEv = c.expectMps([{ coeff: 1, ops: [G.Z, null, null, G.Z, null, null] }])
+    // ops 'IIZIIZ': ops[2]→q3=Z, ops[5]→q0=Z (vqe convention: ops[n-1-q]→qubit q)
+    const mpsEv = c.expectMps([{ coeff: 1, ops: 'IIZIIZ' }])
     const svEv  = c.expectation('ZIIZII')
 
     expect(mpsEv).toBeCloseTo(svEv, 10)
@@ -1535,7 +1537,8 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     traj.apply1(3, G.Ry(0.8))
 
     for (let q = 0; q < 4; q++) {
-      const term: PauliTerm = { coeff: 1, ops: Array.from({ length: 4 }, (_, i) => i === q ? G.Z : null) }
+      // Z at position n-1-q in string (vqe convention: ops[n-1-q] acts on qubit q)
+      const term: PauliTerm = { coeff: 1, ops: 'I'.repeat(3 - q) + 'Z' + 'I'.repeat(q) }
       const fromCircuit = c.expectMps([term])
       const fromTraj    = traj.expect1(q, G.Z).re
       expect(fromCircuit).toBeCloseTo(fromTraj, 10)
@@ -1548,7 +1551,7 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     for (let q = 0; q < n - 1; q++) c = c.cx(q, q + 1)
     const terms: PauliTerm[] = Array.from({ length: n }, (_, q) => ({
       coeff: 1,
-      ops:   Array.from({ length: n }, (_, i) => i === q ? G.Z : null) as (typeof G.Z | null)[],
+      ops:   'I'.repeat(n - 1 - q) + 'Z' + 'I'.repeat(q),
     }))
     expect(c.expectMps(terms)).toBeCloseTo(0, 10)
   })

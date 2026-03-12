@@ -1112,19 +1112,6 @@ export type TrajOp =
   | { kind: 'two';    a: number;       b: number; gate: Gate4x4 }
   | { kind: 'barrier'                                           }
 
-/**
- * One term in a sum-of-products Hamiltonian: `coeff · ⊗_q ops[q]`.
- *
- * Used with `Circuit.expectMps()`. Pass `null` for identity on qubit q.
- *
- * @example
- * // Heisenberg ZZ coupling between qubits 0 and 1
- * const term: PauliTerm = { coeff: -0.5, ops: [G.Z, G.Z, null, null] }
- */
-export type PauliTerm = {
-  readonly coeff: number
-  readonly ops:   readonly (Gate2x2 | null)[]
-}
 
 /**
  * Execute one trajectory: apply all ops with optional depolarizing noise.
