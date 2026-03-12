@@ -531,6 +531,24 @@ describe('127-qubit IBM Sherbrooke simulation', () => {
   })
 })
 
+// ── runMps noise string resolution ────────────────────────────────────────────
+
+describe('runMps — noise string resolution', () => {
+  it('accepts a device name string — same result as passing the NoiseParams object', () => {
+    let c = new Circuit(4).h(0)
+    for (let i = 0; i < 3; i++) c = c.cnot(i, i + 1)
+
+    const byString = c.runMps({ shots: 256, seed: 1, noise: 'aria-1' })
+    const byObject = c.runMps({ shots: 256, seed: 1, noise: DEVICES['aria-1']!.noise })
+
+    expect(byString.probs).toEqual(byObject.probs)
+  })
+
+  it('throws TypeError for an unknown device name string', () => {
+    expect(() => new Circuit(2).runMps({ noise: 'not-a-device' })).toThrow(TypeError)
+  })
+})
+
 // ── Helpers for high-entanglement tests ───────────────────────────────────────
 
 /**

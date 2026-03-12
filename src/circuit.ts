@@ -844,7 +844,7 @@ export interface MpsRunOptions {
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
   /**
-   * Depolarizing noise parameters.
+   * Depolarizing noise parameters, or a named device profile string (e.g. `'aria-1'`, `'ibm_sherbrooke'`).
    *
    * Enables the **quantum trajectory method**: each shot becomes an independent stochastic
    * trajectory — the circuit is re-executed once per shot with random Pauli errors injected
@@ -854,7 +854,7 @@ export interface MpsRunOptions {
    * This is the standard technique for simulating NISQ hardware at large qubit counts.
    * Noise limits entanglement growth, keeping bond dimension χ tractable even at 100+ qubits.
    */
-  noise?: NoiseParams
+  noise?: string | NoiseParams
   /**
    * Number of parallel worker threads for the noisy trajectory path (default 0 = single-threaded).
    *
@@ -3487,7 +3487,16 @@ export class Circuit {
    *
    * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
    */
-  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
+  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
+    // Resolve noise: named device profile → NoiseParams, or use as-is
+    const noise: NoiseParams | undefined =
+      noiseRaw == null          ? undefined :
+      typeof noiseRaw === 'string' ? (() => {
+        const p = DEVICE_NOISE[noiseRaw]
+        if (!p) throw new TypeError(`Unknown device profile '${noiseRaw}'. Known: ${Object.keys(DEVICE_NOISE).join(', ')}`)
+        return p
+      })() : noiseRaw
+
     const rng     = makePrng(seed)
     const trajOps = toTrajOps(flattenOps(this.#ops))
     const counts  = new Map<bigint, number>()
@@ -3519,6 +3528,9 @@ export class Circuit {
       // MessageChannel gives a MessagePort pair for receiveMessageOnPort (synchronous recv).
       const wtLocal = wt
       const isBuilt = !import.meta.url.endsWith('.ts')
+      if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
+        console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
+      }
       if (numWorkers > 1 && isBuilt && wtLocal !== null) {
         const workerUrl = new URL('./mps.worker.js', import.meta.url)
         const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
@@ -3587,13 +3599,14 @@ export class Circuit {
    *
    * Uses the same `PauliTerm` convention as `vqe()`:
    * `ops[0]` acts on qubit n-1 (MSB); `ops[n-1]` acts on qubit 0 (LSB).
+   * **Qubit 0 is the rightmost character** — `'ZZII'` means Z on qubits 3 and 2, identity on 1 and 0.
    *
    * @example
    * // Heisenberg ZZ + XX chain on 4 qubits — same terms work with vqe() too
    * const energy = circuit.expectMps([
-   *   { coeff: -0.5, ops: 'ZZII' },
-   *   { coeff: -0.5, ops: 'IZZI' },
-   *   { coeff: -0.5, ops: 'XXII' },
+   *   { coeff: -0.5, ops: 'ZZII' },  // ZZ on qubits 3,2
+   *   { coeff: -0.5, ops: 'IZZI' },  // ZZ on qubits 2,1
+   *   { coeff: -0.5, ops: 'XXII' },  // XX on qubits 3,2
    * ])
    */
   expectMps(
