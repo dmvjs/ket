@@ -8,7 +8,7 @@
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
 import { Complex, ZERO } from './complex.js'
-import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, SWAP4 } from './mps.js'
+import { CNOT4, controlledGate, mpsApply1, mpsApply2, mpsInit, mpsSample, MPS, MpsTrajectory, SWAP4 } from './mps.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
 import { CliffordSim } from './clifford.js'
 
@@ -299,6 +299,25 @@ function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): S
   if (pa) sv = applySingle(sv, a, pa)
   if (pb) sv = applySingle(sv, b, pb)
   return sv
+}
+
+/** Apply single-qubit depolarizing channel to a trajectory MPS in place. */
+function dep1traj(traj: MpsTrajectory, q: number, p: number, rand: number): void {
+  if (rand >= p) return
+  const r = rand / p
+  if (r < 1/3)      traj.apply1(q, G.X)
+  else if (r < 2/3) traj.apply1(q, G.Y)
+  else               traj.apply1(q, G.Z)
+}
+
+/** Apply two-qubit depolarizing channel to a trajectory MPS in place.
+ *  Pauli errors are single-qubit ops — no bond dimension growth.
+ */
+function dep2traj(traj: MpsTrajectory, a: number, b: number, p: number, rand: number): void {
+  if (rand >= p) return
+  const [pa, pb] = TWO_PAULI[Math.min(Math.floor(rand / p * 15), 14)]!
+  if (pa) traj.apply1(a, pa)
+  if (pb) traj.apply1(b, pb)
 }
 
 // ─── IonQ JSON types ──────────────────────────────────────────────────────────
@@ -767,6 +786,18 @@ export interface MpsRunOptions {
   maxBond?: number
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
+  /**
+   * Depolarizing noise parameters.
+   *
+   * Enables the **quantum trajectory method**: each shot becomes an independent stochastic
+   * trajectory — the circuit is re-executed once per shot with random Pauli errors injected
+   * after each gate. Averaging over trajectories converges to the noisy mixed-state
+   * distribution at rate 1/√shots.
+   *
+   * This is the standard technique for simulating NISQ hardware at large qubit counts.
+   * Noise limits entanglement growth, keeping bond dimension χ tractable even at 100+ qubits.
+   */
+  noise?: NoiseParams
 }
 
 /**
@@ -3377,50 +3408,155 @@ export class Circuit {
    * Memory: O(n · χ² · 2) vs O(2ⁿ) for full statevector.
    * Handles 50+ qubit circuits that would be intractable with the statevector backend.
    *
-   * Limitations: no noise, no mid-circuit measure/reset/if; Toffoli and CSWAP
+   * Limitations: no mid-circuit measure/reset/if; Toffoli and CSWAP
    * must be decomposed into single- and two-qubit gates first.
+   *
+   * With `noise`: switches to **quantum trajectory mode** — one full circuit execution per shot,
+   * with random Pauli errors injected after each gate. Noise limits entanglement growth so bond
+   * dimension stays tractable even at 100+ qubits. Simulates realistic NISQ hardware accurately.
    *
    * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
    */
-  runMps({ shots = 1024, seed, maxBond = 64, initialState }: MpsRunOptions = {}): Distribution {
-    const rng = makePrng(seed)
-    let state = mpsInit(this.qubits)
-    if (initialState !== undefined) {
-      svFromBitstring(initialState, this.qubits) // validate
-      const bits = initialState.split('') // bits[q] = bit for qubit q (q0 leftmost)
-      for (let q = 0; q < this.qubits; q++) {
-        if (bits[q] === '1') state = mpsApply1(state, q, G.X)
-      }
-    }
+  runMps({ shots = 1024, seed, maxBond = 64, initialState, noise }: MpsRunOptions = {}): Distribution {
+    const rng     = makePrng(seed)
+    const flatOps = flattenOps(this.#ops)
+    const counts  = new Map<bigint, number>()
 
-    for (const op of flattenOps(this.#ops)) {
-      switch (op.kind) {
-        case 'single':     state = mpsApply1(state, op.q, op.gate);                                        break
-        case 'cnot':       state = mpsApply2(state, op.control, op.target, CNOT4, maxBond);                break
-        case 'swap':       state = mpsApply2(state, op.a, op.b, SWAP4, maxBond);                           break
-        case 'two':        state = mpsApply2(state, op.a, op.b, op.gate, maxBond);                         break
-        case 'controlled': state = mpsApply2(state, op.control, op.target, controlledGate(op.gate), maxBond); break
-        case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
-        case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
-        case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
-        case 'unitary': {
-          const n = op.qubits.length
-          if (n === 1)      state = mpsApply1(state, op.qubits[0]!, op.matrix as Gate2x2)
-          else if (n === 2) state = mpsApply2(state, op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4, maxBond)
-          else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
-          break
+    /** Apply the flat op list to an MPS state using immutable helpers. */
+    const applyOpsClean = (s: MPS): MPS => {
+      for (const op of flatOps) {
+        switch (op.kind) {
+          case 'single':     s = mpsApply1(s, op.q, op.gate); break
+          case 'cnot':       s = mpsApply2(s, op.control, op.target, CNOT4, maxBond); break
+          case 'swap':       s = mpsApply2(s, op.a, op.b, SWAP4, maxBond); break
+          case 'two':        s = mpsApply2(s, op.a, op.b, op.gate, maxBond); break
+          case 'controlled': s = mpsApply2(s, op.control, op.target, controlledGate(op.gate), maxBond); break
+          case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
+          case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+          case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
+          case 'unitary': {
+            const n = op.qubits.length
+            if (n === 1)      s = mpsApply1(s, op.qubits[0]!, op.matrix as Gate2x2)
+            else if (n === 2) s = mpsApply2(s, op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4, maxBond)
+            else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
+            break
+          }
+          case 'measure': case 'reset': case 'if':
+            throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+          case 'barrier': break
+          default: { const _exhaustive: never = op; break }
         }
-        case 'measure': case 'reset': case 'if':
-          throw new TypeError(`'${op.kind}' not supported in MPS mode`)
-        case 'barrier': break
-        default: { const _exhaustive: never = op; break }
+      }
+      return s
+    }
+
+    // Shared helper: apply flat op list to an MpsTrajectory (no noise).
+    const applyOpsToTraj = (traj: MpsTrajectory): void => {
+      for (const op of flatOps) {
+        switch (op.kind) {
+          case 'single':     traj.apply1(op.q, op.gate); break
+          case 'cnot':       traj.apply2(op.control, op.target, CNOT4); break
+          case 'swap':       traj.apply2(op.a, op.b, SWAP4); break
+          case 'two':        traj.apply2(op.a, op.b, op.gate); break
+          case 'controlled': traj.apply2(op.control, op.target, controlledGate(op.gate)); break
+          case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
+          case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+          case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
+          case 'unitary': {
+            const nu = op.qubits.length
+            if (nu === 1)      traj.apply1(op.qubits[0]!, op.matrix as Gate2x2)
+            else if (nu === 2) traj.apply2(op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4)
+            else throw new TypeError(`unitary gate with ${nu} qubits is not supported in MPS mode; use run() instead`)
+            break
+          }
+          case 'measure': case 'reset': case 'if':
+            throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+          case 'barrier': break
+          default: { const _exhaustive: never = op; break }
+        }
       }
     }
 
-    const counts = new Map<bigint, number>()
-    for (let i = 0; i < shots; i++) {
-      const idx = mpsSample(state, rng)
-      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+    if (!noise) {
+      // Clean path: build state once with SVD-backed MpsTrajectory, sample shots times.
+      // SVD (vs the legacy qrMGS path) gives optimal Schmidt truncation at each bond cut
+      // and correct results for high-entanglement circuits such as random brickwork and QFT.
+      const traj = new MpsTrajectory(this.qubits, maxBond)
+      if (initialState !== undefined) {
+        svFromBitstring(initialState, this.qubits)
+        for (let q = 0; q < this.qubits; q++) {
+          if (initialState[q] === '1') traj.apply1(q, G.X)
+        }
+      }
+      applyOpsToTraj(traj)
+      for (let i = 0; i < shots; i++) {
+        const idx = traj.sample(rng)
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      }
+    } else {
+      // Noisy path: quantum trajectory method.
+      // One MpsTrajectory is allocated once; reset() restores |0...0⟩ before each shot.
+      // apply1/apply2/sample are zero-allocation in the hot path.
+      const p1    = noise.p1    ?? 0
+      const p2    = noise.p2    ?? 0
+      const pMeas = noise.pMeas ?? 0
+      const traj  = new MpsTrajectory(this.qubits, maxBond)
+
+      if (initialState !== undefined) svFromBitstring(initialState, this.qubits) // validate once
+
+      for (let i = 0; i < shots; i++) {
+        traj.reset()
+        if (initialState !== undefined) {
+          for (let q = 0; q < this.qubits; q++) {
+            if (initialState[q] === '1') traj.apply1(q, G.X)
+          }
+        }
+        for (const op of flatOps) {
+          switch (op.kind) {
+            case 'single':
+              traj.apply1(op.q, op.gate)
+              if (p1) dep1traj(traj, op.q, p1, rng())
+              break
+            case 'cnot':
+              traj.apply2(op.control, op.target, CNOT4)
+              if (p2) dep2traj(traj, op.control, op.target, p2, rng())
+              break
+            case 'swap':
+              traj.apply2(op.a, op.b, SWAP4)
+              if (p2) dep2traj(traj, op.a, op.b, p2, rng())
+              break
+            case 'two':
+              traj.apply2(op.a, op.b, op.gate)
+              if (p2) dep2traj(traj, op.a, op.b, p2, rng())
+              break
+            case 'controlled':
+              traj.apply2(op.control, op.target, controlledGate(op.gate))
+              if (p2) dep2traj(traj, op.control, op.target, p2, rng())
+              break
+            case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
+            case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+            case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
+            case 'unitary': {
+              const n = op.qubits.length
+              if (n === 1)      traj.apply1(op.qubits[0]!, op.matrix as Gate2x2)
+              else if (n === 2) traj.apply2(op.qubits[0]!, op.qubits[1]!, op.matrix as Gate4x4)
+              else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
+              break
+            }
+            case 'measure': case 'reset': case 'if':
+              throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+            case 'barrier': break
+            default: { const _exhaustive: never = op; break }
+          }
+        }
+        let idx = traj.sample(rng)
+        if (pMeas) {
+          for (let q = 0; q < this.qubits; q++) {
+            if (rng() < pMeas) idx ^= (1n << BigInt(q))
+          }
+        }
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      }
     }
 
     const cregCounts = new Map<string, number[]>(
