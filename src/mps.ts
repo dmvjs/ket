@@ -410,6 +410,16 @@ export class MpsTrajectory {
   private readonly stRe:  Float64Array
   private readonly stIm:  Float64Array
 
+  // Workspace for expectation() — reused across all terms in a Hamiltonian loop.
+  // ogBuf/fBuf: OΓ and F intermediates [l/p'][p'/r][r/l'], sized maxChi*2 × maxChi*2.
+  // exCur/exNxt: current and next E matrix, sized maxChi × maxChi.
+  // exDiag: diagonal of E when it is known to be diagonal (leading identity fast path).
+  private readonly exOgBuf:  Float64Array
+  private readonly exFBuf:   Float64Array
+  private readonly exCurBuf: Float64Array
+  private readonly exNxtBuf: Float64Array
+  private readonly exDiag:   Float64Array
+
   constructor(n: number, maxChi: number, truncErr = 0) {
     this.n        = n
     this.maxChi   = maxChi
@@ -438,6 +448,12 @@ export class MpsTrajectory {
     this.sv1im = new Float64Array(maxChi)
     this.stRe  = new Float64Array(maxChi)
     this.stIm  = new Float64Array(maxChi)
+
+    this.exOgBuf  = new Float64Array(maxCols * maxCols * 2)
+    this.exFBuf   = new Float64Array(maxCols * maxCols * 2)
+    this.exCurBuf = new Float64Array(maxChi  * maxChi  * 2)
+    this.exNxtBuf = new Float64Array(maxChi  * maxChi  * 2)
+    this.exDiag   = new Float64Array(maxChi)
 
     this.reset()
   }
@@ -916,13 +932,12 @@ export class MpsTrajectory {
   expectation(ops: readonly (Gate2x2 | null)[]): Complex {
     if (ops.length !== this.n)
       throw new TypeError(`ops.length (${ops.length}) must equal n (${this.n})`)
-    const n = this.n, mc = this.maxChi
-    // All buffers allocated once — no per-site allocation.
-    const diagBuf = new Float64Array(mc)             // diagonal of E when isDiag
-    const ogBuf   = new Float64Array(mc * 2 * mc * 2) // OΓ scratch [l][p'][r], complex
-    const fBuf    = new Float64Array(mc * 2 * mc * 2) // F scratch [p'][r][l'], complex
-    const curBuf  = new Float64Array(mc * mc * 2)     // current E[l][l'], complex
-    const nxtBuf  = new Float64Array(mc * mc * 2)     // next E'[r][r'], complex
+    const n      = this.n
+    const ogBuf  = this.exOgBuf
+    const fBuf   = this.exFBuf
+    const curBuf = this.exCurBuf
+    const nxtBuf = this.exNxtBuf
+    const diagBuf = this.exDiag
 
     diagBuf[0] = 1
     let isDiag = true
@@ -956,12 +971,10 @@ export class MpsTrajectory {
             const i1 = ((l * 2 + 1) * chiR + r) * 2
             const g0re = data[i0]!, g0im = data[i0 + 1]!
             const g1re = data[i1]!, g1im = data[i1 + 1]!
-            const oi0 = ((l * 2 + 0) * chiR + r) * 2
-            const oi1 = ((l * 2 + 1) * chiR + r) * 2
-            ogBuf[oi0]     = are*g0re - aim*g0im + bre*g1re - bim*g1im
-            ogBuf[oi0 + 1] = are*g0im + aim*g0re + bre*g1im + bim*g1re
-            ogBuf[oi1]     = cre*g0re - cim*g0im + dre*g1re - dim*g1im
-            ogBuf[oi1 + 1] = cre*g0im + cim*g0re + dre*g1im + dim*g1re
+            ogBuf[i0]     = are*g0re - aim*g0im + bre*g1re - bim*g1im
+            ogBuf[i0 + 1] = are*g0im + aim*g0re + bre*g1im + bim*g1re
+            ogBuf[i1]     = cre*g0re - cim*g0im + dre*g1re - dim*g1im
+            ogBuf[i1 + 1] = cre*g0im + cim*g0re + dre*g1im + dim*g1re
           }
         }
       }
