@@ -168,19 +168,53 @@ function cregValue(shotCregs: Map<string, boolean[]>, name: string): number {
 /** Apply ops to `sv`, handling mid-circuit measurement with `rng`. Recursive for IfOp. */
 function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number, noise?: NoiseParams): StateVector {
   let sv = svIn
-  const p1 = noise?.p1 ?? 0
-  const p2 = noise?.p2 ?? 0
-  const pM = noise?.pMeas ?? 0
+  const p1     = noise?.p1     ?? 0
+  const p2     = noise?.p2     ?? 0
+  const pM     = noise?.pMeas  ?? 0
+  const gamma  = noise?.gamma  ?? 0
+  const lambda = noise?.lambda ?? 0
+  const kraus1 = noise?.kraus1
+  const kraus2 = noise?.kraus2
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
-      case 'single':     sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()); break
-      case 'cnot':       sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
-      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
-      case 'swap':       sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'single':
+        sv = applySingle(sv, op.q, op.gate)
+        if (p1)     sv = dep1(sv, op.q, p1, rng())
+        if (gamma)  sv = dampAmp1(sv, op.q, gamma, rng())
+        if (lambda) sv = dampPhase1(sv, op.q, lambda, rng())
+        if (kraus1) sv = applyKraus1Channel(sv, op.q, kraus1, rng)
+        break
+      case 'cnot':
+        sv = applyCNOT(sv, op.control, op.target)
+        if (p2)     sv = dep2(sv, op.control, op.target, p2, rng())
+        if (gamma)  { sv = dampAmp1(sv, op.control, gamma, rng()); sv = dampAmp1(sv, op.target, gamma, rng()) }
+        if (lambda) { sv = dampPhase1(sv, op.control, lambda, rng()); sv = dampPhase1(sv, op.target, lambda, rng()) }
+        if (kraus2) sv = applyKraus2Channel(sv, op.control, op.target, kraus2, rng)
+        break
+      case 'controlled':
+        sv = applyControlled(sv, op.control, op.target, op.gate)
+        if (p2)     sv = dep2(sv, op.control, op.target, p2, rng())
+        if (gamma)  { sv = dampAmp1(sv, op.control, gamma, rng()); sv = dampAmp1(sv, op.target, gamma, rng()) }
+        if (lambda) { sv = dampPhase1(sv, op.control, lambda, rng()); sv = dampPhase1(sv, op.target, lambda, rng()) }
+        if (kraus2) sv = applyKraus2Channel(sv, op.control, op.target, kraus2, rng)
+        break
+      case 'swap':
+        sv = applySWAP(sv, op.a, op.b)
+        if (p2)     sv = dep2(sv, op.a, op.b, p2, rng())
+        if (gamma)  { sv = dampAmp1(sv, op.a, gamma, rng()); sv = dampAmp1(sv, op.b, gamma, rng()) }
+        if (lambda) { sv = dampPhase1(sv, op.a, lambda, rng()); sv = dampPhase1(sv, op.b, lambda, rng()) }
+        if (kraus2) sv = applyKraus2Channel(sv, op.a, op.b, kraus2, rng)
+        break
       case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
       case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
       case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
-      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'two':
+        sv = applyTwo(sv, op.a, op.b, op.gate)
+        if (p2)     sv = dep2(sv, op.a, op.b, p2, rng())
+        if (gamma)  { sv = dampAmp1(sv, op.a, gamma, rng()); sv = dampAmp1(sv, op.b, gamma, rng()) }
+        if (lambda) { sv = dampPhase1(sv, op.a, lambda, rng()); sv = dampPhase1(sv, op.b, lambda, rng()) }
+        if (kraus2) sv = applyKraus2Channel(sv, op.a, op.b, kraus2, rng)
+        break
       case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
       case 'measure': {
         const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
@@ -216,6 +250,30 @@ export interface NoiseParams {
   p2?: number
   /** SPAM: probability of flipping each measured bit (0–1). */
   pMeas?: number
+  /**
+   * Amplitude damping (T1 relaxation) probability per single-qubit gate.
+   * Physically: γ = 1 − exp(−t_gate / T1).
+   * Applied as a quantum jump (|1⟩ → |0⟩) after each single-qubit gate;
+   * also applied independently to each qubit after two-qubit gates.
+   */
+  gamma?: number
+  /**
+   * Pure dephasing (T2 beyond T1) probability per single-qubit gate.
+   * Physically: λ = 1 − exp(−2 t_gate (1/T2 − 1/(2T1))).
+   * Applied as a quantum jump (kills off-diagonal coherences) after each single-qubit gate.
+   */
+  lambda?: number
+  /**
+   * Custom Kraus operators applied after each single-qubit gate.
+   * Must satisfy Σ_k K_k† K_k = I (trace-preserving channel).
+   * Each K_k is a 2×2 complex matrix; a random one is selected per shot per gate.
+   */
+  kraus1?: readonly Gate2x2[]
+  /**
+   * Custom Kraus operators applied after each two-qubit gate.
+   * Must satisfy Σ_k K_k† K_k = I. Each K_k is a 4×4 complex matrix.
+   */
+  kraus2?: readonly Gate4x4[]
 }
 
 /** Hardware specs and noise parameters for a quantum device. */
@@ -300,6 +358,139 @@ function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): S
   const [pa, pb] = TWO_PAULI[Math.min(Math.floor(rand / p * 15), 14)]!
   if (pa) sv = applySingle(sv, a, pa)
   if (pb) sv = applySingle(sv, b, pb)
+  return sv
+}
+
+/**
+ * Amplitude damping quantum jump on qubit q (T1 relaxation).
+ * K0 = diag(1, √(1−γ)) (no decay), K1 = [[0,√γ],[0,0]] (decay |1⟩→|0⟩).
+ * Uses one random number: fires K1 with probability γ·P(q=1), otherwise K0.
+ */
+function dampAmp1(sv: StateVector, q: number, gamma: number, rand: number): StateVector {
+  const mask = 1n << BigInt(q)
+  let p1 = 0
+  for (const [idx, amp] of sv) {
+    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
+  }
+  const pJump = gamma * p1
+  if (pJump < 1e-15) return sv
+
+  if (rand < pJump) {
+    // K1 fires: decay |1⟩ → |0⟩ (equivalent to project-to-|1⟩ then X)
+    const scale = 1 / Math.sqrt(p1)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      if (idx & mask) {
+        const flipped = idx ^ mask
+        const cur = next.get(flipped)
+        if (cur) next.set(flipped, { re: cur.re + amp.re * scale, im: cur.im + amp.im * scale })
+        else     next.set(flipped, { re: amp.re * scale,           im: amp.im * scale })
+      }
+    }
+    return next
+  } else {
+    // K0 fires: damp |1⟩ amplitudes, renormalize
+    const sqG = Math.sqrt(1 - gamma)
+    const inv = 1 / Math.sqrt(1 - pJump)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      const s = (idx & mask) ? sqG * inv : inv
+      next.set(idx, { re: amp.re * s, im: amp.im * s })
+    }
+    return next
+  }
+}
+
+/**
+ * Pure dephasing quantum jump on qubit q (T2 beyond T1 contribution).
+ * K0 = diag(1, √(1−λ)) (no dephasing), K1 = diag(0, √λ) (dephasing, projects to |1⟩).
+ * Kills off-diagonal coherences without changing populations.
+ */
+function dampPhase1(sv: StateVector, q: number, lambda: number, rand: number): StateVector {
+  const mask = 1n << BigInt(q)
+  let p1 = 0
+  for (const [idx, amp] of sv) {
+    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
+  }
+  const pJump = lambda * p1
+  if (pJump < 1e-15) return sv
+
+  if (rand < pJump) {
+    // K1 fires: project to |1⟩ (dephasing collapse)
+    const scale = 1 / Math.sqrt(p1)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      if (idx & mask) next.set(idx, { re: amp.re * scale, im: amp.im * scale })
+    }
+    return next
+  } else {
+    // K0 fires: damp |1⟩ amplitudes, renormalize
+    const sqL = Math.sqrt(1 - lambda)
+    const inv = 1 / Math.sqrt(1 - pJump)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      const s = (idx & mask) ? sqL * inv : inv
+      next.set(idx, { re: amp.re * s, im: amp.im * s })
+    }
+    return next
+  }
+}
+
+/**
+ * Apply a custom single-qubit Kraus channel on qubit q.
+ * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
+ */
+function applyKraus1Channel(sv: StateVector, q: number, kraus: readonly Gate2x2[], rng: () => number): StateVector {
+  let cumP = 0
+  const probs: number[] = []
+  const results: StateVector[] = []
+  for (const K of kraus) {
+    const out = applySingle(sv, q, K)
+    let p = 0
+    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
+    probs.push(p)
+    results.push(out)
+    cumP += p
+  }
+  let r = rng() * cumP
+  for (let k = 0; k < results.length; k++) {
+    r -= probs[k]!
+    if (r <= 0) {
+      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
+      const next: StateVector = new Map()
+      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
+      return next
+    }
+  }
+  return sv
+}
+
+/**
+ * Apply a custom two-qubit Kraus channel on qubits a and b.
+ * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
+ */
+function applyKraus2Channel(sv: StateVector, a: number, b: number, kraus: readonly Gate4x4[], rng: () => number): StateVector {
+  let cumP = 0
+  const probs: number[] = []
+  const results: StateVector[] = []
+  for (const K of kraus) {
+    const out = applyTwo(sv, a, b, K)
+    let p = 0
+    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
+    probs.push(p)
+    results.push(out)
+    cumP += p
+  }
+  let r = rng() * cumP
+  for (let k = 0; k < results.length; k++) {
+    r -= probs[k]!
+    if (r <= 0) {
+      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
+      const next: StateVector = new Map()
+      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
+      return next
+    }
+  }
   return sv
 }
 
@@ -1119,6 +1310,56 @@ export class Distribution {
     els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${ml + barsSpan + 2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n${els.join('\n')}\n</svg>`
+  }
+
+  /**
+   * Apply inverse per-qubit readout error mitigation.
+   *
+   * Corrects measurement results for independent per-qubit bit-flip errors at rate `p`
+   * (the `pMeas` parameter used during simulation). Applies the exact inverse of the
+   * per-qubit confusion matrix: A_q = [[1−p, p], [p, 1−p]] → A_q⁻¹ = diag correction.
+   *
+   * The inverse is applied qubit-by-qubit in sequence, equivalent to the tensor-product
+   * inverse A⁻¹ = A_0⁻¹ ⊗ … ⊗ A_{n−1}⁻¹. Negative probabilities are clipped to 0 and
+   * the result is renormalized — standard practice for near-threshold error rates.
+   *
+   * @param p Readout error probability per qubit (the same `pMeas` used in `.run()`).
+   *
+   * @example
+   * const d = circuit.run({ shots: 8192, noise: { pMeas: 0.02 } })
+   * const corrected = d.mitigateReadout(0.02)
+   */
+  mitigateReadout(p: number): Distribution {
+    if (p <= 0 || p >= 0.5) return this
+    const inv = 1 / (1 - 2 * p)
+    let corrected: Record<string, number> = { ...this.probs }
+
+    for (let q = 0; q < this.qubits; q++) {
+      const next: Record<string, number> = {}
+      for (const [bs, prob] of Object.entries(corrected)) {
+        const flipped = bs.slice(0, q) + (bs[q] === '0' ? '1' : '0') + bs.slice(q + 1)
+        const pFl = corrected[flipped] ?? 0
+        next[bs] = (next[bs] ?? 0) + inv * (prob - p * pFl)
+      }
+      corrected = next
+    }
+
+    // Clip negatives and renormalize
+    let total = 0
+    const clipped: Record<string, number> = {}
+    for (const [bs, prob] of Object.entries(corrected)) {
+      if (prob > 0) { clipped[bs] = prob; total += prob }
+    }
+    if (total === 0) return this
+
+    const counts = new Map<bigint, number>()
+    for (const [bs, prob] of Object.entries(clipped)) {
+      // Bitstring is q0-leftmost; reconstruct index with bit 0 = q0
+      let idx = 0n
+      for (let i = 0; i < bs.length; i++) if (bs[i] === '1') idx |= 1n << BigInt(i)
+      counts.set(idx, Math.round(prob / total * this.shots))
+    }
+    return new Distribution(this.qubits, this.shots, counts, new Map(), this.truncated, this.backend, this.peakChi)
   }
 }
 
@@ -3614,9 +3855,11 @@ export class Circuit {
       }
     } else {
       // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
-      const p1    = noise?.p1    ?? 0
-      const p2    = noise?.p2    ?? 0
-      const pMeas = noise?.pMeas ?? 0
+      const p1     = noise?.p1     ?? 0
+      const p2     = noise?.p2     ?? 0
+      const pMeas  = noise?.pMeas  ?? 0
+      const gamma  = noise?.gamma  ?? 0
+      const lambda = noise?.lambda ?? 0
       if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
 
       // Parallel path: workers handle the noisy+clean-mid-circuit case.
@@ -3673,7 +3916,7 @@ export class Circuit {
                 Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
               )
             : undefined
-          applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas)
+          applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
           let idx = traj.sample(rng)
           if (pMeas) {
             for (let q = 0; q < this.qubits; q++) {

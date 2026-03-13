@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
+import type { Gate2x2, Gate4x4 } from './statevector.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
@@ -7570,5 +7571,144 @@ describe('Circuit.simulate() — output equivalence with direct backends', () =>
     for (const [k, v] of Object.entries(direct.probs)) {
       expect(sim.probs[k] ?? 0).toBeCloseTo(v, 1)
     }
+  })
+})
+
+// ── T1/T2 noise channels ──────────────────────────────────────────────────────
+
+describe('T1/T2 noise — statevector quantum jumps', () => {
+  it('amplitude damping: |1⟩ with gamma=1 decays to |0⟩ in one shot', () => {
+    // gamma=1 → guaranteed decay; |1⟩ → |0⟩
+    const d = new Circuit(1).x(0).run({ shots: 256, noise: { gamma: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(1, 2)
+  })
+
+  it('amplitude damping: |0⟩ unaffected (no population to decay)', () => {
+    const d = new Circuit(1).run({ shots: 256, noise: { gamma: 0.5 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(1, 2)
+  })
+
+  it('amplitude damping: |+⟩ with large gamma approaches maximally mixed populations', () => {
+    // High gamma drives excited population to ground; expect P(0) > P(1)
+    const d = new Circuit(1).h(0).run({ shots: 4096, noise: { gamma: 0.9 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeGreaterThan(d.probs['1'] ?? 0)
+  })
+
+  it('amplitude damping via DM: trace preserved and populations correct', () => {
+    // |1⟩ with gamma=0.5: P(0)=0.5, P(1)=0.5 after one application
+    const dm = new Circuit(1).x(0).dm({ noise: { gamma: 0.5 } })
+    const probs = dm.probabilities()
+    expect(probs['0'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['1'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(dm.purity()).toBeLessThan(1)  // mixed state
+  })
+
+  it('phase damping: |+⟩ with lambda=1 collapses to classical mixture', () => {
+    // lambda=1: off-diagonal coherences destroyed → P(0)=P(1)=0.5
+    const dm = new Circuit(1).h(0).dm({ noise: { lambda: 1 } })
+    const probs = dm.probabilities()
+    expect(probs['0'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['1'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(dm.purity()).toBeCloseTo(0.5, 10)  // maximally mixed 1-qubit state
+  })
+
+  it('phase damping: diagonal elements unchanged', () => {
+    // X gate → |1⟩; lambda=0.5: P(1) still 1 (populations unchanged)
+    const dm = new Circuit(1).x(0).dm({ noise: { lambda: 0.5 } })
+    const probs = dm.probabilities()
+    expect(probs['1'] ?? 0).toBeCloseTo(1, 10)
+  })
+
+  it('T1/T2 MPS: amplitude damping reduces |1⟩ population', () => {
+    const d = new Circuit(3).x(0).x(1).runMps({ shots: 512, noise: { gamma: 0.8 }, seed: 1 })
+    // After large amplitude damping, most population should be at |0⟩
+    expect(d.probs['000'] ?? 0).toBeGreaterThan(0.3)
+  })
+
+  it('T1/T2 combined: depolarizing + T1 + T2 all active simultaneously', () => {
+    // Just check it runs without error and gives a valid distribution
+    const d = new Circuit(2).h(0).cnot(0, 1).run({
+      shots: 256, seed: 1,
+      noise: { p1: 0.001, p2: 0.01, gamma: 0.005, lambda: 0.003 },
+    })
+    const total = Object.values(d.probs).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 5)
+  })
+})
+
+describe('custom Kraus channels', () => {
+  it('amplitude damping via explicit Kraus operators matches built-in gamma', () => {
+    const gamma = 0.3
+    const sqG   = Math.sqrt(gamma), sqOmG = Math.sqrt(1 - gamma)
+    // K0 = [[1,0],[0,sqrt(1-gamma)]], K1 = [[0,sqrt(gamma)],[0,0]]
+    const K0 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmG,im:0}]] as Gate2x2
+    const K1 = [[{re:0,im:0},{re:sqG,im:0}],[{re:0,im:0},{re:0,im:0}]] as Gate2x2
+    const shots = 4096, seed = 42
+    // |1⟩ state: built-in gamma vs explicit Kraus should give same distribution
+    const dBuiltin = new Circuit(1).x(0).run({ shots, seed, noise: { gamma } })
+    const dKraus   = new Circuit(1).x(0).run({ shots, seed, noise: { kraus1: [K0, K1] } })
+    // Populations should be close (same channel, same seed)
+    expect(Math.abs((dBuiltin.probs['0'] ?? 0) - (dKraus.probs['0'] ?? 0))).toBeLessThan(0.05)
+  })
+
+  it('identity Kraus channel leaves distribution close to ideal (Bell state → ≈50/50)', () => {
+    // Kraus path uses different RNG cadence than clean path, so same seed gives different
+    // shot samples — compare against known ideal (Bell state = 50/50 |00⟩/|11⟩) instead.
+    const I2: Gate2x2 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:1,im:0}]]
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 4096, seed: 1, noise: { kraus1: [I2] } })
+    expect(d.probs['00'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['11'] ?? 0).toBeCloseTo(0.5, 1)
+    expect((d.probs['01'] ?? 0) + (d.probs['10'] ?? 0)).toBeLessThan(0.01)
+  })
+
+  it('Kraus 2Q: identity channel preserves Bell state distribution', () => {
+    const I4: Gate4x4 = [
+      [{re:1,im:0},{re:0,im:0},{re:0,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:1,im:0},{re:0,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:0,im:0},{re:1,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:0,im:0},{re:0,im:0},{re:1,im:0}],
+    ]
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 4096, seed: 1, noise: { kraus2: [I4] } })
+    expect(d.probs['00'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['11'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('DM Kraus1: amplitude damping channel matches amplitudeDamping1 output', () => {
+    const gamma = 0.4
+    const sqG = Math.sqrt(gamma), sqOmG = Math.sqrt(1 - gamma)
+    const K0 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmG,im:0}]] as Gate2x2
+    const K1 = [[{re:0,im:0},{re:sqG,im:0}],[{re:0,im:0},{re:0,im:0}]] as Gate2x2
+    const dBuiltin = new Circuit(1).x(0).dm({ noise: { gamma } })
+    const dKraus   = new Circuit(1).x(0).dm({ noise: { kraus1: [K0, K1] } })
+    const pb = dBuiltin.probabilities(), pk = dKraus.probabilities()
+    expect(pb['0'] ?? 0).toBeCloseTo(pk['0'] ?? 0, 8)
+    expect(pb['1'] ?? 0).toBeCloseTo(pk['1'] ?? 0, 8)
+  })
+})
+
+describe('readout error mitigation', () => {
+  it('mitigateReadout corrects flip errors toward ideal distribution', () => {
+    const pMeas = 0.05
+    const shots = 16384
+    // Bell state: ideal = 50/50 |00⟩/|11⟩; noisy → some |01⟩/|10⟩
+    const noisy  = new Circuit(2).h(0).cnot(0, 1).run({ shots, seed: 1, noise: { pMeas } })
+    const corrected = noisy.mitigateReadout(pMeas)
+    // Correction should push |01⟩ and |10⟩ weight back toward |00⟩ and |11⟩
+    expect((corrected.probs['01'] ?? 0)).toBeLessThan(noisy.probs['01'] ?? 0)
+    expect((corrected.probs['00'] ?? 0)).toBeGreaterThanOrEqual(noisy.probs['00'] ?? 0)
+  })
+
+  it('mitigateReadout with p=0 returns same distribution', () => {
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 512, seed: 1 })
+    const m = d.mitigateReadout(0)
+    expect(m).toBe(d)  // same object
+  })
+
+  it('mitigateReadout probabilities sum to 1', () => {
+    const pMeas = 0.03
+    const noisy = new Circuit(3).h(0).h(1).h(2).run({ shots: 1024, seed: 1, noise: { pMeas } })
+    const corrected = noisy.mitigateReadout(pMeas)
+    const total = Object.values(corrected.probs).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 1)  // integer rounding of counts introduces ~1/shots error
   })
 })

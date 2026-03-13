@@ -996,6 +996,27 @@ export class MpsTrajectory {
     return bit
   }
 
+  /**
+   * Probability of qubit q being in state |1⟩ without collapsing.
+   * Same formula as `measure()` but read-only: O(chiL·chiR).
+   */
+  pQubit(q: number): number {
+    const data = this.data[q]!
+    const chiL = this.chiL[q]!, chiR = this.chiR[q]!
+    const lamL = q > 0          ? this.bondLambda[q - 1]! : null
+    const lamR = q < this.n - 1 ? this.bondLambda[q]!     : null
+    let p1 = 0
+    for (let l = 0; l < chiL; l++) {
+      const wL = lamL ? lamL[l]! * lamL[l]! : 1
+      for (let r = 0; r < chiR; r++) {
+        const wR = lamR ? lamR[r]! * lamR[r]! : 1
+        const i1 = ((l * 2 + 1) * chiR + r) * 2
+        p1 += wL * wR * (data[i1]! * data[i1]! + data[i1 + 1]! * data[i1 + 1]!)
+      }
+    }
+    return p1
+  }
+
   /** Maximum bond dimension currently in use across all sites. */
   maxBondUsed(): number {
     let max = 1
@@ -1213,6 +1234,60 @@ export function dep1Traj(traj: MpsTrajectory, q: number, p: number, rand: number
   else               traj.apply1(q, G.Z)
 }
 
+/**
+ * Amplitude damping quantum jump on qubit q in MPS trajectory (T1 relaxation).
+ * K1 (decay |1⟩→|0⟩) is implemented via measure+X — preserves Vidal canonical form.
+ * K0 (no decay) applies diag(1, √(1−γ)) to the tensor then renormalises.
+ * Note: K0 leaves bond lambdas stale; canonical form is fully restored at the next apply2.
+ */
+export function dampAmpTraj(traj: MpsTrajectory, q: number, gamma: number, rng: () => number): void {
+  if (gamma <= 0) return
+  const p1    = traj.pQubit(q)
+  const pJump = gamma * p1
+  if (pJump < 1e-15) return
+
+  if (rng() < pJump) {
+    // K1: |1⟩→|0⟩ decay — use measure (forced outcome=1) then X
+    traj.measure(q, () => 0)   // () => 0 < p1 → outcome=1 when p1>0
+    traj.apply1(q, G.X)
+  } else {
+    // K0: damp |1⟩ amplitudes and renormalise
+    const sqG    = Math.sqrt(1 - gamma)
+    const invN   = 1 / Math.sqrt(1 - pJump)
+    const K0: Gate2x2 = [
+      [{ re: invN,       im: 0 }, { re: 0,          im: 0 }],
+      [{ re: 0,          im: 0 }, { re: sqG * invN, im: 0 }],
+    ]
+    traj.apply1(q, K0)
+  }
+}
+
+/**
+ * Pure dephasing quantum jump on qubit q in MPS trajectory (T2 beyond T1).
+ * K1 (dephasing, project to |1⟩) is implemented via forced measurement.
+ * K0 (no dephasing) applies diag(1, √(1−λ)) to the tensor then renormalises.
+ */
+export function dampPhaseTraj(traj: MpsTrajectory, q: number, lambda: number, rng: () => number): void {
+  if (lambda <= 0) return
+  const p1    = traj.pQubit(q)
+  const pJump = lambda * p1
+  if (pJump < 1e-15) return
+
+  if (rng() < pJump) {
+    // K1: project to |1⟩ (dephasing collapse)
+    traj.measure(q, () => 0)   // forces outcome=1 when p1>0
+  } else {
+    // K0: damp |1⟩ amplitudes and renormalise
+    const sqL  = Math.sqrt(1 - lambda)
+    const invN = 1 / Math.sqrt(1 - pJump)
+    const K0: Gate2x2 = [
+      [{ re: invN,       im: 0 }, { re: 0,          im: 0 }],
+      [{ re: 0,          im: 0 }, { re: sqL * invN, im: 0 }],
+    ]
+    traj.apply1(q, K0)
+  }
+}
+
 /** Apply two-qubit depolarizing channel to a trajectory MPS in place. */
 export function dep2Traj(traj: MpsTrajectory, a: number, b: number, p: number, rand: number): void {
   if (rand >= p) return
@@ -1255,24 +1330,34 @@ export function applyTrajOps(
   rng: () => number,
   shotCregs?: Map<string, boolean[]>,
   pMeas = 0,
+  gamma = 0,
+  lambda = 0,
 ): void {
   for (const op of ops) {
     switch (op.kind) {
       case 'single':
         traj.apply1(op.q, op.gate)
-        if (p1) dep1Traj(traj, op.q, p1, rng())
+        if (p1)     dep1Traj(traj, op.q, p1, rng())
+        if (gamma)  dampAmpTraj(traj, op.q, gamma, rng)
+        if (lambda) dampPhaseTraj(traj, op.q, lambda, rng)
         break
       case 'cnot':
         traj.apply2(op.control, op.target, CNOT4)
-        if (p2) dep2Traj(traj, op.control, op.target, p2, rng())
+        if (p2)     dep2Traj(traj, op.control, op.target, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.control, gamma, rng);  dampAmpTraj(traj, op.target, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.control, lambda, rng); dampPhaseTraj(traj, op.target, lambda, rng) }
         break
       case 'swap':
         traj.apply2(op.a, op.b, SWAP4)
-        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        if (p2)     dep2Traj(traj, op.a, op.b, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.a, gamma, rng);  dampAmpTraj(traj, op.b, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.a, lambda, rng); dampPhaseTraj(traj, op.b, lambda, rng) }
         break
       case 'two':
         traj.apply2(op.a, op.b, op.gate)
-        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        if (p2)     dep2Traj(traj, op.a, op.b, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.a, gamma, rng);  dampAmpTraj(traj, op.b, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.a, lambda, rng); dampPhaseTraj(traj, op.b, lambda, rng) }
         break
       case 'measure': {
         const raw: 0 | 1      = traj.measure(op.q, rng)
@@ -1286,7 +1371,7 @@ export function applyTrajOps(
         break
       case 'if': {
         const val = (shotCregs?.get(op.creg) ?? []).reduce((acc, b, i) => b ? acc | (1 << i) : acc, 0)
-        if (val === op.value) applyTrajOps(traj, op.ops, p1, p2, rng, shotCregs, pMeas)
+        if (val === op.value) applyTrajOps(traj, op.ops, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
         break
       }
       case 'barrier': break
