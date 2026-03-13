@@ -230,6 +230,75 @@ describe('MpsTrajectory — unit tests', () => {
       expect(d.probs['00']!).toBeGreaterThan(0.44)
       expect(d.probs['11']!).toBeGreaterThan(0.44)
     })
+
+    it('growTo preserves Schmidt values: bondLambda unchanged after bond doubles', () => {
+      // Bell state on bond 0-1: Schmidt values are [1/√2, 1/√2].
+      // Start with maxBond=2 so initial circuit is exact; then grow further and verify
+      // the Schmidt values on the already-computed bond are preserved.
+      const traj = new MpsTrajectory(3, 2)
+      traj.apply1(0, G.H)
+      traj.apply2(0, 1, CNOT4)
+      const lambda0Before = Float64Array.from(traj.bondLambda[0]!)
+
+      // Entangle bond 1-2 — may trigger growTo if bond demand increases.
+      traj.apply2(1, 2, CNOT4)
+
+      // The Schmidt values on bond 0-1 must survive any reallocation.
+      // |λ₀ - λ₁| ≈ 0 (both ≈ 1/√2 after Bell preparation).
+      expect(Math.abs(traj.bondLambda[0]![0]! - lambda0Before[0]!)).toBeLessThan(1e-12)
+      expect(Math.abs(traj.bondLambda[0]![1]! - lambda0Before[1]!)).toBeLessThan(1e-12)
+    })
+  })
+
+  describe('MpsTrajectory.measure() — mid-circuit projection', () => {
+    function makeDeterministicRng(seed: number): () => number {
+      let s = seed >>> 0
+      return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x1_0000_0000 }
+    }
+
+    it('measuring |0⟩ always returns 0', () => {
+      const traj = new MpsTrajectory(1, 4)
+      // |0⟩ — default state after reset
+      const outcome = traj.measure(0, () => 0.9999)  // rand well above any P(1)
+      expect(outcome).toBe(0)
+    })
+
+    it('measuring |1⟩ always returns 1', () => {
+      const traj = new MpsTrajectory(1, 4)
+      traj.apply1(0, G.X)  // |1⟩
+      const outcome = traj.measure(0, () => 0.0001)  // rand well below P(1)=1
+      expect(outcome).toBe(1)
+    })
+
+    it('post-measurement state is normalized: subsequent sample gives same bit', () => {
+      // H|0⟩ + measure(outcome=1) collapses to |1⟩; sampling must give '1' every time.
+      const traj = new MpsTrajectory(1, 4)
+      traj.apply1(0, G.H)
+      traj.measure(0, () => 0.0001)  // forces outcome=1
+      const rng = makeDeterministicRng(42)
+      for (let i = 0; i < 20; i++) {
+        expect(traj.sample(rng)).toBe(1n)
+      }
+    })
+
+    it('measure on qubit 1 of 3-qubit chain does not disturb qubits 0 and 2', () => {
+      // Prepare |+⟩|0⟩|+⟩ — qubits 0 and 2 are in |+⟩, qubit 1 in |0⟩.
+      const traj = new MpsTrajectory(3, 4)
+      traj.apply1(0, G.H)
+      traj.apply1(2, G.H)
+      // Measure qubit 1: must give 0 (it's |0⟩), and qubits 0,2 stay in |+⟩.
+      const outcome = traj.measure(1, () => 0.9)
+      expect(outcome).toBe(0)
+      // Qubit 0 should still be in |+⟩: 50/50 sampling over 200 shots.
+      const rng = makeDeterministicRng(7)
+      let c0 = 0, c1 = 0
+      for (let i = 0; i < 200; i++) {
+        const s = traj.sample(rng)
+        if (s & 1n) c1++; else c0++
+      }
+      expect(c0).toBeGreaterThan(80)
+      expect(c1).toBeGreaterThan(80)
+    })
   })
 
   describe('performance', () => {

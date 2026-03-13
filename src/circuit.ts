@@ -3652,7 +3652,8 @@ export class Circuit {
         })
 
         for (let i = 0; i < ws.length; i++) {
-          Atomics.wait(flags[i]!, 0, 0)
+          const waitResult = Atomics.wait(flags[i]!, 0, 0, 300_000)
+          if (waitResult === 'timed-out') throw new Error(`[ket] runMps worker ${i} timed out after 5 minutes`)
           const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
           for (const [k, v] of message.counts as [bigint, number][]) {
             counts.set(k, (counts.get(k) ?? 0) + v)
@@ -4520,8 +4521,8 @@ export class Circuit {
    *
    * - **Clifford**: if every gate is in {H, X, Y, Z, S, S†, CNOT, CX, CY, CZ, SWAP} —
    *   O(n²) stabilizer tableau, handles 1000+ qubits.
-   * - **Statevector**: if the circuit uses mid-circuit measurement/reset/if, or n ≤
-   *   `statevectorLimit` (default 20) — exact O(2ⁿ).
+   * - **Statevector**: if n ≤ `statevectorLimit` (default 20) — exact O(2ⁿ).
+   *   Mid-circuit ops on large circuits route to MPS instead.
    * - **MPS**: otherwise — O(n·χ²) with adaptive bond dimension; exact for circuits
    *   with bounded entanglement, memory-bounded for highly entangled ones.
    *

@@ -3604,6 +3604,52 @@ describe('MPS backend — error paths', () => {
   })
 })
 
+// ── MPS gate decompositions — isolation tests ─────────────────────────────────
+
+describe('MPS gate decompositions — Toffoli and CSWAP match statevector', () => {
+  it('CCX truth table: all 8 input states match statevector', () => {
+    // Verify the 6-CNOT Toffoli decomposition is correct for every input basis state.
+    for (const [a, b, c] of [[0,0,0],[0,0,1],[0,1,0],[0,1,1],[1,0,0],[1,0,1],[1,1,0],[1,1,1]] as [0|1,0|1,0|1][]) {
+      let sv  = new Circuit(3)
+      let mps = new Circuit(3)
+      if (a) { sv = sv.x(0);  mps = mps.x(0) }
+      if (b) { sv = sv.x(1);  mps = mps.x(1) }
+      if (c) { sv = sv.x(2);  mps = mps.x(2) }
+      sv  = sv.ccx(0, 1, 2)
+      mps = mps.ccx(0, 1, 2)
+      const expected = a && b ? (c ^ 1) : c
+      const label    = `${a}${b}${expected}`
+      expect(sv.run({ shots: 64, seed: 1 }).probs[label]).toBeCloseTo(1, 2)
+      expect(mps.runMps({ shots: 64, seed: 1 }).probs[label]).toBeCloseTo(1, 2)
+    }
+  })
+
+  it('CSWAP truth table: all 8 input states match statevector', () => {
+    for (const [ctrl, a, b] of [[0,0,0],[0,0,1],[0,1,0],[0,1,1],[1,0,0],[1,0,1],[1,1,0],[1,1,1]] as [0|1,0|1,0|1][]) {
+      let sv  = new Circuit(3)
+      let mps = new Circuit(3)
+      if (ctrl) { sv = sv.x(0); mps = mps.x(0) }
+      if (a)    { sv = sv.x(1); mps = mps.x(1) }
+      if (b)    { sv = sv.x(2); mps = mps.x(2) }
+      sv  = sv.cswap(0, 1, 2)
+      mps = mps.cswap(0, 1, 2)
+      // CSWAP swaps qubits 1 and 2 when ctrl=1
+      const [outA, outB] = ctrl ? [b, a] : [a, b]
+      const label = `${ctrl}${outA}${outB}`
+      expect(sv.run({ shots: 64, seed: 2 }).probs[label]).toBeCloseTo(1, 2)
+      expect(mps.runMps({ shots: 64, seed: 2 }).probs[label]).toBeCloseTo(1, 2)
+    }
+  })
+
+  it('superposition Toffoli: H(0)H(1)CCX(0,1,2) MPS matches statevector probabilities', () => {
+    const sv  = new Circuit(3).h(0).h(1).ccx(0, 1, 2).run({ shots: 4096, seed: 3 })
+    const mps = new Circuit(3).h(0).h(1).ccx(0, 1, 2).runMps({ shots: 4096, seed: 3 })
+    for (const state of ['000', '010', '100', '111']) {
+      expect(mps.probs[state] ?? 0).toBeCloseTo(sv.probs[state] ?? 0, 1)
+    }
+  })
+})
+
 describe('MPS backend — non-adjacent two-qubit gates', () => {
   it('cnot(0,3) on 4-qubit circuit matches statevector', () => {
     // Exercises the SWAP-bubble path in mpsApply2 (b = a+3)
@@ -7444,5 +7490,85 @@ describe('MPS mid-circuit measurement', () => {
     const sv  = bell.run({ shots: 4096, seed: 5 })
     const mps = bell.runMps({ shots: 4096, seed: 5 })
     expect(mps.cregs['c']![0]).toBeCloseTo(sv.cregs['c']![0]!, 1)
+  })
+
+  it('pMeas readout error biases creg distribution toward 0.5', () => {
+    // |0⟩ measured with pMeas=0.5 → reported bit 0/1 with equal probability ≈ 0.5.
+    // Without pMeas the ideal outcome is always 0 (P=0); with pMeas=0.5 it's ≈0.5.
+    const d = new Circuit(1)
+      .creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 2000, seed: 6, noise: { p1: 0, p2: 0, pMeas: 0.5 } })
+    expect(d.cregs['c']![0]).toBeGreaterThan(0.4)
+    expect(d.cregs['c']![0]).toBeLessThan(0.6)
+  })
+
+  it('pMeas does not affect ideal distribution when set to 0', () => {
+    // |0⟩ measured with pMeas=0 → reported bit is always 0.
+    const d = new Circuit(1)
+      .creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 500, seed: 7, noise: { p1: 0, p2: 0, pMeas: 0 } })
+    expect(d.cregs['c']![0]).toBe(0)
+  })
+
+  it('multi-bit classical register: if condition fires on correct value only', () => {
+    // Prepare |10⟩ (q0=1, q1=0), measure into 2-bit creg 'c': c[0]=1, c[1]=0 → integer value 1.
+    // if(c == 1) applies Z(0) — a no-op on |1⟩ in the Z basis (phase only, doesn't change probs).
+    // if(c == 2) applies X(0) — must NOT fire for value=2.
+    const d = new Circuit(2)
+      .x(0)                     // q0=|1⟩, q1=|0⟩
+      .creg('c', 2)
+      .measure(0, 'c', 0)       // c[0] = 1
+      .measure(1, 'c', 1)       // c[1] = 0  →  integer c = 0b01 = 1
+      .if('c', 2, cc => cc.x(0))  // must NOT fire (c=1 ≠ 2)
+      .runMps({ shots: 256, seed: 8 })
+    // q0 should remain 1 because the X was not applied
+    expect(d.probs['10']).toBeCloseTo(1, 2)
+  })
+
+  it('multi-bit classical register: if condition fires when value matches', () => {
+    // Prepare |01⟩ (q0=0, q1=1), measure: c[0]=0, c[1]=1 → integer value 2.
+    // if(c == 2) applies X(0) — must fire, so q0 flips from 0 to 1.
+    const d = new Circuit(2)
+      .x(1)                     // q0=|0⟩, q1=|1⟩
+      .creg('c', 2)
+      .measure(0, 'c', 0)       // c[0] = 0
+      .measure(1, 'c', 1)       // c[1] = 1  →  integer c = 0b10 = 2
+      .if('c', 2, cc => cc.x(0))  // must fire → q0 becomes |1⟩
+      .runMps({ shots: 256, seed: 9 })
+    // After X(0): q0=1, q1=1 → should observe '11'
+    expect(d.probs['11']).toBeCloseTo(1, 2)
+  })
+})
+
+describe('Circuit.simulate() — output equivalence with direct backends', () => {
+  it('simulate(Clifford) matches runClifford() output', () => {
+    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
+    const sim    = c.simulate({ shots: 2048, seed: 1 })
+    const direct = c.runClifford({ shots: 2048, seed: 1 })
+    expect(sim.backend).toBe('clifford')
+    expect(sim.probs['0000'] ?? 0).toBeCloseTo(direct.probs['0000'] ?? 0, 1)
+    expect(sim.probs['1111'] ?? 0).toBeCloseTo(direct.probs['1111'] ?? 0, 1)
+  })
+
+  it('simulate(statevector) matches run() output', () => {
+    const c = new Circuit(4).h(0).t(1).cx(0, 1).cx(1, 2)
+    const sim    = c.simulate({ shots: 2048, seed: 2 })
+    const direct = c.run({ shots: 2048, seed: 2 })
+    expect(sim.backend).toBe('statevector')
+    for (const [k, v] of Object.entries(direct.probs)) {
+      expect(sim.probs[k] ?? 0).toBeCloseTo(v, 1)
+    }
+  })
+
+  it('simulate(MPS) matches runMps() output', () => {
+    let c = new Circuit(25).t(0)
+    for (let q = 0; q < 24; q++) c = c.cx(q, q + 1)
+    const sim    = c.simulate({ shots: 1024, seed: 3 })
+    const direct = c.runMps({ shots: 1024, seed: 3 })
+    expect(sim.backend).toBe('mps')
+    expect(sim.peakChi).toBe(direct.peakChi)
+    for (const [k, v] of Object.entries(direct.probs)) {
+      expect(sim.probs[k] ?? 0).toBeCloseTo(v, 1)
+    }
   })
 })
