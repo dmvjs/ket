@@ -788,11 +788,57 @@ function toTrajOps(flatOps: readonly FlatOp[]): TrajOp[] {
         else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
         break
       }
-      case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
-      case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+      // Toffoli: standard 6-CNOT decomposition (Barenco et al.)
+      // CCX(c1, c2, t) into H, T, Tdg, CX gates — no ancilla.
+      case 'toffoli': {
+        const { c1, c2, target: t } = op
+        out.push(
+          { kind: 'single', q: t,  gate: G.H  },
+          { kind: 'cnot',   control: c2, target: t },
+          { kind: 'single', q: t,  gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: t },
+          { kind: 'single', q: t,  gate: G.T  },
+          { kind: 'cnot',   control: c2, target: t },
+          { kind: 'single', q: t,  gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: t },
+          { kind: 'single', q: c2, gate: G.T  },
+          { kind: 'single', q: t,  gate: G.T  },
+          { kind: 'single', q: t,  gate: G.H  },
+          { kind: 'cnot',   control: c1, target: c2 },
+          { kind: 'single', q: c1, gate: G.T  },
+          { kind: 'single', q: c2, gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: c2 },
+        )
+        break
+      }
+      // CSWAP (Fredkin): CNOT(b,a) + CCX(c,a,b) + CNOT(b,a)
+      case 'cswap': {
+        const { control: ctrl, a, b } = op
+        out.push({ kind: 'cnot', control: b, target: a })
+        out.push(
+          { kind: 'single', q: b,    gate: G.H  },
+          { kind: 'cnot',   control: a,    target: b },
+          { kind: 'single', q: b,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: b },
+          { kind: 'single', q: b,    gate: G.T  },
+          { kind: 'cnot',   control: a,    target: b },
+          { kind: 'single', q: b,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: b },
+          { kind: 'single', q: a,    gate: G.T  },
+          { kind: 'single', q: b,    gate: G.T  },
+          { kind: 'single', q: b,    gate: G.H  },
+          { kind: 'cnot',   control: ctrl, target: a },
+          { kind: 'single', q: ctrl, gate: G.T  },
+          { kind: 'single', q: a,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: a },
+        )
+        out.push({ kind: 'cnot', control: b, target: a })
+        break
+      }
       case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
-      case 'measure': case 'reset': case 'if':
-        throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+      case 'measure': out.push({ kind: 'measure', q: op.q, creg: op.creg, bit: op.bit }); break
+      case 'reset':   out.push({ kind: 'reset', q: op.q }); break
+      case 'if':      out.push({ kind: 'if', creg: op.creg, value: op.value, ops: toTrajOps(flattenOps(op.ops)) }); break
       case 'barrier': out.push({ kind: 'barrier' }); break
       default: { const _exhaustive: never = op; break }
     }
@@ -827,18 +873,39 @@ export interface RunOptions {
   initialState?: string
 }
 
+export interface SimulateOptions {
+  shots?: number
+  seed?: number
+  /** Depolarizing noise parameters, or a named device profile (e.g. `'aria-1'`). */
+  noise?: NoiseParams | string
+  /** Starting state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
+  initialState?: string
+  /**
+   * Qubit count below which the statevector backend is always used (default 20).
+   * Raise this to force MPS on smaller circuits; lower it to use MPS sooner.
+   */
+  statevectorLimit?: number
+}
+
 export interface MpsRunOptions {
   shots?: number
   seed?: number
-  /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
+  /**
+   * Initial bond dimension χ (default 64).
+   *
+   * The simulator starts with tensors allocated for this χ and grows automatically
+   * as entanglement demands it — so the result is always exact (up to floating-point)
+   * regardless of this value. Set it higher to avoid reallocation overhead for circuits
+   * known to reach high entanglement; set it lower to save memory on product-state circuits.
+   */
   maxBond?: number
   /**
    * Relative Schmidt truncation threshold (default 0 = off).
    *
-   * Singular values σ_k < truncErr · σ_max are discarded in addition to the hard
-   * `maxBond` cap. Useful for structured circuits (VQE, chemistry, QFT) where the
-   * Schmidt spectrum decays quickly — a small `truncErr` (e.g. 1e-8) can reduce
-   * effective bond dimension dramatically with negligible error.
+   * Singular values σ_k < truncErr · σ_max are discarded during SVD. Useful for structured
+   * circuits (VQE, chemistry, QFT) where the Schmidt spectrum decays quickly — a small
+   * `truncErr` (e.g. 1e-8) can cap the effective bond dimension with negligible error.
+   * When set, `result.truncated` indicates whether any significant value was discarded.
    */
   truncErr?: number
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
@@ -884,13 +951,23 @@ export class Distribution {
   /** Classical register results: `cregs[name][bit]` = fraction of shots where that bit was 1. */
   readonly cregs: Readonly<Record<string, readonly number[]>>
   /**
-   * `true` if the MPS bond dimension hit the `maxBond` cap during simulation and one or more
-   * significant singular values were discarded. Results are approximate in this case.
+   * `true` if `truncErr` caused one or more physically significant singular values to be
+   * discarded during MPS simulation. Results are approximate when this is `true`.
    *
-   * Always `false` for `run()` and `runClifford()`.
-   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   * Always `false` for `run()` and `runClifford()`, and for `runMps()` with `truncErr = 0`
+   * (the default) — the bond dimension grows automatically in that case.
    */
   readonly truncated: boolean
+  /**
+   * Which simulation backend produced this result.
+   * Set by `simulate()` and the individual `run*` methods.
+   */
+  readonly backend: 'clifford' | 'statevector' | 'mps' | undefined
+  /**
+   * Peak bond dimension χ used during MPS simulation.
+   * Only defined when `backend === 'mps'`.
+   */
+  readonly peakChi: number | undefined
 
   constructor(
     qubits: number,
@@ -898,10 +975,14 @@ export class Distribution {
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
     truncated = false,
+    backend?: 'clifford' | 'statevector' | 'mps',
+    peakChi?: number,
   ) {
     this.qubits    = qubits
     this.shots     = shots
     this.truncated = truncated
+    this.backend   = backend
+    this.peakChi   = peakChi
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -3449,7 +3530,7 @@ export class Circuit {
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
       }
 
-      return new Distribution(this.qubits, shots, counts, cregCounts)
+      return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
     }
 
     // ── Per-shot path: noise or mid-circuit ops — one full simulation per shot ──
@@ -3478,7 +3559,7 @@ export class Circuit {
       }
     }
 
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
   }
 
   /**
@@ -3495,7 +3576,7 @@ export class Circuit {
    * with random Pauli errors injected after each gate. Noise limits entanglement growth so bond
    * dimension stays tractable even at 100+ qubits. Simulates realistic NISQ hardware accurately.
    *
-   * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
+   * @param maxBond Initial bond dimension χ (default 64). Grows automatically — set higher to reduce reallocation overhead for high-entanglement circuits.
    */
   runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
     // Resolve noise: named device profile → NoiseParams, or use as-is
@@ -3507,13 +3588,18 @@ export class Circuit {
         return p
       })() : noiseRaw
 
-    const rng     = makePrng(seed)
-    const trajOps = toTrajOps(flattenOps(this.#ops))
-    const counts  = new Map<bigint, number>()
+    const rng        = makePrng(seed)
+    const flat       = flattenOps(this.#ops)
+    const trajOps    = toTrajOps(flat)
+    const counts     = new Map<bigint, number>()
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
 
+    const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
     const traj = new MpsTrajectory(this.qubits, maxBond, truncErr)
 
-    if (!noise) {
+    if (!noise && !hasMidCircuit) {
       // Clean path: build state once, sample shots times from the same MPS.
       if (initialState !== undefined) {
         svFromBitstring(initialState, this.qubits)
@@ -3527,21 +3613,20 @@ export class Circuit {
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
       }
     } else {
-      // Noisy path: quantum trajectory method — one fresh circuit execution per shot.
-      const p1    = noise.p1    ?? 0
-      const p2    = noise.p2    ?? 0
-      const pMeas = noise.pMeas ?? 0
+      // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
+      const p1    = noise?.p1    ?? 0
+      const p2    = noise?.p2    ?? 0
+      const pMeas = noise?.pMeas ?? 0
       if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
 
-      // Parallel path: distribute shots across worker threads (Node.js ≥22 only).
-      // Only active when running from the built bundle and wt is available.
-      // MessageChannel gives a MessagePort pair for receiveMessageOnPort (synchronous recv).
+      // Parallel path: workers handle the noisy+clean-mid-circuit case.
+      // Mid-circuit circuits require per-shot creg state and can't be parallelised yet.
       const wtLocal = wt
       const isBuilt = !import.meta.url.endsWith('.ts')
       if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
         console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
       }
-      if (numWorkers > 1 && isBuilt && wtLocal !== null) {
+      if (numWorkers > 1 && isBuilt && wtLocal !== null && !hasMidCircuit) {
         const workerUrl = new URL('./mps.worker.js', import.meta.url)
         const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
         const slices    = distributeShots(shots, numWorkers)
@@ -3574,7 +3659,7 @@ export class Circuit {
           }
         }
       } else {
-        // Single-threaded trajectory loop (default, dev mode, or workers disabled).
+        // Single-threaded trajectory loop.
         for (let i = 0; i < shots; i++) {
           traj.reset()
           if (initialState !== undefined) {
@@ -3582,7 +3667,12 @@ export class Circuit {
               if (initialState[q] === '1') traj.apply1(q, G.X)
             }
           }
-          applyTrajOps(traj, trajOps, p1, p2, rng)
+          const shotCregs = hasMidCircuit
+            ? new Map<string, boolean[]>(
+                Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
+              )
+            : undefined
+          applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas)
           let idx = traj.sample(rng)
           if (pMeas) {
             for (let q = 0; q < this.qubits; q++) {
@@ -3590,14 +3680,17 @@ export class Circuit {
             }
           }
           counts.set(idx, (counts.get(idx) ?? 0) + 1)
+          if (shotCregs) {
+            for (const [name, bits] of shotCregs) {
+              const acc = cregCounts.get(name)!
+              for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
+            }
+          }
         }
       }
     }
 
-    const cregCounts = new Map<string, number[]>(
-      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
-    )
-    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated)
+    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated, 'mps', traj.maxBondUsed())
   }
 
   /**
@@ -4417,7 +4510,74 @@ export class Circuit {
       }
     }
 
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'clifford')
+  }
+
+  // ── Auto-routing simulation ───────────────────────────────────────────────
+
+  /**
+   * Simulate the circuit using the most efficient exact backend, chosen automatically:
+   *
+   * - **Clifford**: if every gate is in {H, X, Y, Z, S, S†, CNOT, CX, CY, CZ, SWAP} —
+   *   O(n²) stabilizer tableau, handles 1000+ qubits.
+   * - **Statevector**: if the circuit uses mid-circuit measurement/reset/if, or n ≤
+   *   `statevectorLimit` (default 20) — exact O(2ⁿ).
+   * - **MPS**: otherwise — O(n·χ²) with adaptive bond dimension; exact for circuits
+   *   with bounded entanglement, memory-bounded for highly entangled ones.
+   *
+   * The returned `Distribution` carries two extra fields:
+   * - `backend` — which path was taken (`'clifford' | 'statevector' | 'mps'`)
+   * - `peakChi` — peak bond dimension χ actually used (MPS only)
+   *
+   * ```typescript
+   * const d = ghz(50).simulate({ shots: 1024 })
+   * d.backend   // 'mps'
+   * d.peakChi   // 2
+   * ```
+   */
+  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20 }: SimulateOptions = {}): Distribution {
+    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
+    const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
+
+    const isClifford = (ops: readonly Op[]): boolean => {
+      for (const op of flattenOps(ops)) {
+        switch (op.kind) {
+          case 'barrier': case 'measure': case 'reset': break
+          case 'cnot': case 'swap': break
+          case 'if': if (!isClifford(op.ops)) return false; break
+          case 'single':     if (!CLIFFORD_SINGLE.has(op.meta?.name ?? '')) return false; break
+          case 'controlled': if (!CLIFFORD_CTRL.has(op.meta?.name   ?? '')) return false; break
+          default: return false
+        }
+      }
+      return true
+    }
+
+    // Clifford path: initialState is not supported by runClifford, so fall through
+    // to statevector if the caller supplies one.
+    if (!initialState && isClifford(this.#ops)) {
+      return this.runClifford({
+        shots,
+        ...(seed  !== undefined && { seed }),
+        ...(noise !== undefined && { noise }),
+      })
+    }
+
+    if (this.qubits <= statevectorLimit) {
+      return this.run({
+        shots,
+        ...(seed         !== undefined && { seed }),
+        ...(noise        !== undefined && { noise }),
+        ...(initialState !== undefined && { initialState }),
+      })
+    }
+
+    return this.runMps({
+      shots,
+      ...(seed         !== undefined && { seed }),
+      ...(noise        !== undefined && { noise }),
+      ...(initialState !== undefined && { initialState }),
+    })
   }
 
   // ── Hardware compilation ──────────────────────────────────────────────────

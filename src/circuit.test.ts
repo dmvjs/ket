@@ -3595,12 +3595,12 @@ describe('MPS backend — large circuits (50+ qubits)', () => {
 })
 
 describe('MPS backend — error paths', () => {
-  it('throws for Toffoli', () => {
-    expect(() => new Circuit(3).ccx(0, 1, 2).runMps()).toThrow('CCX')
-  })
-
-  it('throws for mid-circuit measure', () => {
-    expect(() => new Circuit(2).creg('c', 1).measure(0, 'c', 0).runMps()).toThrow("'measure'")
+  it('Toffoli runs via 6-CNOT decomposition in MPS mode', () => {
+    // CCX no longer throws — decomposes into T/H/CX gates automatically
+    const c = new Circuit(3).x(0).x(1).ccx(0, 1, 2)
+    const d = c.runMps({ shots: 256, seed: 1 })
+    // x0=1, x1=1 → target qubit 2 should flip to 1
+    expect(d.probs['111']).toBeCloseTo(1, 1)
   })
 })
 
@@ -7312,5 +7312,137 @@ describe('circuit.compose()', () => {
     const result = bell.runMps({ shots: 1000, seed: 42 })
     expect(result.probs['00']).toBeGreaterThan(0.45)
     expect(result.probs['11']).toBeGreaterThan(0.45)
+  })
+})
+
+// ── simulate() — auto-routing ─────────────────────────────────────────────────
+
+describe('Circuit.simulate() — automatic backend selection', () => {
+  it('routes Clifford circuit to clifford backend', () => {
+    const d = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3).simulate({ shots: 512, seed: 1 })
+    expect(d.backend).toBe('clifford')
+    expect(d.peakChi).toBeUndefined()
+    expect(d.probs['0000']).toBeGreaterThan(0.44)
+    expect(d.probs['1111']).toBeGreaterThan(0.44)
+  })
+
+  it('routes small non-Clifford circuit to statevector backend', () => {
+    // 3 qubits (≤ default limit of 20) with T gate — not Clifford
+    const d = new Circuit(3).h(0).t(1).cx(0, 1).simulate({ shots: 512, seed: 2 })
+    expect(d.backend).toBe('statevector')
+    expect(d.peakChi).toBeUndefined()
+  })
+
+  it('routes large non-Clifford circuit to MPS backend and exposes peakChi', () => {
+    // 30 qubits: above statevectorLimit=20, has T gate so not Clifford
+    const d = new Circuit(30).h(0).t(1).cx(0, 1).simulate({ shots: 256, seed: 3 })
+    expect(d.backend).toBe('mps')
+    expect(typeof d.peakChi).toBe('number')
+    expect(d.peakChi).toBeGreaterThanOrEqual(1)
+  })
+
+  it('routes circuit with mid-circuit measurement on large circuit to MPS (Clifford path)', () => {
+    // H + measure is Clifford — runClifford handles mid-circuit measures fine.
+    // Clifford takes priority regardless of qubit count.
+    const d = new Circuit(30)
+      .h(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 128, seed: 4 })
+    expect(d.backend).toBe('clifford')
+  })
+
+  it('non-Clifford mid-circuit measurement on n=30 routes to MPS', () => {
+    // T gate makes it non-Clifford; n=30 > statevectorLimit=20 → MPS with mid-circuit support.
+    const d = new Circuit(30)
+      .t(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 128, seed: 4 })
+    expect(d.backend).toBe('mps')
+  })
+
+  it('statevectorLimit option overrides default threshold', () => {
+    // n=5, normally statevector (≤20), but limit=2 forces MPS (T gate prevents Clifford)
+    const d = new Circuit(5).h(0).t(1).cx(0, 1)
+      .simulate({ shots: 256, seed: 5, statevectorLimit: 2 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBeDefined()
+  })
+
+  it('gives consistent results with direct runMps for large non-Clifford circuits', () => {
+    // T gate on qubit 0 makes this non-Clifford so it routes to MPS (n=25 > 20)
+    let circuit = new Circuit(25).t(0)
+    for (let q = 0; q < 24; q++) circuit = circuit.cx(q, q + 1)
+    const d = circuit.simulate({ shots: 512, seed: 6 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBeGreaterThanOrEqual(1)
+  })
+
+  it('initialState routes to statevector even for Clifford circuit', () => {
+    // initialState is not supported by runClifford, so falls back to statevector
+    const d = new Circuit(3).h(0).cx(0, 1)
+      .simulate({ shots: 256, seed: 7, initialState: '100' })
+    expect(d.backend).toBe('statevector')
+  })
+
+  it('run(), runMps(), runClifford() all populate backend field', () => {
+    const bell = new Circuit(2).h(0).cx(0, 1)
+    expect(bell.run({ shots: 100, seed: 1 }).backend).toBe('statevector')
+    expect(bell.runMps({ shots: 100, seed: 1 }).backend).toBe('mps')
+    const ghz = new Circuit(3).h(0).cx(0, 1).cx(1, 2)
+    expect(ghz.runClifford({ shots: 100, seed: 1 }).backend).toBe('clifford')
+  })
+
+  it('runMps peakChi reflects actual bond dimension used, not buffer allocation', () => {
+    // Bell state (GHZ-style) has exact bond dimension 2; default maxBond=64 but peakChi=2
+    const d = new Circuit(2).h(0).cx(0, 1).runMps({ shots: 100, seed: 1 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBe(2)
+  })
+})
+
+describe('MPS mid-circuit measurement', () => {
+  it('mid-circuit measure records outcomes in cregs', () => {
+    // H then measure: 50/50 in classical register
+    const d = new Circuit(3)
+      .h(0).creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 2048, seed: 1 })
+    expect(d.cregs['c']![0]).toBeCloseTo(0.5, 1)
+  })
+
+  it('mid-circuit measure collapses qubit state', () => {
+    // H(q0) → measure(q0,'c',0) → if(c==1) X(q0) corrects back to |0⟩ deterministically.
+    // Final sample should give q0=0 for every shot.
+    const d = new Circuit(2)
+      .h(0)
+      .creg('c', 1).measure(0, 'c', 0)
+      .if('c', 1, c => c.x(0))
+      .runMps({ shots: 512, seed: 2 })
+    // q0 is always corrected to 0; q1 stays |0⟩ — only '00' should appear
+    expect(d.probs['00']).toBeCloseTo(1, 2)
+  })
+
+  it('reset leaves qubit in |0⟩', () => {
+    // H(q0) → reset(q0) → X(q0): result is deterministically |1⟩ regardless of H outcome
+    const d = new Circuit(1)
+      .h(0).reset(0).x(0)
+      .runMps({ shots: 256, seed: 3 })
+    expect(d.probs['1']).toBeCloseTo(1, 2)
+  })
+
+  it('simulate() routes large non-Clifford circuits with mid-circuit ops to MPS', () => {
+    // n=25 > statevectorLimit=20, T gate is non-Clifford → MPS path with mid-circuit support
+    const d = new Circuit(25)
+      .h(0).t(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 256, seed: 4 })
+    expect(d.backend).toBe('mps')
+    expect(d.cregs['c']![0]).toBeGreaterThan(0)
+  })
+
+  it('matches statevector for entangled circuit with mid-circuit measure', () => {
+    // Bell pair: H(0) CX(0,1) measure(1,'c',0).
+    // q1 and q0 are maximally correlated. Measuring q1 mid-circuit collapses q0 too.
+    // runMps and run() should agree on the creg distribution.
+    const bell = new Circuit(2).h(0).cx(0, 1).creg('c', 1).measure(1, 'c', 0)
+    const sv  = bell.run({ shots: 4096, seed: 5 })
+    const mps = bell.runMps({ shots: 4096, seed: 5 })
+    expect(mps.cregs['c']![0]).toBeCloseTo(sv.cregs['c']![0]!, 1)
   })
 })

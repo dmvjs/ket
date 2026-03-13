@@ -184,6 +184,54 @@ describe('MpsTrajectory — unit tests', () => {
     })
   })
 
+  describe('adaptive bond growth', () => {
+    it('Bell state: maxChi grows from 1 → 2 and result stays exact', () => {
+      // Start with maxBond=1 (insufficient for entanglement) — should auto-grow.
+      const traj = new MpsTrajectory(2, 1)
+      expect(traj.maxChi).toBe(1)
+
+      traj.apply1(0, G.H)
+      traj.apply2(0, 1, CNOT4)
+
+      // maxChi must have grown to accommodate the Bell-state bond dimension of 2.
+      expect(traj.maxChi).toBeGreaterThanOrEqual(2)
+      expect(traj.maxBondUsed()).toBe(2)
+
+      // Sampling must still produce exact 50/50 statistics.
+      const rng = makeDeterministicRng(7)
+      let c00 = 0, c11 = 0
+      for (let i = 0; i < 1000; i++) {
+        const s = traj.sample(rng)
+        if (s === 0n) c00++
+        else if (s === 3n) c11++
+      }
+      expect(c00 / 1000).toBeGreaterThan(0.44)
+      expect(c11 / 1000).toBeGreaterThan(0.44)
+    })
+
+    it('multi-step growth: repeated apply2 on fresh circuit grows maxChi correctly', () => {
+      // 4-qubit random-like entangling circuit starting from maxBond=1.
+      // Each CNOT can double the bond, so maxChi should grow through 2 → 4.
+      const traj = new MpsTrajectory(4, 1)
+      traj.apply1(0, G.H)
+      traj.apply1(1, G.H)
+      traj.apply2(0, 1, CNOT4)
+      traj.apply2(1, 2, CNOT4)
+      traj.apply2(2, 3, CNOT4)
+      // wasTruncated must be false — growth means no approximation.
+      expect(traj.wasTruncated).toBe(false)
+      // maxChi should have grown to at least 2 (GHZ-type structure).
+      expect(traj.maxChi).toBeGreaterThanOrEqual(2)
+    })
+
+    it('runMps with maxBond=1 gives exact Bell statistics after auto-growth', () => {
+      const d = new Circuit(2).h(0).cx(0, 1).runMps({ shots: 2000, seed: 3, maxBond: 1 })
+      expect(d.truncated).toBe(false)
+      expect(d.probs['00']!).toBeGreaterThan(0.44)
+      expect(d.probs['11']!).toBeGreaterThan(0.44)
+    })
+  })
+
   describe('performance', () => {
     it('127-qubit GHZ, 1024 shots: completes in < 5s', () => {
       const n    = 127
@@ -735,46 +783,44 @@ describe('bond dimension grows for high-entanglement circuits', () => {
 
 // ── 8. SVD truncation quality — chi controls accuracy ────────────────────────
 
-describe('SVD truncation quality — higher chi gives better approximation', () => {
+describe('SVD truncation quality — truncErr controls accuracy', () => {
   /**
-   * For circuits where exact bond dim exceeds the chi cap, truncation introduces
-   * approximation error. Larger chi → smaller chi-sq vs exact dm() reference.
-   * This validates optimal low-rank (Schmidt) truncation via SVD.
+   * With adaptive bond growth, the bond dimension is never hard-capped.
+   * Approximation error is introduced via truncErr (relative Schmidt threshold).
+   * Larger truncErr → more Schmidt values discarded → larger chi-sq vs exact dm().
+   * This validates that SVD truncation introduces approximation in a controlled way.
    */
-  it('n=5 brickwork: chiSq(chi=2, dm) > chiSq(chi=16, dm) — truncation matters', () => {
+  it('n=5 brickwork: chiSq(truncErr=0.5) > chiSq(exact) — truncation matters', () => {
     const c     = makeBrickwork(5, 6, 100)
     const shots = 8192
 
     // Exact reference via density matrix (no sampling noise)
-    const dmRef = c.dm().probabilities()
-    const chi2  = c.runMps({ shots, seed: 1, maxBond: 2  }).probs  // heavily truncated
-    const chi16 = c.runMps({ shots, seed: 2, maxBond: 16 }).probs  // exact (max bond ≤ 8)
+    const dmRef   = c.dm().probabilities()
+    const approx  = c.runMps({ shots, seed: 1, truncErr: 0.5 }).probs  // heavily truncated
+    const exact   = c.runMps({ shots, seed: 2               }).probs  // exact (truncErr=0)
 
-    const cq2  = chiSq(chi2,  dmRef, shots)
-    const cq16 = chiSq(chi16, dmRef, shots)
+    const cqApprox = chiSq(approx, dmRef, shots)
+    const cqExact  = chiSq(exact,  dmRef, shots)
 
-    // chi=2 produces measurably wrong distribution (poor approximation)
-    expect(cq2).toBeGreaterThan(cq16 + 1)
-    // chi=16 should be consistent with exact (no truncation for n=5)
-    expect(cq16).toBeLessThan(2.5)
+    // truncErr=0.5 produces measurably wrong distribution
+    expect(cqApprox).toBeGreaterThan(cqExact + 1)
+    // exact (truncErr=0) should be consistent with dm()
+    expect(cqExact).toBeLessThan(2.5)
   })
 
-  it('n=6 brickwork depth=6: chiSq(chi=2, dm) > chiSq(chi=32, dm) — truncation detectable', () => {
-    // QFT output is uniform regardless of chi (truncation errors are in phases only),
-    // so brickwork is the right circuit family for truncation quality testing.
-    // chi=2 truncates any entangled state; chi=32 ≥ max bond dim (≤8 for n=6) → exact.
+  it('n=6 brickwork depth=6: chiSq(truncErr=0.5) > chiSq(exact) — truncation detectable', () => {
     const c     = makeBrickwork(6, 6, 110)
     const shots = 8192
 
-    const dmRef = c.dm().probabilities()
-    const chi2  = c.runMps({ shots, seed: 1, maxBond: 2  }).probs  // heavily truncated
-    const chi32 = c.runMps({ shots, seed: 2, maxBond: 32 }).probs  // exact (max bond ≤ 8)
+    const dmRef  = c.dm().probabilities()
+    const approx = c.runMps({ shots, seed: 1, truncErr: 0.5 }).probs  // heavily truncated
+    const exact  = c.runMps({ shots, seed: 2               }).probs  // exact
 
-    const cq2  = chiSq(chi2,  dmRef, shots)
-    const cq32 = chiSq(chi32, dmRef, shots)
+    const cqApprox = chiSq(approx, dmRef, shots)
+    const cqExact  = chiSq(exact,  dmRef, shots)
 
-    expect(cq32).toBeLessThan(2.5)       // chi=32 is exact — consistent with dm()
-    expect(cq2).toBeGreaterThan(cq32 + 1)  // chi=2 produces detectable error
+    expect(cqExact).toBeLessThan(2.5)                      // exact is consistent with dm()
+    expect(cqApprox).toBeGreaterThan(cqExact + 1)          // truncErr=0.5 produces detectable error
   })
 })
 
@@ -1591,11 +1637,11 @@ describe('Circuit.expectMps() — Hamiltonian expectation values', () => {
     expect(truncated).toBe(false)
   })
 
-  it('truncated is true when maxBond cap discards significant singular values', () => {
-    // Bell state requires χ=2; maxBond=1 forces truncation
-    const { truncated } = new Circuit(2).h(0).cnot(0, 1).expectMps(
+  it('truncated is true when truncErr discards a significant Schmidt value', () => {
+    // Ry(0.1) + CNOT: σ_0 ≈ 0.999, σ_1 ≈ 0.050; truncErr=0.1 discards σ_1
+    const { truncated } = new Circuit(2).ry(0.1, 0).cnot(0, 1).expectMps(
       [{ coeff: 1, ops: 'ZZ' }],
-      { maxBond: 1 },
+      { truncErr: 0.1 },
     )
     expect(truncated).toBe(true)
   })
@@ -1676,9 +1722,10 @@ describe('gradientMps() — parameter-shift gradient via MPS', () => {
   })
 
   it('truncated is true when any parameter-shift evaluation is truncated', () => {
-    // Bell-like circuit always has χ=2; maxBond=1 forces truncation on every eval
+    // ry(p) + CNOT: shifted eval at p−π/2 gives Schmidt values ≈0.739, 0.674.
+    // truncErr=0.99 sets cutoff ≈ 0.731 so σ_1=0.674 is discarded → truncated=true.
     const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).cnot(0, 1)
-    const { truncated } = gradientMps(ansatz, [{ coeff: 1, ops: 'ZZ' }], [0.5], { maxBond: 1 })
+    const { truncated } = gradientMps(ansatz, [{ coeff: 1, ops: 'ZZ' }], [0.1], { truncErr: 0.99 })
     expect(truncated).toBe(true)
   })
 })
@@ -1712,11 +1759,11 @@ describe('minimizeMps() — VQE at scale via MPS', () => {
     expect(rMPS.truncated).toBe(false)
   })
 
-  it('truncated is true when maxBond is too small for the optimization', () => {
-    // Bell-like ansatz always has χ=2; maxBond=1 forces truncation on every energy eval
+  it('truncated is true when truncErr discards Schmidt values during optimization', () => {
+    // Ry(0.1) + CNOT: σ_1/σ_0 ≈ 0.05; truncErr=0.1 discards it on every energy eval
     const ansatz = (p: readonly number[]) => new Circuit(2).ry(p[0]!, 0).cnot(0, 1)
     const H: PauliTerm[] = [{ coeff: 1, ops: 'ZZ' }]
-    const { truncated } = minimizeMps(ansatz, H, [0.5], { steps: 5, maxBond: 1 })
+    const { truncated } = minimizeMps(ansatz, H, [0.1], { steps: 5, truncErr: 0.1 })
     expect(truncated).toBe(true)
   })
 
@@ -1753,9 +1800,9 @@ describe('Distribution.truncated — maxBond cap signal', () => {
     expect(d.truncated).toBe(false)
   })
 
-  it('is true when maxBond is too small for the entanglement', () => {
-    // Bell state has χ=2; capping at χ=1 must truncate the second Schmidt value (≈0.707)
-    const d = new Circuit(2).h(0).cx(0, 1).runMps({ shots: 64, seed: 1, maxBond: 1 })
+  it('is true when truncErr discards a significant Schmidt value', () => {
+    // Ry(0.1) + CNOT: σ_0 ≈ 0.999, σ_1 ≈ 0.050; truncErr=0.1 discards σ_1
+    const d = new Circuit(2).ry(0.1, 0).cx(0, 1).runMps({ shots: 64, seed: 1, truncErr: 0.1 })
     expect(d.truncated).toBe(true)
   })
 })
