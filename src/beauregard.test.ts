@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
 import { phiAdd, cPhiAdd, ccPhiAdd, phiAddMod, ccPhiAddMod, cMultModAdd, beauregardU,
          modPow, modInverse, gcd, continuedFractions,
-         applyQft, applyIqft } from './beauregard.js'
+         applyQft, applyIqft, shorBeauregard, factor } from './beauregard.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -447,4 +447,60 @@ describe('beauregard — MPS bond dimension scaling', () => {
   })
 
   // N=77 peakChi=143 measured (907s); excluded from CI — run scripts/measure-chi.ts manually.
+})
+
+// ── End-to-end: shorBeauregard / factor ───────────────────────────────────────
+
+describe('shorBeauregard / factor — end-to-end', () => {
+  it('even N — classical shortcut, no QPE', () => {
+    const r = shorBeauregard(14n)
+    expect(r.factor).toBe(2n)
+    expect(r.factors).toEqual([2n, 7n])
+    expect(r.period).toBeUndefined()
+    expect(r.attempts).toBe(0)
+  })
+
+  it('lucky gcd — factor found without QPE when gcd(a, N) > 1', () => {
+    // a=3 shares a factor with N=15 directly
+    const r = shorBeauregard(15n, { a: 3n })
+    expect(r.factor).toBe(3n)
+    expect(r.factors).toEqual([3n, 5n])
+    expect(r.period).toBeUndefined()
+  })
+
+  it('N=15, a=7: QPE finds period r=4, returns factors', () => {
+    // shots=4 to cover all 4 candidates (s*128 mod 512 for s=0..3); seed for reproducibility
+    const r = shorBeauregard(15n, { a: 7n, shots: 4, seed: 42 })
+    expect(r.factor).toBeDefined()
+    expect(r.factors).toBeDefined()
+    const [p, q] = r.factors!
+    expect(p * q).toBe(15n)
+    expect(p).toBeGreaterThan(1n)
+    expect(q).toBeGreaterThan(1n)
+    expect(r.period).toBeDefined()
+    // a=7, N=15: ord(7,15)=4; a^(r/2)=7^2=49≡4, gcd(4±1,15)=gcd(5,15)=5 or gcd(3,15)=3
+    expect([3n, 5n]).toContain(r.factor)
+  })
+
+  it('factor(15n) returns [p,q] with p*q=15', () => {
+    const f = factor(15n)
+    expect(f).toBeDefined()
+    const [p, q] = f!
+    expect(p * q).toBe(15n)
+    expect(p).toBeGreaterThan(1n)
+    expect(q).toBeGreaterThan(1n)
+  })
+
+  it('factor(number) — accepts plain JS number', () => {
+    const f = factor(14)
+    expect(f).toEqual([2n, 7n])
+  })
+
+  it('exhausted retries returns undefined factor', () => {
+    // N=2 is < 4 — throws; test maxAttempts=1 on a prime-like case
+    // Use a prime: factor of a prime can't be found
+    const r = shorBeauregard(7n, { maxAttempts: 1, seed: 1 })
+    // 7 is prime — no valid factorisation exists
+    expect(r.factor).toBeUndefined()
+  })
 })

@@ -938,6 +938,153 @@ describe('SVD regression — svdDecompose bug guards', () => {
   })
 })
 
+// ── SVD unit diagnostics — catch specific algorithm failure modes early ───────
+//
+// These tests check svdDecompose() outputs (Schmidt values + state amplitudes)
+// on analytically known cases. Each test targets one failure mode; if it breaks,
+// the test name tells you exactly which part of the algorithm is wrong.
+
+describe('SVD unit diagnostics — failure-mode isolation', () => {
+  /** Returns full amplitude vector (2^n complex values, re/im interleaved) from a trajectory.
+   * Index layout: a[idx*2] = Re(basis state idx), a[idx*2+1] = Im(basis state idx),
+   * where idx bit-k encodes qubit k state (LSB = qubit 0). */
+  function amps(traj: MpsTrajectory): Float64Array {
+    return mpsContract(trajToMps(traj))
+  }
+
+  /**
+   * Rank-1 matrix with zero bidiagonal diagonal — zero-chase path in bidiagonal QR.
+   *
+   * SWAP(|10⟩) → |01⟩. The theta matrix = [[0,1],[0,0]] has d=[0,0], e=[1] after
+   * bidiagonalization (pure superdiagonal). If the zero-chase uses f=cs*e[i-1] (bug)
+   * instead of f=sn*e[i-1], the singular value lands on U[:,1] instead of U[:,0],
+   * producing NaN probabilities for |01⟩ while |10⟩ remains erroneously probable.
+   *
+   * Direct symptom: a[4] (Re|01⟩, q0=0,q1=1) ≠ 1; bondLambda[0][0] ≠ 1.
+   */
+  it('zero-chase: SWAP of |10⟩ gives exactly |01⟩ (rank-1, zero bidiagonal diagonal)', () => {
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.X)      // qubit 0 = 1 → |10⟩ (q0=1, q1=0)
+    traj.apply2(0, 1, SWAP4) // → |01⟩ (q0=0, q1=1)
+    const a = amps(traj)
+    // mpsContract uses LSB=q0: idx=2 (binary 10) → q0=(2>>0)&1=0, q1=(2>>1)&1=1 → |01⟩
+    expect(a[0]!).toBeCloseTo(0, 12)  // Re|q0=0,q1=0⟩ = 0
+    expect(a[2]!).toBeCloseTo(0, 12)  // Re|q0=1,q1=0⟩ = 0 (was |10⟩ before SWAP)
+    expect(a[4]!).toBeCloseTo(1, 12)  // Re|q0=0,q1=1⟩ = 1 (|01⟩ after SWAP)
+    expect(a[6]!).toBeCloseTo(0, 12)  // Re|q0=1,q1=1⟩ = 0
+    // Schmidt rank = 1 (product state after SWAP): bondLambda[0][0]≈1, rest≈0
+    expect(traj.bondLambda[0]![0]).toBeCloseTo(1, 12)
+    expect(traj.bondLambda[0]![1]).toBeCloseTo(0, 8)
+  })
+
+  /**
+   * Real diagonal theta with equal singular values.
+   *
+   * H(0)+CNOT(0,1) → GHZ: theta = (1/√2)*I₂. Both σ = 1/√2 (maximally entangled).
+   * Tests that the bidiagonalization correctly handles the real symmetric case and
+   * produces bond=2 (not prematurely truncated to bond=1 via wrong cutoff).
+   *
+   * Direct symptom: chiR[0] ≠ 2 or bondLambda[0][0]≠1/√2 or a[0]≠1/√2 or a[6]≠1/√2.
+   */
+  it('real diagonal theta: GHZ bond=2, Schmidt values=[1/√2,1/√2]', () => {
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CNOT4)
+    expect(traj.chiR[0]).toBe(2)
+    expect(traj.bondLambda[0]![0]).toBeCloseTo(Math.SQRT1_2, 12)
+    expect(traj.bondLambda[0]![1]).toBeCloseTo(Math.SQRT1_2, 12)
+    const a = amps(traj)
+    // |GHZ⟩ = 1/√2(|00⟩+|11⟩): idx=0 (q0=0,q1=0) and idx=3 (q0=1,q1=1)
+    expect(a[0]!).toBeCloseTo(Math.SQRT1_2, 12)  // Re|00⟩
+    expect(a[6]!).toBeCloseTo(Math.SQRT1_2, 12)  // Re|11⟩
+  })
+
+  /**
+   * Complex theta matrix — right Householder conjugation path.
+   *
+   * H(0)+CRZ(π/2)(0,1): theta has complex off-diagonal entries (CRZ adds phases).
+   * If the right Householder inner product uses conj(v) instead of v (sign bug),
+   * the bidiagonalization is wrong and amplitudes diverge from the statevector.
+   *
+   * Reference: Circuit.amplitude() (exact statevector, no MPS).
+   * Direct symptom: |ψ_mps - ψ_exact| > 1e-12 for some basis state.
+   */
+  it('complex theta: H(0)+CRZ(π/2)(0,1) amplitudes match statevector to 1e-12', () => {
+    const theta = Math.PI / 2
+    // CRZ(θ) as a gate4x4: diagonal with phases on the |10⟩ and |11⟩ rows.
+    const c0 = Math.cos(-theta / 2), s0 = Math.sin(-theta / 2)
+    const c1 = Math.cos( theta / 2), s1 = Math.sin( theta / 2)
+    const CRZ: Gate4x4 = [
+      [{ re:1,im:0},{re:0,im:0},{re:0,im:0},{re:0,im:0}],
+      [{ re:0,im:0},{re:1,im:0},{re:0,im:0},{re:0,im:0}],
+      [{ re:0,im:0},{re:0,im:0},{re:c0,im:s0},{re:0,im:0}],
+      [{ re:0,im:0},{re:0,im:0},{re:0,im:0},{re:c1,im:s1}],
+    ]
+    const traj = new MpsTrajectory(2, 4)
+    traj.apply1(0, G.H)
+    traj.apply2(0, 1, CRZ)
+    const mpsAmps = amps(traj)
+    // Reference: Circuit statevector
+    const circ = new Circuit(2).h(0).crz(theta, 0, 1)
+    const bitstrings = ['00', '10', '01', '11']  // q0-leftmost; maps to idx 0,1,2,3
+    bitstrings.forEach((bs, idx) => {
+      const ref = circ.amplitude(bs)
+      expect(Math.abs(mpsAmps[idx * 2]!     - ref.re)).toBeLessThan(1e-12)
+      expect(Math.abs(mpsAmps[idx * 2 + 1]! - ref.im)).toBeLessThan(1e-12)
+    })
+  })
+
+  /**
+   * Tall matrix (rows > cols) — asymmetric bidiagonalization.
+   *
+   * After two CNOTs in a 3-qubit circuit, bonds can have rows=4, cols=2 (or vice versa).
+   * The bidiagonalization must handle non-square matrices without reading past buffer ends.
+   *
+   * Reference: Circuit.amplitude() for all 8 basis states.
+   * Direct symptom: NaN amplitudes or > 1e-12 deviation.
+   */
+  it('tall matrix (rows>cols): 3-qubit H⊗2+CNOT(0,1)+CNOT(1,2) matches statevector', () => {
+    const traj = new MpsTrajectory(3, 8)
+    traj.apply1(0, G.H)
+    traj.apply1(1, G.H)
+    traj.apply2(0, 1, CNOT4)
+    traj.apply2(1, 2, CNOT4)
+    const mpsAmps = amps(traj)
+    const circ = new Circuit(3).h(0).h(1).cnot(0, 1).cnot(1, 2)
+    // All 8 bitstrings; LSB=q0, so bitstring is q0q1q2, idx = q0 + 2*q1 + 4*q2
+    const bitstrings = ['000','100','010','110','001','101','011','111']
+    bitstrings.forEach((bs, idx) => {
+      const ref = circ.amplitude(bs)
+      expect(Math.abs(mpsAmps[idx * 2]!     - ref.re)).toBeLessThan(1e-12)
+      expect(Math.abs(mpsAmps[idx * 2 + 1]! - ref.im)).toBeLessThan(1e-12)
+    })
+  })
+
+  /**
+   * Sequential SVDs — cumulative correctness across many apply2() calls.
+   *
+   * A 5-qubit brickwork circuit applies ~8 two-qubit gates, each triggering an SVD.
+   * Errors in Vidal canonical form accumulate; any bug causes growing divergence.
+   *
+   * Reference: Circuit.runMps() probs vs Circuit.run() probs (chi-squared).
+   * Direct symptom: chiSq > 2.5 (wrong distribution, not sampling variance).
+   */
+  it('sequential SVDs: 5-qubit brickwork depth=4 matches statevector (chiSq/dof < 2.5)', () => {
+    const circ = new Circuit(5)
+      .h(0).h(1).h(2).h(3).h(4)
+      .cnot(0, 1).cnot(2, 3)
+      .cnot(1, 2).cnot(3, 4)
+      .ry(0.7, 0).ry(1.1, 1).ry(0.3, 2).ry(0.9, 3).ry(0.5, 4)
+      .cnot(0, 1).cnot(2, 3)
+    const shots = 8192
+    expect(chiSq(
+      circ.runMps({ shots, seed: 42, maxBond: 16 }).probs,
+      circ.run({ shots, seed: 42 }).probs,
+      shots,
+    )).toBeLessThan(2.5)
+  })
+})
+
 // ── 9. Large-scale noisy brickwork — classical simulability at scale ──────────
 
 describe('large-scale noisy brickwork — simulability via noise-limited entanglement', () => {

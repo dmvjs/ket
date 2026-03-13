@@ -394,6 +394,26 @@ export interface ShorResult {
  *   precision+n..+n      — b register (n+1 qubits, ancilla for multiplier)
  *   precision+2n+1       — ancilla qubit
  */
+/**
+ * Factor N into two non-trivial factors using Shor's algorithm.
+ *
+ * Convenience wrapper around {@link shorBeauregard}: handles even N classically,
+ * picks random coprime bases automatically, and retries on bad periods.
+ *
+ * @returns `[p, q]` with `p * q === N` and `1 < p, q < N`, or `undefined` if
+ *          factoring failed (N is prime, or all random bases gave odd/trivial periods).
+ *
+ * @example
+ * ```ts
+ * factor(15n)  // → [3n, 5n]
+ * factor(21n)  // → [3n, 7n]
+ * factor(35n)  // → [5n, 7n]
+ * ```
+ */
+export function factor(N: number | bigint): [bigint, bigint] | undefined {
+  return shorBeauregard(BigInt(N)).factors
+}
+
 export function shorBeauregard(
   N: bigint,
   opts: {

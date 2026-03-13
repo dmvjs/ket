@@ -3,7 +3,7 @@ export { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minim
 export type { PauliTerm, MinimizeOptions, MinimizeResult, MinimizeMpsOptions, AnsatzFn } from './algorithms.js'
 export type { RunOptions, NoiseParams, MpsRunOptions, SimulateOptions, IonQGate, IonQCircuit, IonQDeviceInfo, DeviceInfo, CircuitJSON, FlatOp } from './circuit.js'
 export { IONQ_DEVICES, DEVICES } from './circuit.js'
-export { shorBeauregard, modPow, modInverse, gcd, continuedFractions, phiAdd, applyQft, applyIqft } from './beauregard.js'
+export { factor, shorBeauregard, modPow, modInverse, gcd, continuedFractions, phiAdd, applyQft, applyIqft } from './beauregard.js'
 export type { ShorResult } from './beauregard.js'
 export { CliffordSim } from './clifford.js'
 export { DensityMatrix } from './density.js'
