@@ -33,6 +33,9 @@ export type Tensor = {
 /** Matrix Product State: one rank-3 tensor per qubit site. */
 export type MPS = Tensor[]
 
+/** Minimum jump probability below which a noise channel is skipped (avoids 0/0 in normalisation). */
+const JUMP_THRESHOLD = 1e-15
+
 // ── Constant gate matrices ────────────────────────────────────────────────────
 
 export const CNOT4: Gate4x4 = [
@@ -1244,11 +1247,11 @@ export function dampAmpTraj(traj: MpsTrajectory, q: number, gamma: number, rng: 
   if (gamma <= 0) return
   const p1    = traj.pQubit(q)
   const pJump = gamma * p1
-  if (pJump < 1e-15) return
+  if (pJump < JUMP_THRESHOLD) return
 
   if (rng() < pJump) {
-    // K1: |1⟩→|0⟩ decay — use measure (forced outcome=1) then X
-    traj.measure(q, () => 0)   // () => 0 < p1 → outcome=1 when p1>0
+    // K1: |1⟩→|0⟩ decay — measure with rand=0 to force outcome=1 (0 < p1 holds since pJump > 1e-15), then X
+    traj.measure(q, () => 0)
     traj.apply1(q, G.X)
   } else {
     // K0: damp |1⟩ amplitudes and renormalise
@@ -1271,11 +1274,11 @@ export function dampPhaseTraj(traj: MpsTrajectory, q: number, lambda: number, rn
   if (lambda <= 0) return
   const p1    = traj.pQubit(q)
   const pJump = lambda * p1
-  if (pJump < 1e-15) return
+  if (pJump < JUMP_THRESHOLD) return
 
   if (rng() < pJump) {
-    // K1: project to |1⟩ (dephasing collapse)
-    traj.measure(q, () => 0)   // forces outcome=1 when p1>0
+    // K1: project to |1⟩ (dephasing collapse) — rand=0 forces outcome=1 since 0 < p1
+    traj.measure(q, () => 0)
   } else {
     // K0: damp |1⟩ amplitudes and renormalise
     const sqL  = Math.sqrt(1 - lambda)

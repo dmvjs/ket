@@ -7619,10 +7619,29 @@ describe('T1/T2 noise — statevector quantum jumps', () => {
     expect(probs['1'] ?? 0).toBeCloseTo(1, 10)
   })
 
+  it('phase damping (statevector): |+⟩ with lambda=1 gives 50/50 populations', () => {
+    // lambda=1 destroys all coherences → |+⟩ collapses to classical 50/50
+    const d = new Circuit(1).h(0).run({ shots: 8192, noise: { lambda: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('phase damping (statevector): |1⟩ populations unchanged by pure dephasing', () => {
+    // Dephasing kills coherences but not populations: P(1) stays 1
+    const d = new Circuit(1).x(0).run({ shots: 512, noise: { lambda: 0.9 }, seed: 1 })
+    expect(d.probs['1'] ?? 0).toBeCloseTo(1, 1)
+  })
+
   it('T1/T2 MPS: amplitude damping reduces |1⟩ population', () => {
     const d = new Circuit(3).x(0).x(1).runMps({ shots: 512, noise: { gamma: 0.8 }, seed: 1 })
     // After large amplitude damping, most population should be at |0⟩
     expect(d.probs['000'] ?? 0).toBeGreaterThan(0.3)
+  })
+
+  it('phase damping (MPS): |+⟩ with lambda=1 gives 50/50 populations', () => {
+    const d = new Circuit(1).h(0).runMps({ shots: 4096, noise: { lambda: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(0.5, 1)
   })
 
   it('T1/T2 combined: depolarizing + T1 + T2 all active simultaneously', () => {
@@ -7673,6 +7692,18 @@ describe('custom Kraus channels', () => {
     expect(d.probs['11'] ?? 0).toBeCloseTo(0.5, 1)
   })
 
+  it('bit-flip Kraus channel: applied after X on |0⟩ flips back with probability p', () => {
+    // Bit-flip channel: K0 = √(1-p)·I, K1 = √p·X
+    // X prepares |1⟩; channel fires after X: K0 keeps |1⟩ (prob 1-p), K1 flips to |0⟩ (prob p)
+    const p = 0.4
+    const sqP = Math.sqrt(p), sqOmP = Math.sqrt(1 - p)
+    const K0: Gate2x2 = [[{re:sqOmP,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmP,im:0}]]
+    const K1: Gate2x2 = [[{re:0,im:0},{re:sqP,im:0}],[{re:sqP,im:0},{re:0,im:0}]]
+    const d = new Circuit(1).x(0).run({ shots: 8192, seed: 7, noise: { kraus1: [K0, K1] } })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(p, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(1 - p, 1)
+  })
+
   it('DM Kraus1: amplitude damping channel matches amplitudeDamping1 output', () => {
     const gamma = 0.4
     const sqG = Math.sqrt(gamma), sqOmG = Math.sqrt(1 - gamma)
@@ -7683,6 +7714,36 @@ describe('custom Kraus channels', () => {
     const pb = dBuiltin.probabilities(), pk = dKraus.probabilities()
     expect(pb['0'] ?? 0).toBeCloseTo(pk['0'] ?? 0, 8)
     expect(pb['1'] ?? 0).toBeCloseTo(pk['1'] ?? 0, 8)
+  })
+
+  it('DM Kraus2: depolarizing channel on Bell state increases mixedness', () => {
+    // Full depolarizing 2Q channel via 16 Kraus operators: ε(ρ) = (1-p)ρ + p·I/4
+    // Implemented as identity + scaled Paulis; here we use a simpler partial depolarizer:
+    // K0 = √(1-p)·I4, K1..K3 = √(p/3)·(I⊗X, X⊗I, X⊗X) — partial flip channel
+    const p = 0.3
+    const s0 = Math.sqrt(1 - p), s1 = Math.sqrt(p / 3)
+    const i = {re:1,im:0}, o = {re:0,im:0}
+    const mk = (a00:number,a11:number,a22:number,a33:number): Gate4x4 => [
+      [{re:a00,im:0},o,o,o], [o,{re:a11,im:0},o,o], [o,o,{re:a22,im:0},o], [o,o,o,{re:a33,im:0}],
+    ]
+    // K0 = s0·I4
+    const K0: Gate4x4 = [[{re:s0,im:0},o,o,o],[o,{re:s0,im:0},o,o],[o,o,{re:s0,im:0},o],[o,o,o,{re:s0,im:0}]]
+    // K1 = s1·(I⊗X): swaps |00⟩↔|01⟩ and |10⟩↔|11⟩
+    const K1: Gate4x4 = [[o,{re:s1,im:0},o,o],[{re:s1,im:0},o,o,o],[o,o,o,{re:s1,im:0}],[o,o,{re:s1,im:0},o]]
+    // K2 = s1·(X⊗I): swaps |00⟩↔|10⟩ and |01⟩↔|11⟩
+    const K2: Gate4x4 = [[o,o,{re:s1,im:0},o],[o,o,o,{re:s1,im:0}],[{re:s1,im:0},o,o,o],[o,{re:s1,im:0},o,o]]
+    // K3 = s1·(X⊗X): swaps |00⟩↔|11⟩ and |01⟩↔|10⟩
+    const K3: Gate4x4 = [[o,o,o,{re:s1,im:0}],[o,o,{re:s1,im:0},o],[o,{re:s1,im:0},o,o],[{re:s1,im:0},o,o,o]]
+    const clean  = new Circuit(2).h(0).cnot(0, 1).dm()
+    const noisy  = new Circuit(2).h(0).cnot(0, 1).dm({ noise: { kraus2: [K0, K1, K2, K3] } })
+    expect(noisy.purity()).toBeLessThan(clean.purity())
+  })
+
+  it('runMps throws when kraus1 or kraus2 passed (unsupported backend)', () => {
+    const I2: Gate2x2 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:1,im:0}]]
+    expect(() =>
+      new Circuit(1).h(0).runMps({ shots: 1, noise: { kraus1: [I2] } })
+    ).toThrow(/kraus/)
   })
 })
 

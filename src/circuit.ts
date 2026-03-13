@@ -242,7 +242,19 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
 
 // ─── Noise simulation ─────────────────────────────────────────────────────────
 
-/** Per-gate error parameters for stochastic noise simulation. */
+/** Minimum jump probability below which a noise channel is skipped (avoids 0/0 in normalisation). */
+const JUMP_THRESHOLD = 1e-15
+
+/**
+ * Per-gate error parameters for stochastic noise simulation.
+ *
+ * **Gate coverage note:** `p1`, `p2`, `gamma`, and `lambda` are applied after every
+ * primitive gate (single-qubit and two-qubit). Toffoli and CSWAP are treated as
+ * noise-free primitives in `run()` and `dm()`. In `runMps()` they are automatically
+ * decomposed into 1Q/2Q gates before simulation, so each constituent gate receives
+ * noise — which is the physically realistic model for hardware that never supports
+ * these gates natively. If noise on Toffoli/CSWAP matters, use `runMps()`.
+ */
 export interface NoiseParams {
   /** Single-qubit depolarizing error probability per gate (0–1). */
   p1?: number
@@ -253,25 +265,28 @@ export interface NoiseParams {
   /**
    * Amplitude damping (T1 relaxation) probability per single-qubit gate.
    * Physically: γ = 1 − exp(−t_gate / T1).
-   * Applied as a quantum jump (|1⟩ → |0⟩) after each single-qubit gate;
-   * also applied independently to each qubit after two-qubit gates.
+   * Applied independently to each qubit after every gate (single and two-qubit).
    */
   gamma?: number
   /**
    * Pure dephasing (T2 beyond T1) probability per single-qubit gate.
    * Physically: λ = 1 − exp(−2 t_gate (1/T2 − 1/(2T1))).
-   * Applied as a quantum jump (kills off-diagonal coherences) after each single-qubit gate.
+   * Applied independently to each qubit after every gate (single and two-qubit).
    */
   lambda?: number
   /**
-   * Custom Kraus operators applied after each single-qubit gate.
+   * Custom Kraus operators applied after each **single-qubit** gate only.
+   * Not applied after two-qubit gates — use `kraus2` for those.
    * Must satisfy Σ_k K_k† K_k = I (trace-preserving channel).
-   * Each K_k is a 2×2 complex matrix; a random one is selected per shot per gate.
+   * Each K_k is a 2×2 complex matrix; one is sampled per shot per gate.
+   * Not supported in `runMps()` — use `run()` or `dm()`.
    */
   kraus1?: readonly Gate2x2[]
   /**
-   * Custom Kraus operators applied after each two-qubit gate.
+   * Custom Kraus operators applied after each **two-qubit** gate only.
+   * Not applied after single-qubit gates — use `kraus1` for those.
    * Must satisfy Σ_k K_k† K_k = I. Each K_k is a 4×4 complex matrix.
+   * Not supported in `runMps()` — use `run()` or `dm()`.
    */
   kraus2?: readonly Gate4x4[]
 }
@@ -373,7 +388,7 @@ function dampAmp1(sv: StateVector, q: number, gamma: number, rand: number): Stat
     if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
   }
   const pJump = gamma * p1
-  if (pJump < 1e-15) return sv
+  if (pJump < JUMP_THRESHOLD) return sv
 
   if (rand < pJump) {
     // K1 fires: decay |1⟩ → |0⟩ (equivalent to project-to-|1⟩ then X)
@@ -413,7 +428,7 @@ function dampPhase1(sv: StateVector, q: number, lambda: number, rand: number): S
     if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
   }
   const pJump = lambda * p1
-  if (pJump < 1e-15) return sv
+  if (pJump < JUMP_THRESHOLD) return sv
 
   if (rand < pJump) {
     // K1 fires: project to |1⟩ (dephasing collapse)
@@ -462,7 +477,13 @@ function applyKraus1Channel(sv: StateVector, q: number, kraus: readonly Gate2x2[
       return next
     }
   }
-  return sv
+  // Floating-point rounding guard: cumP ≈ 1 for a valid channel; residual r > 0 is epsilon.
+  // Return the last operator's result rather than the un-evolved state.
+  const last = results.length - 1
+  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
+  const fallback: StateVector = new Map()
+  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
+  return fallback
 }
 
 /**
@@ -491,7 +512,12 @@ function applyKraus2Channel(sv: StateVector, a: number, b: number, kraus: readon
       return next
     }
   }
-  return sv
+  // Floating-point rounding guard: return last operator's result.
+  const last = results.length - 1
+  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
+  const fallback: StateVector = new Map()
+  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
+  return fallback
 }
 
 // ─── IonQ JSON types ──────────────────────────────────────────────────────────
@@ -3860,6 +3886,9 @@ export class Circuit {
       const pMeas  = noise?.pMeas  ?? 0
       const gamma  = noise?.gamma  ?? 0
       const lambda = noise?.lambda ?? 0
+      if (noise?.kraus1 || noise?.kraus2) {
+        throw new Error('kraus1/kraus2 custom channels are not supported in the MPS trajectory backend — use run() (statevector) or runDM() (density matrix) instead')
+      }
       if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
 
       // Parallel path: workers handle the noisy+clean-mid-circuit case.

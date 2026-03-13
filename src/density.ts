@@ -632,12 +632,14 @@ export interface DmNoiseParams {
    */
   lambda?: number
   /**
-   * Custom Kraus operators applied after each single-qubit gate.
+   * Custom Kraus operators applied after each **single-qubit** gate only.
+   * Not applied after two-qubit gates — use `kraus2` for those.
    * Must satisfy Σ_k K_k† K_k = I.
    */
   kraus1?: readonly Gate2x2[]
   /**
-   * Custom Kraus operators applied after each two-qubit gate.
+   * Custom Kraus operators applied after each **two-qubit** gate only.
+   * Not applied after single-qubit gates — use `kraus1` for those.
    * Must satisfy Σ_k K_k† K_k = I.
    */
   kraus2?: readonly Gate4x4[]
