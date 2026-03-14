@@ -145,7 +145,7 @@ gpu_state = {
       layout: 'auto', compute: { module: mod, entryPoint: 'main' }
     })
   } catch { device.destroy(); return null }
-  return { device, pipeline, f16: false, maxBuf: adapter.limits.maxBufferSize }
+  return { device, pipeline, maxBuf: adapter.limits.maxBufferSize }
 }
 ```
 
@@ -156,9 +156,9 @@ shor_holder = {
   const total = t + n
   const size = 2 ** total
 
-  // Use WebGPU when: t=1 (sparse ctrl-mult path), GPU available, half-buffer fits in VRAM.
-  // Split mode: when size*4 > maxBuf, split re/im each into two half-buffers.
-  // Each half = size/2 floats = same bytes as n=29 single-buffer → n=30 works wherever n=29 did.
+  // Use WebGPU when: t=1, GPU available, and each half-buffer fits in VRAM.
+  // Split mode: when size*4 > maxBuf, split re/im into two half-buffers of size/2 each.
+  // Each half = size/2 × 4 bytes — same as n=29 single-buffer — so n=30 works wherever n=29 did.
   const gs = gpu_state
   const useGpu = t === 1 && gs != null && size * 2 <= gs.maxBuf
 
@@ -174,6 +174,30 @@ shor_holder = {
 
       // n-bit reversal — used in both paths
       const bitrev = (x) => { let r=0,b=n; while(b--){r=(r<<1)|(x&1);x>>>=1}; return r }
+
+      // Period → factors: shared by GPU and CPU paths
+      const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a }
+      const extractFactors = (countProbs) => {
+        const periods = new Set()
+        for (const [bits, p] of Object.entries(countProbs)) {
+          if (p < 0.05) continue
+          const m = parseInt(bits, 2)
+          if (m === 0) continue
+          for (let r = 1; r <= 2 * (1 << t); r++)
+            for (let s = 1; s < r; s++)
+              if (Math.abs(s / r - m / (1 << t)) < 0.5 / (1 << t)) periods.add(r)
+        }
+        const factors = []
+        for (const r of [...periods].sort((x, y) => x - y)) {
+          if (r % 2 !== 0) continue
+          const x = r === 4 ? aSq : r === 2 ? a : null
+          if (!x || x === 1 || x === N - 1) continue
+          const f1 = gcd(x - 1, N), f2 = gcd(x + 1, N)
+          const fs = [f1, f2].filter(f => f > 1 && f < N)
+          if (fs.length) factors.push({ r, p: fs[0], q: N / fs[0] })
+        }
+        return factors
+      }
 
       if (useGpu) {
         // ── GPU path ───────────────────────────────────────────────────────────
@@ -275,26 +299,7 @@ shor_holder = {
         if (P0 > 1e-6) countProbs['0'] = P0
         if (P1 > 1e-6) countProbs['1'] = P1
 
-        const periods = new Set()
-        for (const [bits, p] of Object.entries(countProbs)) {
-          if (p < 0.05) continue
-          const m = parseInt(bits, 2)
-          if (m === 0) continue
-          for (let r = 1; r <= 2*(1<<t); r++)
-            for (let s = 1; s < r; s++)
-              if (Math.abs(s/r - m/(1<<t)) < 0.5/(1<<t)) periods.add(r)
-        }
-        const shor_gcd = (a, b) => { while (b) [a,b]=[b,a%b]; return a }
-        const factors = []
-        for (const r of [...periods].sort((x,y)=>x-y)) {
-          if (r % 2 !== 0) continue
-          const x = r === 4 ? aSq : r === 2 ? a : null
-          if (!x || x === 1 || x === N-1) continue
-          const f1 = shor_gcd(x-1,N), f2 = shor_gcd(x+1,N)
-          const fs = [f1,f2].filter(f=>f>1&&f<N)
-          if (fs.length) factors.push({ r, p: fs[0], q: N/fs[0] })
-        }
-        return { N, a, t, n, elapsed: performance.now()-t0, countProbs, factors, gpu: true }
+        return { N, a, t, n, elapsed: performance.now()-t0, countProbs, factors: extractFactors(countProbs), gpu: true }
       }
 
       // ── CPU path ─────────────────────────────────────────────────────────────
@@ -330,9 +335,9 @@ shor_holder = {
         const cos = Math.cos(theta), sin = Math.sin(theta)
         for (let i = 0; i < size; i++) {
           if ((i & cb) && (i & tb)) {
-            const r = re[i], ii = im[i]
-            re[i] = r * cos - ii * sin
-            im[i] = r * sin + ii * cos
+            const r = re[i], im0 = im[i]
+            re[i] = r * cos - im0 * sin
+            im[i] = r * sin + im0 * cos
           }
         }
       }
@@ -350,8 +355,8 @@ shor_holder = {
       }
 
       // Controlled-multiplication — in-place, no scratch arrays, no lookup table.
-      // State is sparse (≤ 2^t non-zero amplitudes after H gates); we collect the
-      // ~8 non-zero entries, clear them, then scatter to permuted positions.
+      // State is sparse (≤ 2^t non-zero amplitudes after H gates); collect them,
+      // clear their positions, then scatter to the permuted work-register positions.
       const applyCtrlMult = (mul, ctrl_q) => {
         const cb = 1 << ctrl_q
         const mask = (1 << n) - 1
@@ -393,28 +398,7 @@ shor_holder = {
         countProbs[key] = (countProbs[key] || 0) + p
       }
 
-      const periods = new Set()
-      for (const [bits, p] of Object.entries(countProbs)) {
-        if (p < 0.05) continue
-        const m = parseInt(bits, 2)
-        if (m === 0) continue
-        for (let r = 1; r <= 2 * (1 << t); r++)
-          for (let s = 1; s < r; s++)
-            if (Math.abs(s / r - m / (1 << t)) < 0.5 / (1 << t)) periods.add(r)
-      }
-
-      const shor_gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a }
-      const factors = []
-      for (const r of [...periods].sort((x, y) => x - y)) {
-        if (r % 2 !== 0) continue
-        const x = r === 4 ? aSq : r === 2 ? a : null
-        if (!x || x === 1 || x === N - 1) continue
-        const f1 = shor_gcd(x - 1, N), f2 = shor_gcd(x + 1, N)
-        const fs = [f1, f2].filter(f => f > 1 && f < N)
-        if (fs.length) factors.push({ r, p: fs[0], q: N / fs[0] })
-      }
-
-      return { N, a, t, n, elapsed: performance.now() - t0, countProbs, factors }
+      return { N, a, t, n, elapsed: performance.now() - t0, countProbs, factors: extractFactors(countProbs) }
     } finally {
       if (wakeLock) wakeLock.release()
     }
