@@ -102,13 +102,18 @@ SHOR_TARGETS = [
   { N: 1070467523,  a: 32718, aSq: 1, n: 30, t: 1, label: "1070467523 = 32717 × 32719  (16 GB VRAM, RTX 4090+)" },
   { N: 2144430863,  a: 46308, aSq: 1, n: 31, t: 1, label: "2144430863 = 46307 × 46309  (32 GB VRAM)" },
   { N: 4292870399,  a: 65520, aSq: 1, n: 32, t: 1, label: "4292870399 = 65519 × 65521  (64 GB VRAM)" },
+  // Sparse path: BigInt index tracking — O(1) memory, runs in microseconds regardless of n.
+  { N: 17190356543,        a: 131112,   aSq: 1, n: 35, t: 1, sparse: true, label: "17,190,356,543 = 131,111 × 131,113  [35-bit]" },
+  { N: 1100170232099,      a: 1048890,  aSq: 1, n: 41, t: 1, sparse: true, label: "1,100,170,232,099 = 1,048,889 × 1,048,891  [41-bit]" },
+  { N: 17594518154723,     a: 4194582,  aSq: 1, n: 45, t: 1, sparse: true, label: "17,594,518,154,723 = 4,194,581 × 4,194,583  [45-bit]" },
+  { N: 1125904604468003,   a: 33554502, aSq: 1, n: 51, t: 1, sparse: true, label: "1,125,904,604,468,003 = 33,554,501 × 33,554,503  [51-bit]" },
 ]
 ```
 
 ```{ojs}
 viewof shor_target = Inputs.select(SHOR_TARGETS, {
   label: "N to factor",
-  format: t => `${t.N.toLocaleString()}  [${t.n}-bit]${t.n >= 30 ? " 🖥️" : t.n >= 28 ? " ☕" : t.n >= 25 ? " ⏳" : ""}`
+  format: t => `${t.N.toLocaleString()}  [${t.n}-bit]${t.sparse ? " ⚡" : t.n >= 30 ? " 🖥️" : t.n >= 28 ? " ☕" : t.n >= 25 ? " ⏳" : ""}`
 })
 ```
 
@@ -164,8 +169,10 @@ shor_holder = {
   // Use WebGPU when: t=1 (sparse ctrl-mult path), GPU available, half-buffer fits in VRAM.
   // Split mode: when size*4 > maxBuf, split re/im each into two half-buffers.
   // Each half = size/2 floats = same bytes as n=29 single-buffer → n=30 works wherever n=29 did.
+  // Sparse path: when t=1 and GPU unavailable/too small — BigInt index tracking, O(1) memory.
   const gs = gpu_state
-  const useGpu = t === 1 && gs != null && size * 2 <= gs.maxBuf
+  const useGpu    = t === 1 && gs != null && size * 2 <= gs.maxBuf
+  const useSparse = t === 1 && !useGpu
 
   const holder = {}
   holder.promise = (async () => {
@@ -300,6 +307,101 @@ shor_holder = {
           if (fs.length) factors.push({ r, p: fs[0], q: N/fs[0] })
         }
         return { N, a, t, n, elapsed: performance.now()-t0, countProbs, factors, gpu: true }
+      }
+
+      if (useSparse) {
+        // ── Sparse path ───────────────────────────────────────────────────────
+        // Tracks only non-zero amplitudes with BigInt indices — O(1) memory for all n.
+        // For t=1 QPE the state has at most 4 non-zero entries throughout the circuit.
+        // Handles n=35–51 (and beyond) in microseconds; also serves as GPU fallback.
+        const tBig = BigInt(t), nBig = BigInt(n)
+        const NBig = BigInt(N), aBig = BigInt(a), aSqBig = BigInt(aSq)
+        const maskN = (1n << nBig) - 1n
+        const workMask = maskN << tBig
+        const brBig = (x) => { let r=0n,b=nBig,v=x; while(b-->0n){r=(r<<1n)|(v&1n);v>>=1n}; return r }
+
+        let spState = new Map([[brBig(1n) << tBig, [1, 0]]])
+
+        const hBig = (q) => {
+          const bit = 1n << BigInt(q), s2 = Math.SQRT1_2
+          const next = new Map()
+          for (const [i, [r0, i0]] of spState) {
+            if (i & bit) continue
+            const j = i | bit
+            const [r1, i1] = spState.get(j) ?? [0, 0]
+            const nr = s2*(r0+r1), ni = s2*(i0+i1)
+            const pr = s2*(r0-r1), pi = s2*(i0-i1)
+            if (nr*nr+ni*ni > 1e-30) next.set(i, [nr, ni])
+            if (pr*pr+pi*pi > 1e-30) next.set(j, [pr, pi])
+          }
+          spState = next
+        }
+
+        const multBig = (mul, ctrl_q) => {
+          const cb = 1n << BigInt(ctrl_q), mb = BigInt(mul)
+          const next = new Map()
+          for (const [i, amp] of spState) {
+            if (!(i & cb)) { next.set(i, amp); continue }
+            const x = brBig((i >> tBig) & maskN)
+            const y = x < NBig ? (x * mb) % NBig : x
+            next.set((i & ~workMask) | (brBig(y) << tBig), amp)
+          }
+          spState = next
+        }
+
+        const phaseBig = (theta, ctrl, tgt) => {
+          const cb = 1n << BigInt(ctrl), tb = 1n << BigInt(tgt)
+          const cos = Math.cos(theta), sin = Math.sin(theta)
+          for (const [i, [r, im]] of spState)
+            if ((i & cb) && (i & tb)) spState.set(i, [r*cos - im*sin, r*sin + im*cos])
+        }
+
+        const aPowsSp = [a, aSq, 1]
+        for (let i = 0; i < t; i++) hBig(i)
+        for (let k = 0; k < t; k++) { if (aPowsSp[k] !== 1) multBig(aPowsSp[k], k) }
+        for (let i = 0; i < Math.floor(t / 2); i++) {
+          const ba = 1n << BigInt(i), bb = 1n << BigInt(t - 1 - i)
+          const tmp = new Map(spState)
+          for (const [idx, amp] of spState)
+            if ((idx & ba) && !(idx & bb)) { tmp.set(idx, spState.get((idx & ~ba) | bb) ?? [0,0]); tmp.set((idx & ~ba) | bb, amp) }
+          spState = tmp
+        }
+        for (let j = 0; j < t; j++) {
+          for (let kk = j - 1; kk >= 0; kk--) phaseBig(-Math.PI / 2 ** (j - kk), kk, j)
+          hBig(j)
+        }
+
+        const countProbs = {}
+        const tMaskBig = (1n << tBig) - 1n
+        for (const [i, [r, im]] of spState) {
+          const p = r*r + im*im
+          if (p < 1e-10) continue
+          const key = Number(i & tMaskBig).toString(2).padStart(t, '0')
+          countProbs[key] = (countProbs[key] ?? 0) + p
+        }
+
+        const periods = new Set()
+        for (const [bits, p] of Object.entries(countProbs)) {
+          if (p < 0.05) continue
+          const m = parseInt(bits, 2)
+          if (m === 0) continue
+          for (let r = 1; r <= 2 * (1 << t); r++)
+            for (let s = 1; s < r; s++)
+              if (Math.abs(s/r - m/(1<<t)) < 0.5/(1<<t)) periods.add(r)
+        }
+
+        const gcdb = (a, b) => { while (b > 0n) [a, b] = [b, a % b]; return a }
+        const factors = []
+        for (const r of [...periods].sort((x, y) => x - y)) {
+          if (r % 2 !== 0) continue
+          const x = r === 4 ? aSqBig : r === 2 ? aBig : null
+          if (!x || x === 1n || x === NBig - 1n) continue
+          const f1 = gcdb(x - 1n, NBig), f2 = gcdb(x + 1n, NBig)
+          const fs = [f1, f2].filter(f => f > 1n && f < NBig)
+          if (fs.length) factors.push({ r, p: Number(fs[0]), q: Number(NBig / fs[0]) })
+        }
+
+        return { N, a, t, n, elapsed: performance.now() - t0, countProbs, factors, sparse: true }
       }
 
       // ── CPU path ─────────────────────────────────────────────────────────────
@@ -438,11 +540,11 @@ shor_holder = {
   spinner.innerHTML = '<span class="shor-spinner"></span> running QPE circuit\u2026'
   root.appendChild(spinner)
 
-  holder.promise.then(({ N, a, t, n, elapsed, countProbs, factors, gpu }) => {
+  holder.promise.then(({ N, a, t, n, elapsed, countProbs, factors, gpu, sparse }) => {
     spinner.remove()
     const maxP = Math.max(...Object.values(countProbs))
-    const mem = (4 * 4 * (1 << (t + n)) / 1e9).toFixed(1)
-    const backend = gpu ? `GPU VRAM` : `~${mem} GB RAM`
+    const mem = (4 * 4 * (2 ** (t + n)) / 1e9).toFixed(1)
+    const backend = gpu ? `GPU VRAM` : sparse ? `⚡ sparse simulation` : `~${mem} GB RAM`
     const lines = [
       `N = ${N}  (${n}-bit,  state space = 2^${t+n},  ${backend},  ${(elapsed/1000).toFixed(1)}s)`,
       `base a = ${a},  counting bits t = ${t}`,
