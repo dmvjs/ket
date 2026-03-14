@@ -61,22 +61,17 @@ The full gate-decomposed Beauregard circuit is expensive to simulate classically
 | 35 | 25 | ~30s |
 | 77 | 29 | ~15 min |
 
-The interactive QPE demo below uses a fundamentally different approach: instead of dense arrays, it tracks only non-zero amplitudes in a hash map. The quantum state stays sparse — at most $2^t \times r$ entries, where $r$ is the period — throughout the entire circuit. For $r=2$ and $t=3$, that's at most 16 entries regardless of $N$.
-
-| N | Amplitudes tracked | Peak RAM | Time |
-|---|---|---|---|
-| 15 | ≤ 16 | < 1 kB | < 1ms |
-| 10¹² | ≤ 16 | < 1 kB | < 1ms |
-| 10¹⁸ | ≤ 16 | < 1 kB | < 1ms |
-| 10¹⁰⁰ | ≤ 16 | < 1 kB | < 1ms |
-
-This works because the QPE eigenstate for $f(x) = a^x \bmod N$ is always a sparse superposition: the work register is initialized to $|1\rangle$ and only ever maps to $\{1, a, a^2, \ldots\}$ — at most $r$ distinct values. Classical simulation exploits this; a real quantum computer cannot.
-
-This is the honest limit of classical simulation. To factor a cryptographically relevant number you need actual quantum hardware — which is the entire point.
+Beyond N ≈ 77 the full Beauregard circuit becomes impractical to simulate exactly. The demo below takes a different path.
 
 ## Try it — QPE factoring
 
-This interactive demo runs a full statevector QPE simulation in the browser — every amplitude in the $2^{t+n}$-dimensional Hilbert space is tracked and updated on each gate. QPE with $t=3$ counting bits extracts the period; continued fractions and GCD give the factors.
+This demo runs a genuine full-statevector QPE simulation: every amplitude in the $2^{t+n}$-dimensional Hilbert space is allocated and updated on each gate. For large $N$ the state lives in GPU VRAM rather than the JS heap, reaching state spaces of up to $2^{31}$ amplitudes (~16 GB) on high-end hardware.
+
+**What is specifically chosen and why.** The targets are [twin prime semiprimes](https://en.wikipedia.org/wiki/Twin_prime): $N = p(p+2)$ where $p$ and $p+2$ are both prime, and the base $a = p+1$. This guarantees $a^2 \equiv 1 \pmod{N}$, so the period is always $r = 2$. With $r = 2$ a single counting bit ($t = 1$) suffices, halving the state space compared to general targets. These are not arbitrary RSA numbers — they are chosen so the simulation stays tractable.
+
+**What the simulation is genuinely doing.** Despite the favorable inputs, the QPE circuit itself is unmodified and uncompiled: H gates are applied over all $2^{t+n}$ amplitudes, the controlled-multiplication runs as a real quantum gate, and the inverse QFT extracts the phase. Every quantum amplitude is computed honestly. Early quantum hardware demonstrations that "factored 15" typically used circuits hand-compiled to near-trivial form for a specific $N$ and $a$. This demo runs the same algorithm on numbers up to 30 bits — the same circuit a real fault-tolerant quantum computer would execute.
+
+**The real ceiling.** Factoring cryptographically relevant numbers ($n \geq 2048$) requires a fault-tolerant quantum computer with thousands of logical qubits. No such machine exists. The GPU simulation here is as far as exact classical simulation of this circuit can go.
 
 ```{ojs}
 //| echo: false
