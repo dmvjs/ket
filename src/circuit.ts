@@ -175,45 +175,41 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
   const lambda = noise?.lambda ?? 0
   const kraus1 = noise?.kraus1
   const kraus2 = noise?.kraus2
+
+  const noise1 = (s: StateVector, q: number): StateVector => {
+    if (p1)     s = dep1(s, q, p1, rng())
+    if (gamma)  s = dampAmp1(s, q, gamma, rng())
+    if (lambda) s = dampPhase1(s, q, lambda, rng())
+    if (kraus1) s = applyKraus1Channel(s, q, kraus1, rng)
+    return s
+  }
+  const noise2 = (s: StateVector, qa: number, qb: number): StateVector => {
+    if (p2)     s = dep2(s, qa, qb, p2, rng())
+    if (gamma)  { s = dampAmp1(s, qa, gamma, rng()); s = dampAmp1(s, qb, gamma, rng()) }
+    if (lambda) { s = dampPhase1(s, qa, lambda, rng()); s = dampPhase1(s, qb, lambda, rng()) }
+    if (kraus2) s = applyKraus2Channel(s, qa, qb, kraus2, rng)
+    return s
+  }
+
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
       case 'single':
-        sv = applySingle(sv, op.q, op.gate)
-        if (p1)     sv = dep1(sv, op.q, p1, rng())
-        if (gamma)  sv = dampAmp1(sv, op.q, gamma, rng())
-        if (lambda) sv = dampPhase1(sv, op.q, lambda, rng())
-        if (kraus1) sv = applyKraus1Channel(sv, op.q, kraus1, rng)
+        sv = noise1(applySingle(sv, op.q, op.gate), op.q)
         break
       case 'cnot':
-        sv = applyCNOT(sv, op.control, op.target)
-        if (p2)     sv = dep2(sv, op.control, op.target, p2, rng())
-        if (gamma)  { sv = dampAmp1(sv, op.control, gamma, rng()); sv = dampAmp1(sv, op.target, gamma, rng()) }
-        if (lambda) { sv = dampPhase1(sv, op.control, lambda, rng()); sv = dampPhase1(sv, op.target, lambda, rng()) }
-        if (kraus2) sv = applyKraus2Channel(sv, op.control, op.target, kraus2, rng)
+        sv = noise2(applyCNOT(sv, op.control, op.target), op.control, op.target)
         break
       case 'controlled':
-        sv = applyControlled(sv, op.control, op.target, op.gate)
-        if (p2)     sv = dep2(sv, op.control, op.target, p2, rng())
-        if (gamma)  { sv = dampAmp1(sv, op.control, gamma, rng()); sv = dampAmp1(sv, op.target, gamma, rng()) }
-        if (lambda) { sv = dampPhase1(sv, op.control, lambda, rng()); sv = dampPhase1(sv, op.target, lambda, rng()) }
-        if (kraus2) sv = applyKraus2Channel(sv, op.control, op.target, kraus2, rng)
+        sv = noise2(applyControlled(sv, op.control, op.target, op.gate), op.control, op.target)
         break
       case 'swap':
-        sv = applySWAP(sv, op.a, op.b)
-        if (p2)     sv = dep2(sv, op.a, op.b, p2, rng())
-        if (gamma)  { sv = dampAmp1(sv, op.a, gamma, rng()); sv = dampAmp1(sv, op.b, gamma, rng()) }
-        if (lambda) { sv = dampPhase1(sv, op.a, lambda, rng()); sv = dampPhase1(sv, op.b, lambda, rng()) }
-        if (kraus2) sv = applyKraus2Channel(sv, op.a, op.b, kraus2, rng)
+        sv = noise2(applySWAP(sv, op.a, op.b), op.a, op.b)
         break
       case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
       case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
       case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
       case 'two':
-        sv = applyTwo(sv, op.a, op.b, op.gate)
-        if (p2)     sv = dep2(sv, op.a, op.b, p2, rng())
-        if (gamma)  { sv = dampAmp1(sv, op.a, gamma, rng()); sv = dampAmp1(sv, op.b, gamma, rng()) }
-        if (lambda) { sv = dampPhase1(sv, op.a, lambda, rng()); sv = dampPhase1(sv, op.b, lambda, rng()) }
-        if (kraus2) sv = applyKraus2Channel(sv, op.a, op.b, kraus2, rng)
+        sv = noise2(applyTwo(sv, op.a, op.b, op.gate), op.a, op.b)
         break
       case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
       case 'measure': {
@@ -1385,7 +1381,12 @@ export class Distribution {
       for (let i = 0; i < bs.length; i++) if (bs[i] === '1') idx |= 1n << BigInt(i)
       counts.set(idx, Math.round(prob / total * this.shots))
     }
-    return new Distribution(this.qubits, this.shots, counts, new Map(), this.truncated, this.backend, this.peakChi)
+    const cregCounts = new Map(
+      Object.entries(this.cregs).map(([name, fracs]) =>
+        [name, fracs.map(f => Math.round(f * this.shots))] as [string, number[]]
+      )
+    )
+    return new Distribution(this.qubits, this.shots, counts, cregCounts, this.truncated, this.backend, this.peakChi)
   }
 }
 

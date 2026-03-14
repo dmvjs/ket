@@ -480,7 +480,6 @@ export function shorBeauregard(
     const dist = c.runMps({ shots, ...(opts.seed !== undefined && { seed: opts.seed }), truncErr })
 
     // Extract period candidates from all measurement outcomes
-    const measured2n = 1 << precision
     const candidates = new Set<bigint>()
     for (const bs of Object.keys(dist.probs)) {
       // bs is qubit-0-first (LSB), convert to integer
