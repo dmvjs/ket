@@ -25,6 +25,7 @@ This matches the convention used by every major quantum computing library and pa
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
+- **WebGPU browser simulation** — the [interactive book](https://dmvjs.com/ket/) runs full statevector QPE on GPU compute shaders, reaching 29-bit state spaces (500M amplitudes) in the browser. State vectors live in GPU VRAM rather than the JS heap, bypassing the tab memory limit entirely.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, Trotter simulation, QAOA, gradient (parameter shift rule), minimize, standard ansatz circuits, and Pauli operator algebra ship with the core.
 
