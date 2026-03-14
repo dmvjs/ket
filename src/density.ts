@@ -261,6 +261,178 @@ function depolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
   return next
 }
 
+/**
+ * Amplitude damping channel on qubit q: ε(ρ) = K0 ρ K0† + K1 ρ K1†
+ * K0 = diag(1, √(1−γ)),  K1 = [[0,√γ],[0,0]].
+ *
+ * Effect on density matrix elements (r_q, c_q = bit q of row/col index):
+ *   r_q=0, c_q=0: ρ[r][c] + γ·ρ[r|q][c|q]   (gain from |1⟩→|0⟩ decay)
+ *   r_q=1, c_q=1: (1−γ)·ρ[r][c]
+ *   r_q≠c_q:       √(1−γ)·ρ[r][c]             (damp off-diagonal)
+ */
+function amplitudeDamping1(dm: DM, n: number, q: number, gamma: number): DM {
+  if (gamma <= 0) return dm
+  const next: DM = new Map()
+  const shift  = BigInt(n)
+  const dimMsk = (1n << shift) - 1n
+  const qMask  = 1n << BigInt(q)
+  const sqG    = Math.sqrt(1 - gamma)
+  const seen   = new Set<bigint>()
+
+  for (const k of dm.keys()) {
+    const ctx = k & ~(qMask << shift) & ~qMask
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    const r0 = ctx >> shift, c0 = ctx & dimMsk
+    const r1 = r0 | qMask,   c1 = c0 | qMask
+
+    // r_q=0, c_q=0: contribution from r_q=1,c_q=1 term via K1
+    const v00 = dmGet(dm, shift, r0, c0), v11 = dmGet(dm, shift, r1, c1)
+    dmSet(next, shift, r0, c0, { re: v00.re + gamma * v11.re, im: v00.im + gamma * v11.im })
+    // r_q=1, c_q=1: scaled by (1-gamma)
+    dmSet(next, shift, r1, c1, { re: (1 - gamma) * v11.re, im: (1 - gamma) * v11.im })
+    // r_q=0, c_q=1 and r_q=1, c_q=0: damp by sqrt(1-gamma)
+    const v01 = dmGet(dm, shift, r0, c1), v10 = dmGet(dm, shift, r1, c0)
+    dmSet(next, shift, r0, c1, { re: sqG * v01.re, im: sqG * v01.im })
+    dmSet(next, shift, r1, c0, { re: sqG * v10.re, im: sqG * v10.im })
+  }
+  return next
+}
+
+/**
+ * Pure dephasing channel on qubit q: ε(ρ) = K0 ρ K0† + K1 ρ K1†
+ * K0 = diag(1, √(1−λ)),  K1 = diag(0, √λ).
+ *
+ * Effect: diagonal elements unchanged; off-diagonal elements (r_q ≠ c_q) scaled by √(1−λ).
+ */
+function phaseDamping1(dm: DM, n: number, q: number, lambda: number): DM {
+  if (lambda <= 0) return dm
+  const sqL  = Math.sqrt(1 - lambda)
+  const next: DM = new Map()
+  const shift  = BigInt(n)
+  const dimMsk = (1n << shift) - 1n
+  const qMask  = 1n << BigInt(q)
+
+  for (const [k, v] of dm) {
+    const r = k >> shift, c = k & dimMsk
+    const rq = (r >> BigInt(q)) & 1n
+    const cq = (c >> BigInt(q)) & 1n
+    const s  = rq === cq ? 1 : sqL
+    next.set(k, { re: s * v.re, im: s * v.im })
+  }
+  return next
+}
+
+/**
+ * Apply a single-qubit Kraus channel ε(ρ) = Σ_k K_k ρ K_k† on qubit q.
+ */
+function applyKraus1DM(dm: DM, n: number, q: number, kraus: readonly Gate2x2[]): DM {
+  const shift  = BigInt(n)
+  const dimMsk = (1n << shift) - 1n
+  const qMask  = 1n << BigInt(q)
+  const next: DM = new Map()
+  const seen   = new Set<bigint>()
+
+  for (const k of dm.keys()) {
+    const ctx = k & ~(qMask << shift) & ~qMask
+    if (seen.has(ctx)) continue
+    seen.add(ctx)
+
+    const r0 = ctx >> shift, c0 = ctx & dimMsk
+    const r1 = r0 | qMask,   c1 = c0 | qMask
+
+    // The four density matrix elements for this context
+    const v00 = dmGet(dm, shift, r0, c0), v01 = dmGet(dm, shift, r0, c1)
+    const v10 = dmGet(dm, shift, r1, c0), v11 = dmGet(dm, shift, r1, c1)
+    const rho = [[v00, v01], [v10, v11]] as const
+
+    // ε(ρ)[i_q,j_q] = Σ_k Σ_{i',j'} K_k[i_q,i'] ρ[i'][j'] K_k*[j_q,j']
+    for (let iq = 0; iq < 2; iq++) {
+      for (let jq = 0; jq < 2; jq++) {
+        let re = 0, im = 0
+        for (const K of kraus) {
+          for (let ip = 0; ip < 2; ip++) {
+            for (let jp = 0; jp < 2; jp++) {
+              const kip = K[iq]![ip]!, kjp = K[jq]![jp]!
+              const kRe = kip.re * kjp.re + kip.im * kjp.im  // K[iq,ip]·K*[jq,jp]
+              const kIm = kip.im * kjp.re - kip.re * kjp.im
+              const rij = rho[ip]![jp]!
+              re += kRe * rij.re - kIm * rij.im
+              im += kRe * rij.im + kIm * rij.re
+            }
+          }
+        }
+        const rOut = iq === 0 ? r0 : r1
+        const cOut = jq === 0 ? c0 : c1
+        dmAcc(next, shift, rOut, cOut, { re, im })
+      }
+    }
+  }
+  return next
+}
+
+/**
+ * Apply a two-qubit Kraus channel ε(ρ) = Σ_k K_k ρ K_k† on qubits a and b.
+ */
+function applyKraus2DM(dm: DM, n: number, a: number, b: number, kraus: readonly Gate4x4[]): DM {
+  const shift  = BigInt(n)
+  const dimMsk = (1n << shift) - 1n
+  const ma = 1n << BigInt(a), mb = 1n << BigInt(b)
+  const contexts = new Set<bigint>()
+  const next: DM = new Map()
+
+  for (const k of dm.keys()) {
+    const r = k >> shift, c = k & dimMsk
+    const ctx = (r & ~ma & ~mb) << shift | (c & ~ma & ~mb)
+    contexts.add(ctx)
+  }
+
+  for (const ctx of contexts) {
+    const rBase = ctx >> shift, cBase = ctx & dimMsk
+
+    // Read existing 4×4 block
+    const rho: number[][] = []   // re,im interleaved: rho[rowIdx*2], rho[rowIdx*2+1]
+    for (let ri = 0; ri < 4; ri++) {
+      const ra = (ri >> 1) & 1, rb = ri & 1
+      const rIdx = rBase | (ra ? ma : 0n) | (rb ? mb : 0n)
+      for (let ci = 0; ci < 4; ci++) {
+        const ca = (ci >> 1) & 1, cb = ci & 1
+        const cIdx = cBase | (ca ? ma : 0n) | (cb ? mb : 0n)
+        const v = dmGet(dm, shift, rIdx, cIdx)
+        if (!rho[ri]) rho[ri] = []
+        rho[ri]![ci * 2]     = v.re
+        rho[ri]![ci * 2 + 1] = v.im
+      }
+    }
+
+    // ε(ρ)[ri,ci] = Σ_k Σ_{ri',ci'} K_k[ri,ri'] ρ[ri'][ci'] K_k*[ci,ci']
+    for (let ri = 0; ri < 4; ri++) {
+      const ra = (ri >> 1) & 1, rb = ri & 1
+      const rIdx = rBase | (ra ? ma : 0n) | (rb ? mb : 0n)
+      for (let ci = 0; ci < 4; ci++) {
+        const ca = (ci >> 1) & 1, cb = ci & 1
+        const cIdx = cBase | (ca ? ma : 0n) | (cb ? mb : 0n)
+        let re = 0, im = 0
+        for (const K of kraus) {
+          for (let rp = 0; rp < 4; rp++) {
+            for (let cp = 0; cp < 4; cp++) {
+              const kri = K[ri]![rp]!, kci = K[ci]![cp]!
+              const kRe = kri.re * kci.re + kri.im * kci.im
+              const kIm = kri.im * kci.re - kri.re * kci.im
+              const rhoRe = rho[rp]![cp * 2]!, rhoIm = rho[rp]![cp * 2 + 1]!
+              re += kRe * rhoRe - kIm * rhoIm
+              im += kRe * rhoIm + kIm * rhoRe
+            }
+          }
+        }
+        dmAcc(next, shift, rIdx, cIdx, { re, im })
+      }
+    }
+  }
+  return next
+}
+
 // ─── DensityMatrix class ────────────────────────────────────────────────────
 
 /**
@@ -443,10 +615,34 @@ function jacobiEigenvalues(re: Float64Array, im: Float64Array, n: number): numbe
 
 // ─── Exported types ────────────────────────────────────────────────────────
 
-/** Noise parameters for density matrix simulation (same shape as NoiseParams). */
+/** Noise parameters for density matrix simulation. */
 export interface DmNoiseParams {
-  p1?: number     // single-qubit depolarizing probability per gate
-  p2?: number     // two-qubit depolarizing probability per gate
+  /** Single-qubit depolarizing probability per gate. */
+  p1?: number
+  /** Two-qubit depolarizing probability per gate. */
+  p2?: number
+  /**
+   * Amplitude damping (T1 relaxation) probability per single-qubit gate.
+   * Applied as the exact Kraus channel ε(ρ) = K0 ρ K0† + K1 ρ K1† after each 1Q gate.
+   */
+  gamma?: number
+  /**
+   * Pure dephasing (T2 beyond T1) probability per single-qubit gate.
+   * Kills off-diagonal coherences without changing populations.
+   */
+  lambda?: number
+  /**
+   * Custom Kraus operators applied after each **single-qubit** gate only.
+   * Not applied after two-qubit gates — use `kraus2` for those.
+   * Must satisfy Σ_k K_k† K_k = I.
+   */
+  kraus1?: readonly Gate2x2[]
+  /**
+   * Custom Kraus operators applied after each **two-qubit** gate only.
+   * Not applied after single-qubit gates — use `kraus1` for those.
+   * Must satisfy Σ_k K_k† K_k = I.
+   */
+  kraus2?: readonly Gate4x4[]
 }
 
 /** Published IonQ device profiles — mirrored from circuit.ts. */
@@ -473,8 +669,12 @@ export type DmOp =
  * density matrix, optionally with per-gate depolarizing noise.
  */
 export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParams): DensityMatrix {
-  const p1 = noise?.p1 ?? 0
-  const p2 = noise?.p2 ?? 0
+  const p1     = noise?.p1     ?? 0
+  const p2     = noise?.p2     ?? 0
+  const gamma  = noise?.gamma  ?? 0
+  const lambda = noise?.lambda ?? 0
+  const kraus1 = noise?.kraus1
+  const kraus2 = noise?.kraus2
   let dm: DM = new Map([[0n, { re: 1, im: 0 }]])
   const n = qubits
 
@@ -491,12 +691,18 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
     switch (op.kind) {
       case 'single':
         dm = applySingle(dm, n, op.q, op.gate)
-        if (p1) dm = depolarize1(dm, n, op.q, p1)
+        if (p1)     dm = depolarize1(dm, n, op.q, p1)
+        if (gamma)  dm = amplitudeDamping1(dm, n, op.q, gamma)
+        if (lambda) dm = phaseDamping1(dm, n, op.q, lambda)
+        if (kraus1) dm = applyKraus1DM(dm, n, op.q, kraus1)
         break
       case 'cnot': {
         const cm = 1n << BigInt(op.control), tm = 1n << BigInt(op.target)
         dm = applyPerm(dm, n, i => (i & cm) !== 0n ? i ^ tm : i)
-        if (p2) dm = depolarize2(dm, n, op.control, op.target, p2)
+        if (p2)     dm = depolarize2(dm, n, op.control, op.target, p2)
+        if (gamma)  { dm = amplitudeDamping1(dm, n, op.control, gamma); dm = amplitudeDamping1(dm, n, op.target, gamma) }
+        if (lambda) { dm = phaseDamping1(dm, n, op.control, lambda);    dm = phaseDamping1(dm, n, op.target, lambda) }
+        if (kraus2) dm = applyKraus2DM(dm, n, op.control, op.target, kraus2)
         break
       }
       case 'swap': {
@@ -505,16 +711,25 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
           const ba = (i & am) !== 0n, bb = (i & bm) !== 0n
           return ba === bb ? i : i ^ am ^ bm
         })
-        if (p2) dm = depolarize2(dm, n, op.a, op.b, p2)
+        if (p2)     dm = depolarize2(dm, n, op.a, op.b, p2)
+        if (gamma)  { dm = amplitudeDamping1(dm, n, op.a, gamma); dm = amplitudeDamping1(dm, n, op.b, gamma) }
+        if (lambda) { dm = phaseDamping1(dm, n, op.a, lambda);    dm = phaseDamping1(dm, n, op.b, lambda) }
+        if (kraus2) dm = applyKraus2DM(dm, n, op.a, op.b, kraus2)
         break
       }
       case 'two':
         dm = applyTwo(dm, n, op.a, op.b, op.gate)
-        if (p2) dm = depolarize2(dm, n, op.a, op.b, p2)
+        if (p2)     dm = depolarize2(dm, n, op.a, op.b, p2)
+        if (gamma)  { dm = amplitudeDamping1(dm, n, op.a, gamma); dm = amplitudeDamping1(dm, n, op.b, gamma) }
+        if (lambda) { dm = phaseDamping1(dm, n, op.a, lambda);    dm = phaseDamping1(dm, n, op.b, lambda) }
+        if (kraus2) dm = applyKraus2DM(dm, n, op.a, op.b, kraus2)
         break
       case 'controlled':
         dm = applyTwo(dm, n, op.control, op.target, controlledGate(op.gate))
-        if (p2) dm = depolarize2(dm, n, op.control, op.target, p2)
+        if (p2)     dm = depolarize2(dm, n, op.control, op.target, p2)
+        if (gamma)  { dm = amplitudeDamping1(dm, n, op.control, gamma); dm = amplitudeDamping1(dm, n, op.target, gamma) }
+        if (lambda) { dm = phaseDamping1(dm, n, op.control, lambda);    dm = phaseDamping1(dm, n, op.target, lambda) }
+        if (kraus2) dm = applyKraus2DM(dm, n, op.control, op.target, kraus2)
         break
       case 'toffoli': {
         const c1m = 1n << BigInt(op.c1), c2m = 1n << BigInt(op.c2), tm = 1n << BigInt(op.target)

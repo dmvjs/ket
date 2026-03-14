@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
+import type { Gate2x2, Gate4x4 } from './statevector.js'
 import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
@@ -3595,12 +3596,58 @@ describe('MPS backend — large circuits (50+ qubits)', () => {
 })
 
 describe('MPS backend — error paths', () => {
-  it('throws for Toffoli', () => {
-    expect(() => new Circuit(3).ccx(0, 1, 2).runMps()).toThrow('CCX')
+  it('Toffoli runs via 6-CNOT decomposition in MPS mode', () => {
+    // CCX no longer throws — decomposes into T/H/CX gates automatically
+    const c = new Circuit(3).x(0).x(1).ccx(0, 1, 2)
+    const d = c.runMps({ shots: 256, seed: 1 })
+    // x0=1, x1=1 → target qubit 2 should flip to 1
+    expect(d.probs['111']).toBeCloseTo(1, 1)
+  })
+})
+
+// ── MPS gate decompositions — isolation tests ─────────────────────────────────
+
+describe('MPS gate decompositions — Toffoli and CSWAP match statevector', () => {
+  it('CCX truth table: all 8 input states match statevector', () => {
+    // Verify the 6-CNOT Toffoli decomposition is correct for every input basis state.
+    for (const [a, b, c] of [[0,0,0],[0,0,1],[0,1,0],[0,1,1],[1,0,0],[1,0,1],[1,1,0],[1,1,1]] as [0|1,0|1,0|1][]) {
+      let sv  = new Circuit(3)
+      let mps = new Circuit(3)
+      if (a) { sv = sv.x(0);  mps = mps.x(0) }
+      if (b) { sv = sv.x(1);  mps = mps.x(1) }
+      if (c) { sv = sv.x(2);  mps = mps.x(2) }
+      sv  = sv.ccx(0, 1, 2)
+      mps = mps.ccx(0, 1, 2)
+      const expected = a && b ? (c ^ 1) : c
+      const label    = `${a}${b}${expected}`
+      expect(sv.run({ shots: 64, seed: 1 }).probs[label]).toBeCloseTo(1, 2)
+      expect(mps.runMps({ shots: 64, seed: 1 }).probs[label]).toBeCloseTo(1, 2)
+    }
   })
 
-  it('throws for mid-circuit measure', () => {
-    expect(() => new Circuit(2).creg('c', 1).measure(0, 'c', 0).runMps()).toThrow("'measure'")
+  it('CSWAP truth table: all 8 input states match statevector', () => {
+    for (const [ctrl, a, b] of [[0,0,0],[0,0,1],[0,1,0],[0,1,1],[1,0,0],[1,0,1],[1,1,0],[1,1,1]] as [0|1,0|1,0|1][]) {
+      let sv  = new Circuit(3)
+      let mps = new Circuit(3)
+      if (ctrl) { sv = sv.x(0); mps = mps.x(0) }
+      if (a)    { sv = sv.x(1); mps = mps.x(1) }
+      if (b)    { sv = sv.x(2); mps = mps.x(2) }
+      sv  = sv.cswap(0, 1, 2)
+      mps = mps.cswap(0, 1, 2)
+      // CSWAP swaps qubits 1 and 2 when ctrl=1
+      const [outA, outB] = ctrl ? [b, a] : [a, b]
+      const label = `${ctrl}${outA}${outB}`
+      expect(sv.run({ shots: 64, seed: 2 }).probs[label]).toBeCloseTo(1, 2)
+      expect(mps.runMps({ shots: 64, seed: 2 }).probs[label]).toBeCloseTo(1, 2)
+    }
+  })
+
+  it('superposition Toffoli: H(0)H(1)CCX(0,1,2) MPS matches statevector probabilities', () => {
+    const sv  = new Circuit(3).h(0).h(1).ccx(0, 1, 2).run({ shots: 4096, seed: 3 })
+    const mps = new Circuit(3).h(0).h(1).ccx(0, 1, 2).runMps({ shots: 4096, seed: 3 })
+    for (const state of ['000', '010', '100', '111']) {
+      expect(mps.probs[state] ?? 0).toBeCloseTo(sv.probs[state] ?? 0, 1)
+    }
   })
 })
 
@@ -7312,5 +7359,417 @@ describe('circuit.compose()', () => {
     const result = bell.runMps({ shots: 1000, seed: 42 })
     expect(result.probs['00']).toBeGreaterThan(0.45)
     expect(result.probs['11']).toBeGreaterThan(0.45)
+  })
+})
+
+// ── simulate() — auto-routing ─────────────────────────────────────────────────
+
+describe('Circuit.simulate() — automatic backend selection', () => {
+  it('routes Clifford circuit to clifford backend', () => {
+    const d = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3).simulate({ shots: 512, seed: 1 })
+    expect(d.backend).toBe('clifford')
+    expect(d.peakChi).toBeUndefined()
+    expect(d.probs['0000']).toBeGreaterThan(0.44)
+    expect(d.probs['1111']).toBeGreaterThan(0.44)
+  })
+
+  it('routes small non-Clifford circuit to statevector backend', () => {
+    // 3 qubits (≤ default limit of 20) with T gate — not Clifford
+    const d = new Circuit(3).h(0).t(1).cx(0, 1).simulate({ shots: 512, seed: 2 })
+    expect(d.backend).toBe('statevector')
+    expect(d.peakChi).toBeUndefined()
+  })
+
+  it('routes large non-Clifford circuit to MPS backend and exposes peakChi', () => {
+    // 30 qubits: above statevectorLimit=20, has T gate so not Clifford
+    const d = new Circuit(30).h(0).t(1).cx(0, 1).simulate({ shots: 256, seed: 3 })
+    expect(d.backend).toBe('mps')
+    expect(typeof d.peakChi).toBe('number')
+    expect(d.peakChi).toBeGreaterThanOrEqual(1)
+  })
+
+  it('routes circuit with mid-circuit measurement on large circuit to MPS (Clifford path)', () => {
+    // H + measure is Clifford — runClifford handles mid-circuit measures fine.
+    // Clifford takes priority regardless of qubit count.
+    const d = new Circuit(30)
+      .h(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 128, seed: 4 })
+    expect(d.backend).toBe('clifford')
+  })
+
+  it('non-Clifford mid-circuit measurement on n=30 routes to MPS', () => {
+    // T gate makes it non-Clifford; n=30 > statevectorLimit=20 → MPS with mid-circuit support.
+    const d = new Circuit(30)
+      .t(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 128, seed: 4 })
+    expect(d.backend).toBe('mps')
+  })
+
+  it('statevectorLimit option overrides default threshold', () => {
+    // n=5, normally statevector (≤20), but limit=2 forces MPS (T gate prevents Clifford)
+    const d = new Circuit(5).h(0).t(1).cx(0, 1)
+      .simulate({ shots: 256, seed: 5, statevectorLimit: 2 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBeDefined()
+  })
+
+  it('gives consistent results with direct runMps for large non-Clifford circuits', () => {
+    // T gate on qubit 0 makes this non-Clifford so it routes to MPS (n=25 > 20)
+    let circuit = new Circuit(25).t(0)
+    for (let q = 0; q < 24; q++) circuit = circuit.cx(q, q + 1)
+    const d = circuit.simulate({ shots: 512, seed: 6 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBeGreaterThanOrEqual(1)
+  })
+
+  it('initialState routes to statevector even for Clifford circuit', () => {
+    // initialState is not supported by runClifford, so falls back to statevector
+    const d = new Circuit(3).h(0).cx(0, 1)
+      .simulate({ shots: 256, seed: 7, initialState: '100' })
+    expect(d.backend).toBe('statevector')
+  })
+
+  it('run(), runMps(), runClifford() all populate backend field', () => {
+    const bell = new Circuit(2).h(0).cx(0, 1)
+    expect(bell.run({ shots: 100, seed: 1 }).backend).toBe('statevector')
+    expect(bell.runMps({ shots: 100, seed: 1 }).backend).toBe('mps')
+    const ghz = new Circuit(3).h(0).cx(0, 1).cx(1, 2)
+    expect(ghz.runClifford({ shots: 100, seed: 1 }).backend).toBe('clifford')
+  })
+
+  it('runMps peakChi reflects actual bond dimension used, not buffer allocation', () => {
+    // Bell state (GHZ-style) has exact bond dimension 2; default maxBond=64 but peakChi=2
+    const d = new Circuit(2).h(0).cx(0, 1).runMps({ shots: 100, seed: 1 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBe(2)
+  })
+})
+
+describe('MPS mid-circuit measurement', () => {
+  it('mid-circuit measure records outcomes in cregs', () => {
+    // H then measure: 50/50 in classical register
+    const d = new Circuit(3)
+      .h(0).creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 2048, seed: 1 })
+    expect(d.cregs['c']![0]).toBeCloseTo(0.5, 1)
+  })
+
+  it('mid-circuit measure collapses qubit state', () => {
+    // H(q0) → measure(q0,'c',0) → if(c==1) X(q0) corrects back to |0⟩ deterministically.
+    // Final sample should give q0=0 for every shot.
+    const d = new Circuit(2)
+      .h(0)
+      .creg('c', 1).measure(0, 'c', 0)
+      .if('c', 1, c => c.x(0))
+      .runMps({ shots: 512, seed: 2 })
+    // q0 is always corrected to 0; q1 stays |0⟩ — only '00' should appear
+    expect(d.probs['00']).toBeCloseTo(1, 2)
+  })
+
+  it('reset leaves qubit in |0⟩', () => {
+    // H(q0) → reset(q0) → X(q0): result is deterministically |1⟩ regardless of H outcome
+    const d = new Circuit(1)
+      .h(0).reset(0).x(0)
+      .runMps({ shots: 256, seed: 3 })
+    expect(d.probs['1']).toBeCloseTo(1, 2)
+  })
+
+  it('simulate() routes large non-Clifford circuits with mid-circuit ops to MPS', () => {
+    // n=25 > statevectorLimit=20, T gate is non-Clifford → MPS path with mid-circuit support
+    const d = new Circuit(25)
+      .h(0).t(0).creg('c', 1).measure(0, 'c', 0)
+      .simulate({ shots: 256, seed: 4 })
+    expect(d.backend).toBe('mps')
+    expect(d.cregs['c']![0]).toBeGreaterThan(0)
+  })
+
+  it('matches statevector for entangled circuit with mid-circuit measure', () => {
+    // Bell pair: H(0) CX(0,1) measure(1,'c',0).
+    // q1 and q0 are maximally correlated. Measuring q1 mid-circuit collapses q0 too.
+    // runMps and run() should agree on the creg distribution.
+    const bell = new Circuit(2).h(0).cx(0, 1).creg('c', 1).measure(1, 'c', 0)
+    const sv  = bell.run({ shots: 4096, seed: 5 })
+    const mps = bell.runMps({ shots: 4096, seed: 5 })
+    expect(mps.cregs['c']![0]).toBeCloseTo(sv.cregs['c']![0]!, 1)
+  })
+
+  it('pMeas readout error biases creg distribution toward 0.5', () => {
+    // |0⟩ measured with pMeas=0.5 → reported bit 0/1 with equal probability ≈ 0.5.
+    // Without pMeas the ideal outcome is always 0 (P=0); with pMeas=0.5 it's ≈0.5.
+    const d = new Circuit(1)
+      .creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 2000, seed: 6, noise: { p1: 0, p2: 0, pMeas: 0.5 } })
+    expect(d.cregs['c']![0]).toBeGreaterThan(0.4)
+    expect(d.cregs['c']![0]).toBeLessThan(0.6)
+  })
+
+  it('pMeas does not affect ideal distribution when set to 0', () => {
+    // |0⟩ measured with pMeas=0 → reported bit is always 0.
+    const d = new Circuit(1)
+      .creg('c', 1).measure(0, 'c', 0)
+      .runMps({ shots: 500, seed: 7, noise: { p1: 0, p2: 0, pMeas: 0 } })
+    expect(d.cregs['c']![0]).toBe(0)
+  })
+
+  it('multi-bit classical register: if condition fires on correct value only', () => {
+    // Prepare |10⟩ (q0=1, q1=0), measure into 2-bit creg 'c': c[0]=1, c[1]=0 → integer value 1.
+    // if(c == 1) applies Z(0) — a no-op on |1⟩ in the Z basis (phase only, doesn't change probs).
+    // if(c == 2) applies X(0) — must NOT fire for value=2.
+    const d = new Circuit(2)
+      .x(0)                     // q0=|1⟩, q1=|0⟩
+      .creg('c', 2)
+      .measure(0, 'c', 0)       // c[0] = 1
+      .measure(1, 'c', 1)       // c[1] = 0  →  integer c = 0b01 = 1
+      .if('c', 2, cc => cc.x(0))  // must NOT fire (c=1 ≠ 2)
+      .runMps({ shots: 256, seed: 8 })
+    // q0 should remain 1 because the X was not applied
+    expect(d.probs['10']).toBeCloseTo(1, 2)
+  })
+
+  it('multi-bit classical register: if condition fires when value matches', () => {
+    // Prepare |01⟩ (q0=0, q1=1), measure: c[0]=0, c[1]=1 → integer value 2.
+    // if(c == 2) applies X(0) — must fire, so q0 flips from 0 to 1.
+    const d = new Circuit(2)
+      .x(1)                     // q0=|0⟩, q1=|1⟩
+      .creg('c', 2)
+      .measure(0, 'c', 0)       // c[0] = 0
+      .measure(1, 'c', 1)       // c[1] = 1  →  integer c = 0b10 = 2
+      .if('c', 2, cc => cc.x(0))  // must fire → q0 becomes |1⟩
+      .runMps({ shots: 256, seed: 9 })
+    // After X(0): q0=1, q1=1 → should observe '11'
+    expect(d.probs['11']).toBeCloseTo(1, 2)
+  })
+})
+
+describe('Circuit.simulate() — output equivalence with direct backends', () => {
+  it('simulate(Clifford) matches runClifford() output', () => {
+    const c = new Circuit(4).h(0).cx(0, 1).cx(1, 2).cx(2, 3)
+    const sim    = c.simulate({ shots: 2048, seed: 1 })
+    const direct = c.runClifford({ shots: 2048, seed: 1 })
+    expect(sim.backend).toBe('clifford')
+    expect(sim.probs['0000'] ?? 0).toBeCloseTo(direct.probs['0000'] ?? 0, 1)
+    expect(sim.probs['1111'] ?? 0).toBeCloseTo(direct.probs['1111'] ?? 0, 1)
+  })
+
+  it('simulate(statevector) matches run() output', () => {
+    const c = new Circuit(4).h(0).t(1).cx(0, 1).cx(1, 2)
+    const sim    = c.simulate({ shots: 2048, seed: 2 })
+    const direct = c.run({ shots: 2048, seed: 2 })
+    expect(sim.backend).toBe('statevector')
+    for (const [k, v] of Object.entries(direct.probs)) {
+      expect(sim.probs[k] ?? 0).toBeCloseTo(v, 1)
+    }
+  })
+
+  it('simulate(MPS) matches runMps() output', () => {
+    let c = new Circuit(25).t(0)
+    for (let q = 0; q < 24; q++) c = c.cx(q, q + 1)
+    const sim    = c.simulate({ shots: 1024, seed: 3 })
+    const direct = c.runMps({ shots: 1024, seed: 3 })
+    expect(sim.backend).toBe('mps')
+    expect(sim.peakChi).toBe(direct.peakChi)
+    for (const [k, v] of Object.entries(direct.probs)) {
+      expect(sim.probs[k] ?? 0).toBeCloseTo(v, 1)
+    }
+  })
+})
+
+// ── T1/T2 noise channels ──────────────────────────────────────────────────────
+
+describe('T1/T2 noise — statevector quantum jumps', () => {
+  it('amplitude damping: |1⟩ with gamma=1 decays to |0⟩ in one shot', () => {
+    // gamma=1 → guaranteed decay; |1⟩ → |0⟩
+    const d = new Circuit(1).x(0).run({ shots: 256, noise: { gamma: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(1, 2)
+  })
+
+  it('amplitude damping: |0⟩ unaffected (no population to decay)', () => {
+    const d = new Circuit(1).run({ shots: 256, noise: { gamma: 0.5 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(1, 2)
+  })
+
+  it('amplitude damping: |+⟩ with large gamma approaches maximally mixed populations', () => {
+    // High gamma drives excited population to ground; expect P(0) > P(1)
+    const d = new Circuit(1).h(0).run({ shots: 4096, noise: { gamma: 0.9 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeGreaterThan(d.probs['1'] ?? 0)
+  })
+
+  it('amplitude damping via DM: trace preserved and populations correct', () => {
+    // |1⟩ with gamma=0.5: P(0)=0.5, P(1)=0.5 after one application
+    const dm = new Circuit(1).x(0).dm({ noise: { gamma: 0.5 } })
+    const probs = dm.probabilities()
+    expect(probs['0'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['1'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(dm.purity()).toBeLessThan(1)  // mixed state
+  })
+
+  it('phase damping: |+⟩ with lambda=1 collapses to classical mixture', () => {
+    // lambda=1: off-diagonal coherences destroyed → P(0)=P(1)=0.5
+    const dm = new Circuit(1).h(0).dm({ noise: { lambda: 1 } })
+    const probs = dm.probabilities()
+    expect(probs['0'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(probs['1'] ?? 0).toBeCloseTo(0.5, 10)
+    expect(dm.purity()).toBeCloseTo(0.5, 10)  // maximally mixed 1-qubit state
+  })
+
+  it('phase damping: diagonal elements unchanged', () => {
+    // X gate → |1⟩; lambda=0.5: P(1) still 1 (populations unchanged)
+    const dm = new Circuit(1).x(0).dm({ noise: { lambda: 0.5 } })
+    const probs = dm.probabilities()
+    expect(probs['1'] ?? 0).toBeCloseTo(1, 10)
+  })
+
+  it('phase damping (statevector): |+⟩ with lambda=1 gives 50/50 populations', () => {
+    // lambda=1 destroys all coherences → |+⟩ collapses to classical 50/50
+    const d = new Circuit(1).h(0).run({ shots: 8192, noise: { lambda: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('phase damping (statevector): |1⟩ populations unchanged by pure dephasing', () => {
+    // Dephasing kills coherences but not populations: P(1) stays 1
+    const d = new Circuit(1).x(0).run({ shots: 512, noise: { lambda: 0.9 }, seed: 1 })
+    expect(d.probs['1'] ?? 0).toBeCloseTo(1, 1)
+  })
+
+  it('T1/T2 MPS: amplitude damping reduces |1⟩ population', () => {
+    const d = new Circuit(3).x(0).x(1).runMps({ shots: 512, noise: { gamma: 0.8 }, seed: 1 })
+    // After large amplitude damping, most population should be at |0⟩
+    expect(d.probs['000'] ?? 0).toBeGreaterThan(0.3)
+  })
+
+  it('phase damping (MPS): |+⟩ with lambda=1 gives 50/50 populations', () => {
+    const d = new Circuit(1).h(0).runMps({ shots: 4096, noise: { lambda: 1 }, seed: 1 })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('T1/T2 combined: depolarizing + T1 + T2 all active simultaneously', () => {
+    // Just check it runs without error and gives a valid distribution
+    const d = new Circuit(2).h(0).cnot(0, 1).run({
+      shots: 256, seed: 1,
+      noise: { p1: 0.001, p2: 0.01, gamma: 0.005, lambda: 0.003 },
+    })
+    const total = Object.values(d.probs).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 5)
+  })
+})
+
+describe('custom Kraus channels', () => {
+  it('amplitude damping via explicit Kraus operators matches built-in gamma', () => {
+    const gamma = 0.3
+    const sqG   = Math.sqrt(gamma), sqOmG = Math.sqrt(1 - gamma)
+    // K0 = [[1,0],[0,sqrt(1-gamma)]], K1 = [[0,sqrt(gamma)],[0,0]]
+    const K0 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmG,im:0}]] as Gate2x2
+    const K1 = [[{re:0,im:0},{re:sqG,im:0}],[{re:0,im:0},{re:0,im:0}]] as Gate2x2
+    const shots = 4096, seed = 42
+    // |1⟩ state: built-in gamma vs explicit Kraus should give same distribution
+    const dBuiltin = new Circuit(1).x(0).run({ shots, seed, noise: { gamma } })
+    const dKraus   = new Circuit(1).x(0).run({ shots, seed, noise: { kraus1: [K0, K1] } })
+    // Populations should be close (same channel, same seed)
+    expect(Math.abs((dBuiltin.probs['0'] ?? 0) - (dKraus.probs['0'] ?? 0))).toBeLessThan(0.05)
+  })
+
+  it('identity Kraus channel leaves distribution close to ideal (Bell state → ≈50/50)', () => {
+    // Kraus path uses different RNG cadence than clean path, so same seed gives different
+    // shot samples — compare against known ideal (Bell state = 50/50 |00⟩/|11⟩) instead.
+    const I2: Gate2x2 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:1,im:0}]]
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 4096, seed: 1, noise: { kraus1: [I2] } })
+    expect(d.probs['00'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['11'] ?? 0).toBeCloseTo(0.5, 1)
+    expect((d.probs['01'] ?? 0) + (d.probs['10'] ?? 0)).toBeLessThan(0.01)
+  })
+
+  it('Kraus 2Q: identity channel preserves Bell state distribution', () => {
+    const I4: Gate4x4 = [
+      [{re:1,im:0},{re:0,im:0},{re:0,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:1,im:0},{re:0,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:0,im:0},{re:1,im:0},{re:0,im:0}],
+      [{re:0,im:0},{re:0,im:0},{re:0,im:0},{re:1,im:0}],
+    ]
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 4096, seed: 1, noise: { kraus2: [I4] } })
+    expect(d.probs['00'] ?? 0).toBeCloseTo(0.5, 1)
+    expect(d.probs['11'] ?? 0).toBeCloseTo(0.5, 1)
+  })
+
+  it('bit-flip Kraus channel: applied after X on |0⟩ flips back with probability p', () => {
+    // Bit-flip channel: K0 = √(1-p)·I, K1 = √p·X
+    // X prepares |1⟩; channel fires after X: K0 keeps |1⟩ (prob 1-p), K1 flips to |0⟩ (prob p)
+    const p = 0.4
+    const sqP = Math.sqrt(p), sqOmP = Math.sqrt(1 - p)
+    const K0: Gate2x2 = [[{re:sqOmP,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmP,im:0}]]
+    const K1: Gate2x2 = [[{re:0,im:0},{re:sqP,im:0}],[{re:sqP,im:0},{re:0,im:0}]]
+    const d = new Circuit(1).x(0).run({ shots: 8192, seed: 7, noise: { kraus1: [K0, K1] } })
+    expect(d.probs['0'] ?? 0).toBeCloseTo(p, 1)
+    expect(d.probs['1'] ?? 0).toBeCloseTo(1 - p, 1)
+  })
+
+  it('DM Kraus1: amplitude damping channel matches amplitudeDamping1 output', () => {
+    const gamma = 0.4
+    const sqG = Math.sqrt(gamma), sqOmG = Math.sqrt(1 - gamma)
+    const K0 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:sqOmG,im:0}]] as Gate2x2
+    const K1 = [[{re:0,im:0},{re:sqG,im:0}],[{re:0,im:0},{re:0,im:0}]] as Gate2x2
+    const dBuiltin = new Circuit(1).x(0).dm({ noise: { gamma } })
+    const dKraus   = new Circuit(1).x(0).dm({ noise: { kraus1: [K0, K1] } })
+    const pb = dBuiltin.probabilities(), pk = dKraus.probabilities()
+    expect(pb['0'] ?? 0).toBeCloseTo(pk['0'] ?? 0, 8)
+    expect(pb['1'] ?? 0).toBeCloseTo(pk['1'] ?? 0, 8)
+  })
+
+  it('DM Kraus2: depolarizing channel on Bell state increases mixedness', () => {
+    // Full depolarizing 2Q channel via 16 Kraus operators: ε(ρ) = (1-p)ρ + p·I/4
+    // Implemented as identity + scaled Paulis; here we use a simpler partial depolarizer:
+    // K0 = √(1-p)·I4, K1..K3 = √(p/3)·(I⊗X, X⊗I, X⊗X) — partial flip channel
+    const p = 0.3
+    const s0 = Math.sqrt(1 - p), s1 = Math.sqrt(p / 3)
+    const i = {re:1,im:0}, o = {re:0,im:0}
+    const mk = (a00:number,a11:number,a22:number,a33:number): Gate4x4 => [
+      [{re:a00,im:0},o,o,o], [o,{re:a11,im:0},o,o], [o,o,{re:a22,im:0},o], [o,o,o,{re:a33,im:0}],
+    ]
+    // K0 = s0·I4
+    const K0: Gate4x4 = [[{re:s0,im:0},o,o,o],[o,{re:s0,im:0},o,o],[o,o,{re:s0,im:0},o],[o,o,o,{re:s0,im:0}]]
+    // K1 = s1·(I⊗X): swaps |00⟩↔|01⟩ and |10⟩↔|11⟩
+    const K1: Gate4x4 = [[o,{re:s1,im:0},o,o],[{re:s1,im:0},o,o,o],[o,o,o,{re:s1,im:0}],[o,o,{re:s1,im:0},o]]
+    // K2 = s1·(X⊗I): swaps |00⟩↔|10⟩ and |01⟩↔|11⟩
+    const K2: Gate4x4 = [[o,o,{re:s1,im:0},o],[o,o,o,{re:s1,im:0}],[{re:s1,im:0},o,o,o],[o,{re:s1,im:0},o,o]]
+    // K3 = s1·(X⊗X): swaps |00⟩↔|11⟩ and |01⟩↔|10⟩
+    const K3: Gate4x4 = [[o,o,o,{re:s1,im:0}],[o,o,{re:s1,im:0},o],[o,{re:s1,im:0},o,o],[{re:s1,im:0},o,o,o]]
+    const clean  = new Circuit(2).h(0).cnot(0, 1).dm()
+    const noisy  = new Circuit(2).h(0).cnot(0, 1).dm({ noise: { kraus2: [K0, K1, K2, K3] } })
+    expect(noisy.purity()).toBeLessThan(clean.purity())
+  })
+
+  it('runMps throws when kraus1 or kraus2 passed (unsupported backend)', () => {
+    const I2: Gate2x2 = [[{re:1,im:0},{re:0,im:0}],[{re:0,im:0},{re:1,im:0}]]
+    expect(() =>
+      new Circuit(1).h(0).runMps({ shots: 1, noise: { kraus1: [I2] } })
+    ).toThrow(/kraus/)
+  })
+})
+
+describe('readout error mitigation', () => {
+  it('mitigateReadout corrects flip errors toward ideal distribution', () => {
+    const pMeas = 0.05
+    const shots = 16384
+    // Bell state: ideal = 50/50 |00⟩/|11⟩; noisy → some |01⟩/|10⟩
+    const noisy  = new Circuit(2).h(0).cnot(0, 1).run({ shots, seed: 1, noise: { pMeas } })
+    const corrected = noisy.mitigateReadout(pMeas)
+    // Correction should push |01⟩ and |10⟩ weight back toward |00⟩ and |11⟩
+    expect((corrected.probs['01'] ?? 0)).toBeLessThan(noisy.probs['01'] ?? 0)
+    expect((corrected.probs['00'] ?? 0)).toBeGreaterThanOrEqual(noisy.probs['00'] ?? 0)
+  })
+
+  it('mitigateReadout with p=0 returns same distribution', () => {
+    const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 512, seed: 1 })
+    const m = d.mitigateReadout(0)
+    expect(m).toBe(d)  // same object
+  })
+
+  it('mitigateReadout probabilities sum to 1', () => {
+    const pMeas = 0.03
+    const noisy = new Circuit(3).h(0).h(1).h(2).run({ shots: 1024, seed: 1, noise: { pMeas } })
+    const corrected = noisy.mitigateReadout(pMeas)
+    const total = Object.values(corrected.probs).reduce((s, p) => s + p, 0)
+    expect(total).toBeCloseTo(1, 1)  // integer rounding of counts introduces ~1/shots error
   })
 })

@@ -286,13 +286,12 @@ describe('runMps — unsupported ops throw', () => {
     expect(() => new Circuit(3).csrswap(0, 1, 2).runMps()).toThrow(TypeError)
   })
 
-  it('cswap throws TypeError', () => {
-    expect(() => new Circuit(3).cswap(0, 1, 2).runMps()).toThrow(TypeError)
+  it('cswap runs via Toffoli decomposition in MPS mode', () => {
+    // cswap no longer throws — it decomposes into CX+T gates automatically
+    const d = new Circuit(3).x(0).cswap(0, 1, 2).runMps({ shots: 64, seed: 1 })
+    expect(d.backend).toBe('mps')
   })
 
-  it('reset throws TypeError', () => {
-    expect(() => new Circuit(1).reset(0).runMps()).toThrow(TypeError)
-  })
 })
 
 // ─── DEVICES — structural contract ───────────────────────────────────────────

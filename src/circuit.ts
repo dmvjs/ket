@@ -168,19 +168,49 @@ function cregValue(shotCregs: Map<string, boolean[]>, name: string): number {
 /** Apply ops to `sv`, handling mid-circuit measurement with `rng`. Recursive for IfOp. */
 function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number, noise?: NoiseParams): StateVector {
   let sv = svIn
-  const p1 = noise?.p1 ?? 0
-  const p2 = noise?.p2 ?? 0
-  const pM = noise?.pMeas ?? 0
+  const p1     = noise?.p1     ?? 0
+  const p2     = noise?.p2     ?? 0
+  const pM     = noise?.pMeas  ?? 0
+  const gamma  = noise?.gamma  ?? 0
+  const lambda = noise?.lambda ?? 0
+  const kraus1 = noise?.kraus1
+  const kraus2 = noise?.kraus2
+
+  const noise1 = (s: StateVector, q: number): StateVector => {
+    if (p1)     s = dep1(s, q, p1, rng())
+    if (gamma)  s = dampAmp1(s, q, gamma, rng())
+    if (lambda) s = dampPhase1(s, q, lambda, rng())
+    if (kraus1) s = applyKraus1Channel(s, q, kraus1, rng)
+    return s
+  }
+  const noise2 = (s: StateVector, qa: number, qb: number): StateVector => {
+    if (p2)     s = dep2(s, qa, qb, p2, rng())
+    if (gamma)  { s = dampAmp1(s, qa, gamma, rng()); s = dampAmp1(s, qb, gamma, rng()) }
+    if (lambda) { s = dampPhase1(s, qa, lambda, rng()); s = dampPhase1(s, qb, lambda, rng()) }
+    if (kraus2) s = applyKraus2Channel(s, qa, qb, kraus2, rng)
+    return s
+  }
+
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
-      case 'single':     sv = applySingle(sv, op.q, op.gate);                         if (p1) sv = dep1(sv, op.q, p1, rng()); break
-      case 'cnot':       sv = applyCNOT(sv, op.control, op.target);                   if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
-      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate);    if (p2) sv = dep2(sv, op.control, op.target, p2, rng()); break
-      case 'swap':       sv = applySWAP(sv, op.a, op.b);                              if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'single':
+        sv = noise1(applySingle(sv, op.q, op.gate), op.q)
+        break
+      case 'cnot':
+        sv = noise2(applyCNOT(sv, op.control, op.target), op.control, op.target)
+        break
+      case 'controlled':
+        sv = noise2(applyControlled(sv, op.control, op.target, op.gate), op.control, op.target)
+        break
+      case 'swap':
+        sv = noise2(applySWAP(sv, op.a, op.b), op.a, op.b)
+        break
       case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
       case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
       case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
-      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate);                      if (p2) sv = dep2(sv, op.a, op.b, p2, rng()); break
+      case 'two':
+        sv = noise2(applyTwo(sv, op.a, op.b, op.gate), op.a, op.b)
+        break
       case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
       case 'measure': {
         const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
@@ -208,7 +238,19 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
 
 // ─── Noise simulation ─────────────────────────────────────────────────────────
 
-/** Per-gate error parameters for stochastic noise simulation. */
+/** Minimum jump probability below which a noise channel is skipped (avoids 0/0 in normalisation). */
+const JUMP_THRESHOLD = 1e-15
+
+/**
+ * Per-gate error parameters for stochastic noise simulation.
+ *
+ * **Gate coverage note:** `p1`, `p2`, `gamma`, and `lambda` are applied after every
+ * primitive gate (single-qubit and two-qubit). Toffoli and CSWAP are treated as
+ * noise-free primitives in `run()` and `dm()`. In `runMps()` they are automatically
+ * decomposed into 1Q/2Q gates before simulation, so each constituent gate receives
+ * noise — which is the physically realistic model for hardware that never supports
+ * these gates natively. If noise on Toffoli/CSWAP matters, use `runMps()`.
+ */
 export interface NoiseParams {
   /** Single-qubit depolarizing error probability per gate (0–1). */
   p1?: number
@@ -216,6 +258,33 @@ export interface NoiseParams {
   p2?: number
   /** SPAM: probability of flipping each measured bit (0–1). */
   pMeas?: number
+  /**
+   * Amplitude damping (T1 relaxation) probability per single-qubit gate.
+   * Physically: γ = 1 − exp(−t_gate / T1).
+   * Applied independently to each qubit after every gate (single and two-qubit).
+   */
+  gamma?: number
+  /**
+   * Pure dephasing (T2 beyond T1) probability per single-qubit gate.
+   * Physically: λ = 1 − exp(−2 t_gate (1/T2 − 1/(2T1))).
+   * Applied independently to each qubit after every gate (single and two-qubit).
+   */
+  lambda?: number
+  /**
+   * Custom Kraus operators applied after each **single-qubit** gate only.
+   * Not applied after two-qubit gates — use `kraus2` for those.
+   * Must satisfy Σ_k K_k† K_k = I (trace-preserving channel).
+   * Each K_k is a 2×2 complex matrix; one is sampled per shot per gate.
+   * Not supported in `runMps()` — use `run()` or `dm()`.
+   */
+  kraus1?: readonly Gate2x2[]
+  /**
+   * Custom Kraus operators applied after each **two-qubit** gate only.
+   * Not applied after single-qubit gates — use `kraus1` for those.
+   * Must satisfy Σ_k K_k† K_k = I. Each K_k is a 4×4 complex matrix.
+   * Not supported in `runMps()` — use `run()` or `dm()`.
+   */
+  kraus2?: readonly Gate4x4[]
 }
 
 /** Hardware specs and noise parameters for a quantum device. */
@@ -301,6 +370,150 @@ function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): S
   if (pa) sv = applySingle(sv, a, pa)
   if (pb) sv = applySingle(sv, b, pb)
   return sv
+}
+
+/**
+ * Amplitude damping quantum jump on qubit q (T1 relaxation).
+ * K0 = diag(1, √(1−γ)) (no decay), K1 = [[0,√γ],[0,0]] (decay |1⟩→|0⟩).
+ * Uses one random number: fires K1 with probability γ·P(q=1), otherwise K0.
+ */
+function dampAmp1(sv: StateVector, q: number, gamma: number, rand: number): StateVector {
+  const mask = 1n << BigInt(q)
+  let p1 = 0
+  for (const [idx, amp] of sv) {
+    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
+  }
+  const pJump = gamma * p1
+  if (pJump < JUMP_THRESHOLD) return sv
+
+  if (rand < pJump) {
+    // K1 fires: decay |1⟩ → |0⟩ (equivalent to project-to-|1⟩ then X)
+    const scale = 1 / Math.sqrt(p1)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      if (idx & mask) {
+        const flipped = idx ^ mask
+        const cur = next.get(flipped)
+        if (cur) next.set(flipped, { re: cur.re + amp.re * scale, im: cur.im + amp.im * scale })
+        else     next.set(flipped, { re: amp.re * scale,           im: amp.im * scale })
+      }
+    }
+    return next
+  } else {
+    // K0 fires: damp |1⟩ amplitudes, renormalize
+    const sqG = Math.sqrt(1 - gamma)
+    const inv = 1 / Math.sqrt(1 - pJump)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      const s = (idx & mask) ? sqG * inv : inv
+      next.set(idx, { re: amp.re * s, im: amp.im * s })
+    }
+    return next
+  }
+}
+
+/**
+ * Pure dephasing quantum jump on qubit q (T2 beyond T1 contribution).
+ * K0 = diag(1, √(1−λ)) (no dephasing), K1 = diag(0, √λ) (dephasing, projects to |1⟩).
+ * Kills off-diagonal coherences without changing populations.
+ */
+function dampPhase1(sv: StateVector, q: number, lambda: number, rand: number): StateVector {
+  const mask = 1n << BigInt(q)
+  let p1 = 0
+  for (const [idx, amp] of sv) {
+    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
+  }
+  const pJump = lambda * p1
+  if (pJump < JUMP_THRESHOLD) return sv
+
+  if (rand < pJump) {
+    // K1 fires: project to |1⟩ (dephasing collapse)
+    const scale = 1 / Math.sqrt(p1)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      if (idx & mask) next.set(idx, { re: amp.re * scale, im: amp.im * scale })
+    }
+    return next
+  } else {
+    // K0 fires: damp |1⟩ amplitudes, renormalize
+    const sqL = Math.sqrt(1 - lambda)
+    const inv = 1 / Math.sqrt(1 - pJump)
+    const next: StateVector = new Map()
+    for (const [idx, amp] of sv) {
+      const s = (idx & mask) ? sqL * inv : inv
+      next.set(idx, { re: amp.re * s, im: amp.im * s })
+    }
+    return next
+  }
+}
+
+/**
+ * Apply a custom single-qubit Kraus channel on qubit q.
+ * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
+ */
+function applyKraus1Channel(sv: StateVector, q: number, kraus: readonly Gate2x2[], rng: () => number): StateVector {
+  let cumP = 0
+  const probs: number[] = []
+  const results: StateVector[] = []
+  for (const K of kraus) {
+    const out = applySingle(sv, q, K)
+    let p = 0
+    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
+    probs.push(p)
+    results.push(out)
+    cumP += p
+  }
+  let r = rng() * cumP
+  for (let k = 0; k < results.length; k++) {
+    r -= probs[k]!
+    if (r <= 0) {
+      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
+      const next: StateVector = new Map()
+      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
+      return next
+    }
+  }
+  // Floating-point rounding guard: cumP ≈ 1 for a valid channel; residual r > 0 is epsilon.
+  // Return the last operator's result rather than the un-evolved state.
+  const last = results.length - 1
+  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
+  const fallback: StateVector = new Map()
+  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
+  return fallback
+}
+
+/**
+ * Apply a custom two-qubit Kraus channel on qubits a and b.
+ * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
+ */
+function applyKraus2Channel(sv: StateVector, a: number, b: number, kraus: readonly Gate4x4[], rng: () => number): StateVector {
+  let cumP = 0
+  const probs: number[] = []
+  const results: StateVector[] = []
+  for (const K of kraus) {
+    const out = applyTwo(sv, a, b, K)
+    let p = 0
+    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
+    probs.push(p)
+    results.push(out)
+    cumP += p
+  }
+  let r = rng() * cumP
+  for (let k = 0; k < results.length; k++) {
+    r -= probs[k]!
+    if (r <= 0) {
+      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
+      const next: StateVector = new Map()
+      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
+      return next
+    }
+  }
+  // Floating-point rounding guard: return last operator's result.
+  const last = results.length - 1
+  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
+  const fallback: StateVector = new Map()
+  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
+  return fallback
 }
 
 // ─── IonQ JSON types ──────────────────────────────────────────────────────────
@@ -788,11 +1001,57 @@ function toTrajOps(flatOps: readonly FlatOp[]): TrajOp[] {
         else throw new TypeError(`unitary gate with ${n} qubits is not supported in MPS mode; use run() instead`)
         break
       }
-      case 'toffoli': throw new TypeError('CCX (Toffoli) not supported in MPS mode; decompose into CX gates')
-      case 'cswap':   throw new TypeError('CSWAP (Fredkin) not supported in MPS mode; decompose into CX gates')
+      // Toffoli: standard 6-CNOT decomposition (Barenco et al.)
+      // CCX(c1, c2, t) into H, T, Tdg, CX gates — no ancilla.
+      case 'toffoli': {
+        const { c1, c2, target: t } = op
+        out.push(
+          { kind: 'single', q: t,  gate: G.H  },
+          { kind: 'cnot',   control: c2, target: t },
+          { kind: 'single', q: t,  gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: t },
+          { kind: 'single', q: t,  gate: G.T  },
+          { kind: 'cnot',   control: c2, target: t },
+          { kind: 'single', q: t,  gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: t },
+          { kind: 'single', q: c2, gate: G.T  },
+          { kind: 'single', q: t,  gate: G.T  },
+          { kind: 'single', q: t,  gate: G.H  },
+          { kind: 'cnot',   control: c1, target: c2 },
+          { kind: 'single', q: c1, gate: G.T  },
+          { kind: 'single', q: c2, gate: G.Ti },
+          { kind: 'cnot',   control: c1, target: c2 },
+        )
+        break
+      }
+      // CSWAP (Fredkin): CNOT(b,a) + CCX(c,a,b) + CNOT(b,a)
+      case 'cswap': {
+        const { control: ctrl, a, b } = op
+        out.push({ kind: 'cnot', control: b, target: a })
+        out.push(
+          { kind: 'single', q: b,    gate: G.H  },
+          { kind: 'cnot',   control: a,    target: b },
+          { kind: 'single', q: b,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: b },
+          { kind: 'single', q: b,    gate: G.T  },
+          { kind: 'cnot',   control: a,    target: b },
+          { kind: 'single', q: b,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: b },
+          { kind: 'single', q: a,    gate: G.T  },
+          { kind: 'single', q: b,    gate: G.T  },
+          { kind: 'single', q: b,    gate: G.H  },
+          { kind: 'cnot',   control: ctrl, target: a },
+          { kind: 'single', q: ctrl, gate: G.T  },
+          { kind: 'single', q: a,    gate: G.Ti },
+          { kind: 'cnot',   control: ctrl, target: a },
+        )
+        out.push({ kind: 'cnot', control: b, target: a })
+        break
+      }
       case 'csrswap': throw new TypeError('csrswap not supported in MPS mode; decompose into CX gates')
-      case 'measure': case 'reset': case 'if':
-        throw new TypeError(`'${op.kind}' not supported in MPS mode`)
+      case 'measure': out.push({ kind: 'measure', q: op.q, creg: op.creg, bit: op.bit }); break
+      case 'reset':   out.push({ kind: 'reset', q: op.q }); break
+      case 'if':      out.push({ kind: 'if', creg: op.creg, value: op.value, ops: toTrajOps(flattenOps(op.ops)) }); break
       case 'barrier': out.push({ kind: 'barrier' }); break
       default: { const _exhaustive: never = op; break }
     }
@@ -827,18 +1086,39 @@ export interface RunOptions {
   initialState?: string
 }
 
+export interface SimulateOptions {
+  shots?: number
+  seed?: number
+  /** Depolarizing noise parameters, or a named device profile (e.g. `'aria-1'`). */
+  noise?: NoiseParams | string
+  /** Starting state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
+  initialState?: string
+  /**
+   * Qubit count below which the statevector backend is always used (default 20).
+   * Raise this to force MPS on smaller circuits; lower it to use MPS sooner.
+   */
+  statevectorLimit?: number
+}
+
 export interface MpsRunOptions {
   shots?: number
   seed?: number
-  /** Maximum bond dimension χ (default 64). Larger = more accurate for high-entanglement circuits. */
+  /**
+   * Initial bond dimension χ (default 64).
+   *
+   * The simulator starts with tensors allocated for this χ and grows automatically
+   * as entanglement demands it — so the result is always exact (up to floating-point)
+   * regardless of this value. Set it higher to avoid reallocation overhead for circuits
+   * known to reach high entanglement; set it lower to save memory on product-state circuits.
+   */
   maxBond?: number
   /**
    * Relative Schmidt truncation threshold (default 0 = off).
    *
-   * Singular values σ_k < truncErr · σ_max are discarded in addition to the hard
-   * `maxBond` cap. Useful for structured circuits (VQE, chemistry, QFT) where the
-   * Schmidt spectrum decays quickly — a small `truncErr` (e.g. 1e-8) can reduce
-   * effective bond dimension dramatically with negligible error.
+   * Singular values σ_k < truncErr · σ_max are discarded during SVD. Useful for structured
+   * circuits (VQE, chemistry, QFT) where the Schmidt spectrum decays quickly — a small
+   * `truncErr` (e.g. 1e-8) can cap the effective bond dimension with negligible error.
+   * When set, `result.truncated` indicates whether any significant value was discarded.
    */
   truncErr?: number
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
@@ -884,13 +1164,23 @@ export class Distribution {
   /** Classical register results: `cregs[name][bit]` = fraction of shots where that bit was 1. */
   readonly cregs: Readonly<Record<string, readonly number[]>>
   /**
-   * `true` if the MPS bond dimension hit the `maxBond` cap during simulation and one or more
-   * significant singular values were discarded. Results are approximate in this case.
+   * `true` if `truncErr` caused one or more physically significant singular values to be
+   * discarded during MPS simulation. Results are approximate when this is `true`.
    *
-   * Always `false` for `run()` and `runClifford()`.
-   * Increase `maxBond` or set `truncErr` to reduce approximation error.
+   * Always `false` for `run()` and `runClifford()`, and for `runMps()` with `truncErr = 0`
+   * (the default) — the bond dimension grows automatically in that case.
    */
   readonly truncated: boolean
+  /**
+   * Which simulation backend produced this result.
+   * Set by `simulate()` and the individual `run*` methods.
+   */
+  readonly backend: 'clifford' | 'statevector' | 'mps' | undefined
+  /**
+   * Peak bond dimension χ used during MPS simulation.
+   * Only defined when `backend === 'mps'`.
+   */
+  readonly peakChi: number | undefined
 
   constructor(
     qubits: number,
@@ -898,10 +1188,14 @@ export class Distribution {
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
     truncated = false,
+    backend?: 'clifford' | 'statevector' | 'mps',
+    peakChi?: number,
   ) {
     this.qubits    = qubits
     this.shots     = shots
     this.truncated = truncated
+    this.backend   = backend
+    this.peakChi   = peakChi
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -1038,6 +1332,61 @@ export class Distribution {
     els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${ml + barsSpan + 2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n${els.join('\n')}\n</svg>`
+  }
+
+  /**
+   * Apply inverse per-qubit readout error mitigation.
+   *
+   * Corrects measurement results for independent per-qubit bit-flip errors at rate `p`
+   * (the `pMeas` parameter used during simulation). Applies the exact inverse of the
+   * per-qubit confusion matrix: A_q = [[1−p, p], [p, 1−p]] → A_q⁻¹ = diag correction.
+   *
+   * The inverse is applied qubit-by-qubit in sequence, equivalent to the tensor-product
+   * inverse A⁻¹ = A_0⁻¹ ⊗ … ⊗ A_{n−1}⁻¹. Negative probabilities are clipped to 0 and
+   * the result is renormalized — standard practice for near-threshold error rates.
+   *
+   * @param p Readout error probability per qubit (the same `pMeas` used in `.run()`).
+   *
+   * @example
+   * const d = circuit.run({ shots: 8192, noise: { pMeas: 0.02 } })
+   * const corrected = d.mitigateReadout(0.02)
+   */
+  mitigateReadout(p: number): Distribution {
+    if (p <= 0 || p >= 0.5) return this
+    const inv = 1 / (1 - 2 * p)
+    let corrected: Record<string, number> = { ...this.probs }
+
+    for (let q = 0; q < this.qubits; q++) {
+      const next: Record<string, number> = {}
+      for (const [bs, prob] of Object.entries(corrected)) {
+        const flipped = bs.slice(0, q) + (bs[q] === '0' ? '1' : '0') + bs.slice(q + 1)
+        const pFl = corrected[flipped] ?? 0
+        next[bs] = (next[bs] ?? 0) + inv * (prob - p * pFl)
+      }
+      corrected = next
+    }
+
+    // Clip negatives and renormalize
+    let total = 0
+    const clipped: Record<string, number> = {}
+    for (const [bs, prob] of Object.entries(corrected)) {
+      if (prob > 0) { clipped[bs] = prob; total += prob }
+    }
+    if (total === 0) return this
+
+    const counts = new Map<bigint, number>()
+    for (const [bs, prob] of Object.entries(clipped)) {
+      // Bitstring is q0-leftmost; reconstruct index with bit 0 = q0
+      let idx = 0n
+      for (let i = 0; i < bs.length; i++) if (bs[i] === '1') idx |= 1n << BigInt(i)
+      counts.set(idx, Math.round(prob / total * this.shots))
+    }
+    const cregCounts = new Map(
+      Object.entries(this.cregs).map(([name, fracs]) =>
+        [name, fracs.map(f => Math.round(f * this.shots))] as [string, number[]]
+      )
+    )
+    return new Distribution(this.qubits, this.shots, counts, cregCounts, this.truncated, this.backend, this.peakChi)
   }
 }
 
@@ -3449,7 +3798,7 @@ export class Circuit {
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
       }
 
-      return new Distribution(this.qubits, shots, counts, cregCounts)
+      return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
     }
 
     // ── Per-shot path: noise or mid-circuit ops — one full simulation per shot ──
@@ -3478,7 +3827,7 @@ export class Circuit {
       }
     }
 
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
   }
 
   /**
@@ -3495,7 +3844,7 @@ export class Circuit {
    * with random Pauli errors injected after each gate. Noise limits entanglement growth so bond
    * dimension stays tractable even at 100+ qubits. Simulates realistic NISQ hardware accurately.
    *
-   * @param maxBond Maximum bond dimension χ. Default 64 — exact for GHZ/BV, approximate for deep random circuits.
+   * @param maxBond Initial bond dimension χ (default 64). Grows automatically — set higher to reduce reallocation overhead for high-entanglement circuits.
    */
   runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
     // Resolve noise: named device profile → NoiseParams, or use as-is
@@ -3507,13 +3856,18 @@ export class Circuit {
         return p
       })() : noiseRaw
 
-    const rng     = makePrng(seed)
-    const trajOps = toTrajOps(flattenOps(this.#ops))
-    const counts  = new Map<bigint, number>()
+    const rng        = makePrng(seed)
+    const flat       = flattenOps(this.#ops)
+    const trajOps    = toTrajOps(flat)
+    const counts     = new Map<bigint, number>()
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
 
+    const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
     const traj = new MpsTrajectory(this.qubits, maxBond, truncErr)
 
-    if (!noise) {
+    if (!noise && !hasMidCircuit) {
       // Clean path: build state once, sample shots times from the same MPS.
       if (initialState !== undefined) {
         svFromBitstring(initialState, this.qubits)
@@ -3527,21 +3881,25 @@ export class Circuit {
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
       }
     } else {
-      // Noisy path: quantum trajectory method — one fresh circuit execution per shot.
-      const p1    = noise.p1    ?? 0
-      const p2    = noise.p2    ?? 0
-      const pMeas = noise.pMeas ?? 0
+      // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
+      const p1     = noise?.p1     ?? 0
+      const p2     = noise?.p2     ?? 0
+      const pMeas  = noise?.pMeas  ?? 0
+      const gamma  = noise?.gamma  ?? 0
+      const lambda = noise?.lambda ?? 0
+      if (noise?.kraus1 || noise?.kraus2) {
+        throw new Error('kraus1/kraus2 custom channels are not supported in the MPS trajectory backend — use run() (statevector) or runDM() (density matrix) instead')
+      }
       if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
 
-      // Parallel path: distribute shots across worker threads (Node.js ≥22 only).
-      // Only active when running from the built bundle and wt is available.
-      // MessageChannel gives a MessagePort pair for receiveMessageOnPort (synchronous recv).
+      // Parallel path: workers handle the noisy+clean-mid-circuit case.
+      // Mid-circuit circuits require per-shot creg state and can't be parallelised yet.
       const wtLocal = wt
       const isBuilt = !import.meta.url.endsWith('.ts')
       if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
         console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
       }
-      if (numWorkers > 1 && isBuilt && wtLocal !== null) {
+      if (numWorkers > 1 && isBuilt && wtLocal !== null && !hasMidCircuit) {
         const workerUrl = new URL('./mps.worker.js', import.meta.url)
         const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
         const slices    = distributeShots(shots, numWorkers)
@@ -3567,14 +3925,15 @@ export class Circuit {
         })
 
         for (let i = 0; i < ws.length; i++) {
-          Atomics.wait(flags[i]!, 0, 0)
+          const waitResult = Atomics.wait(flags[i]!, 0, 0, 300_000)
+          if (waitResult === 'timed-out') throw new Error(`[ket] runMps worker ${i} timed out after 5 minutes`)
           const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
           for (const [k, v] of message.counts as [bigint, number][]) {
             counts.set(k, (counts.get(k) ?? 0) + v)
           }
         }
       } else {
-        // Single-threaded trajectory loop (default, dev mode, or workers disabled).
+        // Single-threaded trajectory loop.
         for (let i = 0; i < shots; i++) {
           traj.reset()
           if (initialState !== undefined) {
@@ -3582,7 +3941,12 @@ export class Circuit {
               if (initialState[q] === '1') traj.apply1(q, G.X)
             }
           }
-          applyTrajOps(traj, trajOps, p1, p2, rng)
+          const shotCregs = hasMidCircuit
+            ? new Map<string, boolean[]>(
+                Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
+              )
+            : undefined
+          applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
           let idx = traj.sample(rng)
           if (pMeas) {
             for (let q = 0; q < this.qubits; q++) {
@@ -3590,14 +3954,17 @@ export class Circuit {
             }
           }
           counts.set(idx, (counts.get(idx) ?? 0) + 1)
+          if (shotCregs) {
+            for (const [name, bits] of shotCregs) {
+              const acc = cregCounts.get(name)!
+              for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
+            }
+          }
         }
       }
     }
 
-    const cregCounts = new Map<string, number[]>(
-      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
-    )
-    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated)
+    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated, 'mps', traj.maxBondUsed())
   }
 
   /**
@@ -4417,7 +4784,74 @@ export class Circuit {
       }
     }
 
-    return new Distribution(this.qubits, shots, counts, cregCounts)
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'clifford')
+  }
+
+  // ── Auto-routing simulation ───────────────────────────────────────────────
+
+  /**
+   * Simulate the circuit using the most efficient exact backend, chosen automatically:
+   *
+   * - **Clifford**: if every gate is in {H, X, Y, Z, S, S†, CNOT, CX, CY, CZ, SWAP} —
+   *   O(n²) stabilizer tableau, handles 1000+ qubits.
+   * - **Statevector**: if n ≤ `statevectorLimit` (default 20) — exact O(2ⁿ).
+   *   Mid-circuit ops on large circuits route to MPS instead.
+   * - **MPS**: otherwise — O(n·χ²) with adaptive bond dimension; exact for circuits
+   *   with bounded entanglement, memory-bounded for highly entangled ones.
+   *
+   * The returned `Distribution` carries two extra fields:
+   * - `backend` — which path was taken (`'clifford' | 'statevector' | 'mps'`)
+   * - `peakChi` — peak bond dimension χ actually used (MPS only)
+   *
+   * ```typescript
+   * const d = ghz(50).simulate({ shots: 1024 })
+   * d.backend   // 'mps'
+   * d.peakChi   // 2
+   * ```
+   */
+  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20 }: SimulateOptions = {}): Distribution {
+    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
+    const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
+
+    const isClifford = (ops: readonly Op[]): boolean => {
+      for (const op of flattenOps(ops)) {
+        switch (op.kind) {
+          case 'barrier': case 'measure': case 'reset': break
+          case 'cnot': case 'swap': break
+          case 'if': if (!isClifford(op.ops)) return false; break
+          case 'single':     if (!CLIFFORD_SINGLE.has(op.meta?.name ?? '')) return false; break
+          case 'controlled': if (!CLIFFORD_CTRL.has(op.meta?.name   ?? '')) return false; break
+          default: return false
+        }
+      }
+      return true
+    }
+
+    // Clifford path: initialState is not supported by runClifford, so fall through
+    // to statevector if the caller supplies one.
+    if (!initialState && isClifford(this.#ops)) {
+      return this.runClifford({
+        shots,
+        ...(seed  !== undefined && { seed }),
+        ...(noise !== undefined && { noise }),
+      })
+    }
+
+    if (this.qubits <= statevectorLimit) {
+      return this.run({
+        shots,
+        ...(seed         !== undefined && { seed }),
+        ...(noise        !== undefined && { noise }),
+        ...(initialState !== undefined && { initialState }),
+      })
+    }
+
+    return this.runMps({
+      shots,
+      ...(seed         !== undefined && { seed }),
+      ...(noise        !== undefined && { noise }),
+      ...(initialState !== undefined && { initialState }),
+    })
   }
 
   // ── Hardware compilation ──────────────────────────────────────────────────

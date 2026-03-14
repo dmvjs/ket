@@ -25,6 +25,7 @@ This matches the convention used by every major quantum computing library and pa
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
+- **WebGPU browser simulation** — the [interactive book](https://dmvjs.com/ket/) runs full statevector QPE on GPU compute shaders, reaching 29-bit state spaces (500M amplitudes) in the browser. State vectors live in GPU VRAM rather than the JS heap, bypassing the tab memory limit entirely.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, Trotter simulation, QAOA, gradient (parameter shift rule), minimize, standard ansatz circuits, and Pauli operator algebra ship with the core.
 
@@ -122,12 +123,49 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 
 ## Simulation backends
 
+### Auto-routing: `circuit.simulate()`
+
+`simulate()` picks the cheapest exact backend automatically — zero cognitive overhead:
+
+```typescript
+const d = circuit.simulate({ shots: 1024, seed: 42 })
+d.backend   // 'clifford' | 'statevector' | 'mps'
+d.peakChi   // peak bond dimension χ used (MPS only)
+```
+
+Routing logic (in priority order):
+
+| Condition | Backend chosen |
+|---|---|
+| All gates are Clifford (H, X, Y, Z, S, S†, CNOT, CX, CY, CZ, SWAP) | `clifford` |
+| n ≤ `statevectorLimit` (default 20) | `statevector` |
+| Otherwise (including circuits with mid-circuit measure/reset/if) | `mps` |
+
+```typescript
+ghz(50).simulate({ shots: 512 }).backend   // 'clifford' — GHZ is Clifford-only
+new Circuit(5).t(0).cx(0,1).simulate().backend  // 'statevector' — T gate, n≤20
+new Circuit(30).t(0).cx(0,1).simulate().backend  // 'mps' — T gate, n>20
+new Circuit(30).h(0).measure(0,'c',0).simulate().backend  // 'clifford' — Clifford path handles mid-circuit
+
+// Override threshold
+circuit.simulate({ statevectorLimit: 30 })  // use statevector up to n=30
+```
+
+### Manual backend selection
+
 | Backend | Method | Memory | Best for |
 |---|---|---|---|
 | Statevector | `circuit.run()` / `circuit.statevector()` | O(2ⁿ), sparse | Exact simulation, practical up to ~20 qubits |
-| MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²) | Low-entanglement circuits, 50+ qubits |
+| MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²), adaptive χ | Low-entanglement circuits, 50+ qubits |
 | Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
 | Clifford stabilizer | `circuit.runClifford({ shots, noise? })` | O(n²) | Clifford-only circuits, QEC threshold curves |
+
+All four backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
+
+```typescript
+const d = myCircuit.runMps({ shots: 1024 })
+console.log(`peak χ = ${d.peakChi}`)  // 2 for GHZ, larger for entangled circuits
+```
 
 The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
 
@@ -410,6 +448,66 @@ QAOA p=1 on a 4-cycle — the two optimal bipartitions tower over all 16 possibl
 
 ![QAOA Max-Cut result](examples/svg/maxcut.svg)
 
+### Shor's algorithm — Beauregard gate-decomposed circuit
+
+`shorBeauregard(N, opts?)` implements Shor's factoring algorithm via the Beauregard (2003)
+gate-decomposed circuit. Unlike the oracle-based demo, this decomposes the entire
+modular exponentiation into primitive CNOT/Toffoli/phase gates — no classical oracle, no
+exponentially large unitary matrix. The circuit uses O(n³) gates total where n = ⌈log₂ N⌉.
+
+```typescript
+import { shorBeauregard } from '@kirkelliott/ket'
+
+// Factor a semiprime
+const result = shorBeauregard(1927n)
+// result.factors → [41n, 47n]  (1927 = 41 × 47)
+
+// Full result object
+result.factors  // [41n, 47n] | undefined — undefined if no factor found in maxAttempts
+result.factor   // 41n | undefined — one non-trivial factor
+result.a        // base used for order-finding (random coprime to N)
+result.period   // r such that a^r ≡ 1 (mod N) | undefined
+result.attempts // number of QPE runs before success
+result.qubits   // total qubit count (precision + 2n + 2)
+```
+
+The stack is: Draper QFT adder (φADD) → controlled modular adder (φADD_mod) → controlled
+modular multiplier (U_a) → quantum phase estimation. QPE uses 2n+1 counting qubits;
+continued fractions extracts the period from the measurement.
+
+**Classical helpers** used internally, also exported for direct use:
+
+```typescript
+import { modPow, modInverse, gcd, continuedFractions, phiAdd, applyQft, applyIqft } from '@kirkelliott/ket'
+
+modPow(7n, 4n, 15n)          // 1n   (7^4 mod 15 = 2401 mod 15 = 1)
+modInverse(7n, 15n)           // 13n  (7·13 = 91 = 6·15 + 1)
+gcd(12n, 8n)                  // 4n
+continuedFractions(13n, 64n)  // convergents of 13/64 = [0, 4, 1, 3, ...]
+
+// Build a QFT-basis adder manually
+const c = new Circuit(4)
+applyQft(c, 4, 0)         // QFT in place
+phiAdd(c, 4, 5n, 0)       // add constant 5 in QFT basis
+applyIqft(c, 4, 0)        // iQFT
+```
+
+**MPS simulation note**: The full QPE circuit generates significant intermediate entanglement
+from the controlled-U_a gates. Empirically measured peak bond dimension χ:
+
+| N    | n (bits) | qubits | peak χ | time   |
+|------|----------|--------|--------|--------|
+| 15   | 4        | 15     | 4      | ~0.4s  |
+| 21   | 5        | 17     | 27     | ~2.7s  |
+| 35   | 6        | 19     | 44     | ~29s   |
+| 77   | 7        | 31     | 143    | ~907s  |
+
+χ grows super-linearly with n — exact MPS simulation is not more efficient than statevector
+for this circuit. `shorBeauregard` uses the MPS backend (required — the circuit uses 4n+3 qubits, which
+exceeds statevector capacity for n ≥ 7). All gates decompose to 1- and 2-qubit operations.
+Simulation time scales with χ, not qubit count; for n ≤ 6 (N ≤ 63) exact simulation
+completes in under a minute on a laptop.
+
 ## Visualization
 
 ### ASCII diagram
@@ -619,7 +717,7 @@ Statevector is exact but O(2ⁿ) — time and memory grow with the number of non
 
 The statevector backend stores quantum state as a `Map<bigint, Complex>` — only basis states with non-zero amplitude are kept. A random 20-qubit circuit typically occupies far fewer than the theoretical 2²⁰ = 1M entries. Gate application iterates only over entries present in the map rather than allocating a full transformation matrix, so memory and time scale with actual entanglement rather than worst-case qubit count. BigInt keys eliminate the 32-bit overflow that silently corrupts state at qubit index 31 in integer-based simulators.
 
-The MPS backend represents state as a chain of tensors with a configurable bond dimension χ. Memory is O(n·χ²) instead of O(2ⁿ), which makes circuits with limited entanglement — like GHZ, QFT, and most hardware-native gate sequences — practical at 50–100+ qubits. The tradeoff is approximation error for highly entangled states; χ=2 is exact for GHZ, while general circuits need larger χ. Each tensor is stored as a single contiguous `Float64Array` (interleaved re/im), eliminating per-element heap allocations and allowing V8 to JIT-compile the inner contraction loops as unboxed f64 operations.
+The MPS backend represents state as a chain of tensors with an adaptive bond dimension χ. Memory is O(n·χ²) instead of O(2ⁿ), which makes circuits with limited entanglement — like GHZ, QFT, and most hardware-native gate sequences — practical at 50–100+ qubits. The bond dimension starts at `maxBond` (default 64) and grows automatically whenever a gate would require a larger χ, so simulation is always exact up to floating-point regardless of the starting value. For circuits with genuinely unbounded entanglement (deep random circuits), χ grows exponentially and memory eventually becomes the bottleneck — use `truncErr` to trade accuracy for a bounded χ when that matters. Each tensor is stored as a single contiguous `Float64Array` (interleaved re/im), eliminating per-element heap allocations and allowing V8 to JIT-compile the inner contraction loops as unboxed f64 operations. Mid-circuit measurement (`measure`), qubit reset (`reset`), and classical conditioning (`if`) are fully supported: measurement projects the site tensor in-place using the Vidal canonical form bond lambdas, restoring a normalised MPS without any SVD — O(χ²) per measurement. Each shot in a mid-circuit circuit runs as an independent trajectory with its own classical register state.
 
 The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse map, applying exact per-gate depolarizing channels without Monte Carlo sampling. Noiseless circuits take the fast path — zero overhead compared to the statevector backend.
 
@@ -664,7 +762,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-1464 tests, ~1s. Run with:
+1614 tests, ~1s. Run with:
 
 ```bash
 npm test
