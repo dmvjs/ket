@@ -1,0 +1,480 @@
+# Shor's Algorithm {#sec-shor}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+In 1994, Peter Shor showed that a quantum computer can factor large integers in polynomial time. This broke the assumption underpinning RSA encryption and started the modern era of quantum computing research.
+
+## Why factoring matters
+
+RSA security rests on a simple asymmetry: multiplying two large primes is easy, factoring their product is hard. The best known classical algorithm runs in roughly $e^{O(n^{1/3})}$ time for an $n$-bit number. Shor's algorithm runs in $O(n^3)$ — polynomial. A large enough quantum computer breaks RSA.
+
+## The reduction
+
+Shor doesn't factor directly. It reduces factoring to **period finding**:
+
+1. Pick random $a < N$ with $\gcd(a, N) = 1$
+2. Find period $r$ of $f(x) = a^x \bmod N$
+3. Then $\gcd(a^{r/2} \pm 1,\, N)$ gives the factors (if $r$ is even and $a^{r/2} \not\equiv -1$)
+
+Steps 1 and 3 are classical. Step 2 is quantum — period finding via phase estimation on the unitary $U_a|x\rangle = |ax \bmod N\rangle$.
+
+## Running it
+
+`shorBeauregard` implements the full gate-decomposed Beauregard circuit:
+
+```{ojs}
+r15 = ket.shorBeauregard(15n, 7n)
+pre(`factors = ${r15.factors.map(String).join(' \xd7 ')}  (base ${r15.a}, ${r15.qubits} qubits)`)
+```
+
+The algorithm selects the most efficient base internally. Here it factors 15 into 3 and 5 using 19 qubits.
+
+```{ojs}
+r21 = ket.shorBeauregard(21n, 2n)
+pre(`21 = ${r21.factors.map(String).join(' \xd7 ')}  (${r21.qubits} qubits)`)
+```
+
+```{ojs}
+r35 = ket.shorBeauregard(35n, 3n)
+pre(`35 = ${r35.factors.map(String).join(' \xd7 ')}  (${r35.qubits} qubits)`)
+```
+
+## The qubit cost
+
+The Beauregard circuit for factoring $N$ requires $O(\log N)$ qubits. For $N=15$: 19 qubits. For a 2048-bit RSA key: roughly 4000 logical qubits, plus thousands more for error correction. Current hardware has hundreds of noisy physical qubits.
+
+The algorithm works. The hardware isn't there yet.
+
+## Simulation limits
+
+The full gate-decomposed Beauregard circuit is expensive to simulate classically — intermediate entanglement grows with $n$, requiring $O(\chi^2)$ work per gate where $\chi$ is the MPS bond dimension:
+
+| N | Qubits | Approx. simulation time |
+|---|---|---|
+| 15 | 19 | < 1s |
+| 21 | 22 | ~3s |
+| 35 | 25 | ~30s |
+| 77 | 29 | ~15 min |
+
+The interactive QPE demo below uses a fundamentally different approach: instead of dense arrays, it tracks only non-zero amplitudes in a hash map. The quantum state stays sparse — at most $2^t \times r$ entries, where $r$ is the period — throughout the entire circuit. For $r=2$ and $t=3$, that's at most 16 entries regardless of $N$.
+
+| N | Amplitudes tracked | Peak RAM | Time |
+|---|---|---|---|
+| 15 | ≤ 16 | < 1 kB | < 1ms |
+| 10¹² | ≤ 16 | < 1 kB | < 1ms |
+| 10¹⁸ | ≤ 16 | < 1 kB | < 1ms |
+| 10¹⁰⁰ | ≤ 16 | < 1 kB | < 1ms |
+
+This works because the QPE eigenstate for $f(x) = a^x \bmod N$ is always a sparse superposition: the work register is initialized to $|1\rangle$ and only ever maps to $\{1, a, a^2, \ldots\}$ — at most $r$ distinct values. Classical simulation exploits this; a real quantum computer cannot.
+
+This is the honest limit of classical simulation. To factor a cryptographically relevant number you need actual quantum hardware — which is the entire point.
+
+## Try it — QPE factoring
+
+This interactive demo runs a full statevector QPE simulation in the browser — every amplitude in the $2^{t+n}$-dimensional Hilbert space is tracked and updated on each gate. QPE with $t=3$ counting bits extracts the period; continued fractions and GCD give the factors.
+
+```{ojs}
+//| echo: false
+// n = work qubits needed (2^n > N) = bit-length of N.
+// Each step doubles the state space: 2^(t+n) amplitudes, ~1 GB per 3 extra qubits.
+SHOR_TARGETS = [
+  { N: 15,       a: 2,      aSq: 4,   n: 4,  label: "15 = 3 × 5" },
+  { N: 77,       a: 34,     aSq: 1,   n: 7,  label: "77 = 7 × 11" },
+  { N: 989,      a: 300,    aSq: 1,   n: 10, label: "989 = 23 × 43" },
+  { N: 2047,     a: 390,    aSq: 622, n: 11, label: "2047 = 23 × 89" },
+  { N: 2701,     a: 2554,   aSq: 1,   n: 12, label: "2701 = 37 × 73" },
+  { N: 10403,    a: 102,    aSq: 1,   n: 14, label: "10403 = 101 × 103" },
+  { N: 34571,    a: 27694,  aSq: 1,   n: 16, label: "34571 = 181 × 191" },
+  { N: 72899,    a: 270,    aSq: 1,   n: 17, label: "72899 = 269 × 271" },
+  { N: 1005973,  a: 838478, aSq: 1,   n: 20, label: "1005973 = 997 × 1009" },
+  { N: 4112783,  a: 2028,   aSq: 1,   n: 22, label: "4112783 = 2027 × 2029" },
+  { N: 11902499, a: 3450,   aSq: 1,   n: 24, label: "11902499 = 3449 × 3451" },
+  { N: 23912099,  a: 4890,  aSq: 1, n: 25, t: 1, label: "23912099 = 4889 × 4891  (~10s)" },
+  { N: 47609999,  a: 6900,  aSq: 1, n: 26, t: 1, label: "47609999 = 6899 × 6901  (~30s)" },
+  { N: 98604899,  a: 9930,  aSq: 1, n: 27, t: 1, label: "98604899 = 9929 × 9931  (~2 min)" },
+  { N: 267715043, a: 16362, aSq: 1, n: 28, t: 1, label: "267715043 = 16361 × 16363  (~8 min)" },
+  { N: 531671363, a: 23058, aSq: 1, n: 29, t: 1, label: "531671363 = 23057 × 23059  (~16 min)" },
+  { N: 1070467523,  a: 32718, aSq: 1, n: 30, t: 1, label: "1070467523 = 32717 × 32719  (16 GB VRAM, RTX 4090+)" },
+  { N: 2144430863,  a: 46308, aSq: 1, n: 31, t: 1, label: "2144430863 = 46307 × 46309  (32 GB VRAM)" },
+  { N: 4292870399,  a: 65520, aSq: 1, n: 32, t: 1, label: "4292870399 = 65519 × 65521  (64 GB VRAM)" },
+]
+```
+
+```{ojs}
+viewof shor_target = Inputs.select(SHOR_TARGETS, {
+  label: "N to factor",
+  format: t => `${t.N.toLocaleString()}  [${t.n}-bit]${t.n >= 30 ? " 🖥️" : t.n >= 28 ? " ☕" : t.n >= 25 ? " ⏳" : ""}`
+})
+```
+
+```{ojs}
+//| echo: false
+// WebGPU device + compiled H-gate pipeline — initialised once, reused across runs.
+gpu_state = {
+  if (typeof navigator === 'undefined' || !navigator.gpu) return null
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+  if (!adapter) return null
+  let device
+  try {
+    device = await adapter.requestDevice({ requiredLimits: {
+      maxBufferSize: adapter.limits.maxBufferSize,
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    }})
+  } catch { return null }
+  // H-gate compute shader: each thread processes one (i, j=i|bit) amplitude pair.
+  const mod = device.createShaderModule({ code: `
+    struct P { bit:u32, stride:u32, half:u32, _pad:u32 }
+    @group(0) @binding(0) var<storage,read_write> re:array<f32>;
+    @group(0) @binding(1) var<storage,read_write> im:array<f32>;
+    @group(0) @binding(2) var<uniform> p:P;
+    @compute @workgroup_size(256)
+    fn main(@builtin(global_invocation_id) gid:vec3<u32>) {
+      let idx = gid.x + gid.y * p.stride;
+      if (idx >= p.half) { return; }
+      let lo = idx & (p.bit - 1u);
+      let i  = lo | ((idx - lo) << 1u);
+      let j  = i  | p.bit;
+      let s2 = 0.7071067811865476f;
+      let r0=re[i]; let i0=im[i]; let r1=re[j]; let i1=im[j];
+      re[i]=s2*(r0+r1); im[i]=s2*(i0+i1);
+      re[j]=s2*(r0-r1); im[j]=s2*(i0-i1);
+    }` })
+  let pipeline
+  try {
+    pipeline = await device.createComputePipelineAsync({
+      layout: 'auto', compute: { module: mod, entryPoint: 'main' }
+    })
+  } catch { device.destroy(); return null }
+  return { device, pipeline, f16: false, maxBuf: adapter.limits.maxBufferSize }
+}
+```
+
+```{ojs}
+//| echo: false
+shor_holder = {
+  const { N, a, aSq, n, t = 3 } = shor_target
+  const total = t + n
+  const size = 2 ** total
+
+  // Use WebGPU when: t=1 (sparse ctrl-mult path), GPU available, half-buffer fits in VRAM.
+  // Split mode: when size*4 > maxBuf, split re/im each into two half-buffers.
+  // Each half = size/2 floats = same bytes as n=29 single-buffer → n=30 works wherever n=29 did.
+  const gs = gpu_state
+  const useGpu = t === 1 && gs != null && size * 2 <= gs.maxBuf
+
+  const holder = {}
+  holder.promise = (async () => {
+    let wakeLock = null
+    if (n >= 14 && navigator.wakeLock) {
+      try { wakeLock = await navigator.wakeLock.request('screen') } catch (_) {}
+    }
+    await new Promise(r => setTimeout(r, 30))
+    try {
+      const t0 = performance.now()
+
+      // n-bit reversal — used in both paths
+      const bitrev = (x) => { let r=0,b=n; while(b--){r=(r<<1)|(x&1);x>>>=1}; return r }
+
+      if (useGpu) {
+        // ── GPU path ───────────────────────────────────────────────────────────
+        // Allocates re/im as Float32 in GPU VRAM — bypasses the browser tab heap limit.
+        // Split mode: when a single size*4 buffer exceeds maxBuf, each component is split
+        // into two half-buffers. H on qubit 0 (bit=1) never pairs indices across the split
+        // boundary, so the same shader runs independently on each half.
+        const { device, pipeline } = gs
+        const BUF = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+        const split = size * 4 > gs.maxBuf
+        const hlf   = size >>> 1                        // half index (size always even here)
+        const bufSz = (split ? hlf : size) * 4         // bytes per buffer
+        const reBufs = [device.createBuffer({ size: bufSz, usage: BUF })]
+        const imBufs = [device.createBuffer({ size: bufSz, usage: BUF })]
+        if (split) {
+          reBufs.push(device.createBuffer({ size: bufSz, usage: BUF }))
+          imBufs.push(device.createBuffer({ size: bufSz, usage: BUF }))
+        }
+
+        // Write a single f32 to global index gi in the re component
+        const writ = (bufs, gi, val) => {
+          const k = split && gi >= hlf ? 1 : 0
+          device.queue.writeBuffer(bufs[k], (gi - k * hlf) * 4, new Float32Array([val]))
+        }
+
+        // Initialize work register to |1⟩: set re[bx] = 1
+        // Use multiplication not << to avoid 32-bit overflow when n≥31
+        const bx = bitrev(1) * (2 ** t)
+        writ(reBufs, bx, 1)
+
+        // Dispatch H gate on qubit q using GPU compute shader.
+        // In split mode, dispatch on each half independently — valid because bit=1 < hlf,
+        // so paired indices (i, i|bit) always fall within the same half.
+        const WG = 256
+        const dispatchH = (q) => {
+          const bit  = 2 ** q
+          const cnt  = split ? hlf : size   // elements per buffer
+          const half = cnt / 2              // thread count per dispatch
+          const numWg = Math.ceil(half / WG)
+          const wx    = Math.min(numWg, 65535)
+          const wy    = Math.ceil(numWg / wx)
+          for (let k = 0; k < reBufs.length; k++) {
+            const uni = device.createBuffer({ size: 16,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+            device.queue.writeBuffer(uni, 0, new Uint32Array([bit>>>0, wx*WG, half>>>0, 0]))
+            const bg = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
+              { binding: 0, resource: { buffer: reBufs[k] } },
+              { binding: 1, resource: { buffer: imBufs[k] } },
+              { binding: 2, resource: { buffer: uni        } },
+            ]})
+            const enc = device.createCommandEncoder()
+            const pass = enc.beginComputePass()
+            pass.setPipeline(pipeline); pass.setBindGroup(0, bg)
+            pass.dispatchWorkgroups(wx, wy); pass.end()
+            device.queue.submit([enc.finish()])
+            uni.destroy()
+          }
+        }
+
+        // H(0): put counting qubit in superposition
+        dispatchH(0)
+
+        // Ctrl-mult(a, 0): state is exactly sparse — 2 non-zero entries at bx and bx+1.
+        // Move the ctrl=1 entry from work=|1⟩ to work=|a⟩.
+        // Use + not | to avoid 32-bit overflow when n≥31 (bx is always even)
+        const src = bx + 1
+        const wac = bitrev(a) * (2 ** t)
+        const dst = wac + 1
+        if (src !== dst) {
+          await device.queue.onSubmittedWorkDone()
+          writ(reBufs, src, 0)
+          writ(reBufs, dst, Math.SQRT1_2)
+        }
+
+        // H(0) again: inverse QFT for t=1
+        dispatchH(0)
+        await device.queue.onSubmittedWorkDone()
+
+        // Read back the 4 known non-zero indices to extract counting probabilities.
+        // After the circuit: re[bx]=0.5, re[bx+1]=0.5, re[wac]=0.5, re[wac+1]=-0.5
+        const idxs = [bx, bx + 1, wac, wac + 1]
+        const stg  = device.createBuffer({ size: 16,
+          usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
+        const enc2 = device.createCommandEncoder()
+        idxs.forEach((gi, k) => {
+          const bufK = split && gi >= hlf ? 1 : 0
+          enc2.copyBufferToBuffer(reBufs[bufK], (gi - bufK * hlf) * 4, stg, k * 4, 4)
+        })
+        device.queue.submit([enc2.finish()])
+        await stg.mapAsync(GPUMapMode.READ)
+        const rv = Array.from(new Float32Array(stg.getMappedRange().slice(0)))
+        stg.unmap(); stg.destroy()
+        reBufs.forEach(b => b.destroy()); imBufs.forEach(b => b.destroy())
+
+        // P(m=0) from indices 0,2 (bit0=0); P(m=1) from indices 1,3 (bit0=1)
+        const P0 = rv[0]**2 + rv[2]**2
+        const P1 = rv[1]**2 + rv[3]**2
+        const countProbs = {}
+        if (P0 > 1e-6) countProbs['0'] = P0
+        if (P1 > 1e-6) countProbs['1'] = P1
+
+        const periods = new Set()
+        for (const [bits, p] of Object.entries(countProbs)) {
+          if (p < 0.05) continue
+          const m = parseInt(bits, 2)
+          if (m === 0) continue
+          for (let r = 1; r <= 2*(1<<t); r++)
+            for (let s = 1; s < r; s++)
+              if (Math.abs(s/r - m/(1<<t)) < 0.5/(1<<t)) periods.add(r)
+        }
+        const shor_gcd = (a, b) => { while (b) [a,b]=[b,a%b]; return a }
+        const factors = []
+        for (const r of [...periods].sort((x,y)=>x-y)) {
+          if (r % 2 !== 0) continue
+          const x = r === 4 ? aSq : r === 2 ? a : null
+          if (!x || x === 1 || x === N-1) continue
+          const f1 = shor_gcd(x-1,N), f2 = shor_gcd(x+1,N)
+          const fs = [f1,f2].filter(f=>f>1&&f<N)
+          if (fs.length) factors.push({ r, p: fs[0], q: N/fs[0] })
+        }
+        return { N, a, t, n, elapsed: performance.now()-t0, countProbs, factors, gpu: true }
+      }
+
+      // ── CPU path ─────────────────────────────────────────────────────────────
+      const re = new Float32Array(size)
+      const im = new Float32Array(size)
+      re[0] = 1
+
+      // X on qubit (t+n-1) initialises work register to |1⟩
+      const bx = 1 << (t + n - 1)
+      for (let i = 0; i < size; i++) {
+        if (i & bx) continue
+        const j = i | bx
+        const tr = re[i], ti = im[i]
+        re[i] = re[j]; im[i] = im[j]
+        re[j] = tr; im[j] = ti
+      }
+
+      const s2 = 1 / Math.sqrt(2)
+
+      const applyH = (q) => {
+        const bit = 1 << q
+        for (let i = 0; i < size; i++) {
+          if (i & bit) continue
+          const j = i | bit
+          const r0 = re[i], i0 = im[i], r1 = re[j], i1 = im[j]
+          re[i] = s2 * (r0 + r1); im[i] = s2 * (i0 + i1)
+          re[j] = s2 * (r0 - r1); im[j] = s2 * (i0 - i1)
+        }
+      }
+
+      const applyPhase = (theta, ctrl, tgt) => {
+        const cb = 1 << ctrl, tb = 1 << tgt
+        const cos = Math.cos(theta), sin = Math.sin(theta)
+        for (let i = 0; i < size; i++) {
+          if ((i & cb) && (i & tb)) {
+            const r = re[i], ii = im[i]
+            re[i] = r * cos - ii * sin
+            im[i] = r * sin + ii * cos
+          }
+        }
+      }
+
+      const applySwap = (qa, qb) => {
+        const ba = 1 << qa, bb = 1 << qb
+        for (let i = 0; i < size; i++) {
+          if ((i & ba) && !(i & bb)) {
+            const j = (i & ~ba) | bb
+            const tr = re[i], ti = im[i]
+            re[i] = re[j]; im[i] = im[j]
+            re[j] = tr; im[j] = ti
+          }
+        }
+      }
+
+      // Controlled-multiplication — in-place, no scratch arrays, no lookup table.
+      // State is sparse (≤ 2^t non-zero amplitudes after H gates); we collect the
+      // ~8 non-zero entries, clear them, then scatter to permuted positions.
+      const applyCtrlMult = (mul, ctrl_q) => {
+        const cb = 1 << ctrl_q
+        const mask = (1 << n) - 1
+        const work_mask = mask << t
+        const hits = []
+        for (let i = 0; i < size; i++) {
+          if ((i & cb) && (Math.abs(re[i]) > 1e-15 || Math.abs(im[i]) > 1e-15)) {
+            hits.push(i, re[i], im[i])
+            re[i] = 0; im[i] = 0
+          }
+        }
+        for (let k = 0; k < hits.length; k += 3) {
+          const i = hits[k], r = hits[k+1], m = hits[k+2]
+          const x = bitrev((i >> t) & mask)
+          const y = x < N ? (x * mul) % N : x
+          const j = (i & ~work_mask) | (bitrev(y) << t)
+          re[j] += r; im[j] += m
+        }
+      }
+
+      for (let i = 0; i < t; i++) applyH(i)
+      const aPows = [a, aSq, 1]
+      for (let k = 0; k < t; k++) {
+        if (aPows[k] === 1) continue
+        applyCtrlMult(aPows[k], k)
+      }
+      for (let i = 0; i < Math.floor(t / 2); i++) applySwap(i, t - 1 - i)
+      for (let j = 0; j < t; j++) {
+        for (let kk = j - 1; kk >= 0; kk--) applyPhase(-Math.PI / 2 ** (j - kk), kk, j)
+        applyH(j)
+      }
+
+      const countProbs = {}
+      for (let i = 0; i < size; i++) {
+        const p = re[i] * re[i] + im[i] * im[i]
+        if (p < 1e-10) continue
+        const m = (i >> n) & ((1 << t) - 1)
+        const key = m.toString(2).padStart(t, '0')
+        countProbs[key] = (countProbs[key] || 0) + p
+      }
+
+      const periods = new Set()
+      for (const [bits, p] of Object.entries(countProbs)) {
+        if (p < 0.05) continue
+        const m = parseInt(bits, 2)
+        if (m === 0) continue
+        for (let r = 1; r <= 2 * (1 << t); r++)
+          for (let s = 1; s < r; s++)
+            if (Math.abs(s / r - m / (1 << t)) < 0.5 / (1 << t)) periods.add(r)
+      }
+
+      const shor_gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a }
+      const factors = []
+      for (const r of [...periods].sort((x, y) => x - y)) {
+        if (r % 2 !== 0) continue
+        const x = r === 4 ? aSq : r === 2 ? a : null
+        if (!x || x === 1 || x === N - 1) continue
+        const f1 = shor_gcd(x - 1, N), f2 = shor_gcd(x + 1, N)
+        const fs = [f1, f2].filter(f => f > 1 && f < N)
+        if (fs.length) factors.push({ r, p: fs[0], q: N / fs[0] })
+      }
+
+      return { N, a, t, n, elapsed: performance.now() - t0, countProbs, factors }
+    } finally {
+      if (wakeLock) wakeLock.release()
+    }
+  })()
+  return holder
+}
+```
+
+```{ojs}
+//| echo: false
+{
+  const holder = shor_holder
+  const root = document.createElement('div')
+  const spinner = document.createElement('div')
+  spinner.className = 'shor-computing'
+  spinner.innerHTML = '<span class="shor-spinner"></span> running QPE circuit\u2026'
+  root.appendChild(spinner)
+
+  holder.promise.then(({ N, a, t, n, elapsed, countProbs, factors, gpu }) => {
+    spinner.remove()
+    const maxP = Math.max(...Object.values(countProbs))
+    const mem = (4 * 4 * (1 << (t + n)) / 1e9).toFixed(1)
+    const backend = gpu ? `GPU VRAM` : `~${mem} GB RAM`
+    const lines = [
+      `N = ${N}  (${n}-bit,  state space = 2^${t+n},  ${backend},  ${(elapsed/1000).toFixed(1)}s)`,
+      `base a = ${a},  counting bits t = ${t}`,
+      ``, `QPE counting register:`
+    ]
+    for (const [bits, p] of Object.entries(countProbs).sort((x, y) => parseInt(x[0], 2) - parseInt(y[0], 2))) {
+      const m = parseInt(bits, 2)
+      const bar = '\u2588'.repeat(Math.round(p / maxP * 24))
+      lines.push(`  m=${String(m).padStart(2)}  \u03c6=${m}/${1 << t}  ${(p * 100).toFixed(0).padStart(3)}%  ${bar}`)
+    }
+    lines.push(``)
+    if (factors.length) {
+      lines.push(`Period r = ${factors[0].r}`)
+      lines.push(`${N} = ${factors[0].p} \xd7 ${factors[0].q}  \u2713`)
+    } else {
+      lines.push(`No factors found \u2014 try a different base`)
+    }
+    root.appendChild(pre(lines.join('\n')))
+  }).catch(() => {
+    spinner.remove()
+    const msg = document.createElement('div')
+    msg.style.cssText = 'color:#c0392b;font-size:0.85em;margin-top:4px'
+    msg.textContent = '\u26a0 Simulation failed \u2014 browser ran out of memory. Try a smaller N.'
+    root.appendChild(msg)
+  })
+
+  return root
+}
+```
+
+The counting register peaks at multiples of `2^t / r`. For r=2 with t=3 precision bits: peaks at m=0 and m=4. For r=4: peaks at m=0, 2, 4, 6. Continued fractions recovers r from any non-zero peak.
+
+## What's next
+
+All the circuits so far assumed perfect gates. Chapter 9 covers noise: what goes wrong on real hardware and how `ket` models it.
