@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .DS_Store
+
+# JetBrains: keep the shared inspection profile, ignore per-user state.
+.idea/*
+!.idea/inspectionProfiles/
+.idea/workspace.xml

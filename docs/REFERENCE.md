@@ -536,10 +536,17 @@ from the controlled-U_a gates. Empirically measured peak bond dimension χ:
 | N    | n (bits) | qubits | peak χ | time    |
 |------|----------|--------|--------|---------|
 | 15   | 4        | 19     | 4      | 0.4s    |
-| 21   | 5        | 23     | 27     | 3.0s    |
-| 33   | 6        | 27     | —      | 22.4s   |
-| 35   | 6        | 27     | 44     | 29.0s   |
-| 77   | 7        | 31     | 143    | ~907s   |
+| 21   | 5        | 23     | ~27    | 3.0s    |
+| 33   | 6        | 27     | ~59    | 22.4s   |
+| 35   | 6        | 27     | ~44    | 29.0s   |
+| 77   | 7        | 31     | ~143   | ~907s   |
+
+Read those χ values as approximate. Peak χ counts the singular values above the truncation
+cutoff, and with the default `truncErr: 0` that cutoff is an absolute 1e-14. A QPE circuit
+leaves a long tail of singular values down in that numerical-noise band, so the count moves
+with floating-point details — the same circuit measures χ=27 on arm64 and χ=29 on x86, and
+raising the cutoff to a relative 1e-12 drops it to 18. Only N=15, at χ=4, is insensitive to
+the choice. The trend is the robust part, not the digits.
 
 χ grows super-linearly with n — exact MPS simulation is **not** more efficient than
 statevector for this circuit. `shorBeauregard` uses the MPS backend because the circuit
@@ -766,6 +773,10 @@ Promotion is one-way — a dense state is never demoted, since the fill test wou
 
 The two kernels are differentially tested against each other in `src/hybrid.test.ts`, gate by gate across every qubit ordering, so which one runs is never observable in a result.
 
+`run()` adds a second decision on top. A circuit whose measurements are all *terminal* — no `reset`, no `if`, and no gate touching a qubit after it is measured — does not need re-simulating per shot: measuring in the computational basis is a dephasing channel, and dephasing a qubit nothing else will touch cannot change the joint outcome distribution. Such a circuit is built once and sampled, with each measurement reading a bit straight out of the sampled index. Anything else (noise, mid-circuit feedback, a gate on a measured qubit) still runs one full simulation per shot, because there the later gates genuinely depend on the collapse.
+
+This matters more than it sounds, because "apply gates, then measure everything" is how most circuits are written. On a depth-4 random 12-qubit circuit with all twelve qubits measured, 200 shots went from 8,652 ms to 5 ms; 20,000 shots now costs 8.4 ms, where the per-shot path scaled linearly with shot count. `src/terminal-measure.test.ts` pins both halves: that ineligible circuits keep the per-shot path, and that both paths agree on the ones that could take either.
+
 The MPS backend represents state as a chain of tensors with an adaptive bond dimension χ. Memory is O(n·χ²) instead of O(2ⁿ), which makes circuits with limited entanglement — like GHZ, QFT, and most hardware-native gate sequences — practical at 50–100+ qubits. The bond dimension starts at `maxBond` (default 64) and grows automatically whenever a gate would require a larger χ, so simulation is always exact up to floating-point regardless of the starting value. For circuits with genuinely unbounded entanglement (deep random circuits), χ grows exponentially and memory eventually becomes the bottleneck — use `truncErr` to trade accuracy for a bounded χ when that matters. Each tensor is stored as a single contiguous `Float64Array` (interleaved re/im), eliminating per-element heap allocations and allowing V8 to JIT-compile the inner contraction loops as unboxed f64 operations. Mid-circuit measurement (`measure`), qubit reset (`reset`), and classical conditioning (`if`) are fully supported: measurement projects the site tensor in-place using the Vidal canonical form bond lambdas, restoring a normalised MPS without any SVD — O(χ²) per measurement. Each shot in a mid-circuit circuit runs as an independent trajectory with its own classical register state.
 
 The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse map, applying exact per-gate depolarizing channels without Monte Carlo sampling. Noiseless circuits take the fast path — zero overhead compared to the statevector backend.
@@ -811,7 +822,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-1741 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+1754 tests, ~60s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

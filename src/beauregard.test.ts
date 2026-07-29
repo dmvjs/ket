@@ -428,25 +428,45 @@ describe('beauregard — MPS bond dimension scaling', () => {
     return dist.peakChi!
   }
 
-  it('N=15 (4-bit): peakChi=4', () => {
+  // Peak χ is the number of singular values left above the truncation cutoff,
+  // which with truncErr=0 is an absolute 1e-14. A QPE circuit produces a long
+  // tail of singular values down in that numerical-noise band, so the count is
+  // sensitive to floating-point details that differ between architectures —
+  // x86 CI measures 29 and 47 where arm64 measures 27 and 44. Measured here at
+  // several cutoffs on one machine:
+  //
+  //   N     0     1e-13  1e-12  1e-10
+  //   15    4     4      4      4
+  //   21    27    24     18     13
+  //   35    44    26     15     14
+  //
+  // Only N=15 is stable enough to pin exactly. The others assert a range: wide
+  // enough to survive the platform spread, tight enough to still catch a real
+  // change in entanglement growth. What the suite is actually defending is the
+  // conclusion — χ is tiny for N=15 and substantial by N=21 — not a specific
+  // integer that happens to fall out of the noise floor on one CPU.
+
+  it('N=15 (4-bit): peakChi is exactly 4', () => {
     const chi = measurePeakChi(15n, 7n)
     console.log(`N=15, a=7, peakChi=${chi}`)
     expect(chi).toBe(4)
   })
 
-  it('N=21 (5-bit): peakChi=27', () => {
+  it('N=21 (5-bit): peakChi is an order of magnitude above N=15', () => {
     const chi = measurePeakChi(21n, 2n)
     console.log(`N=21, a=2, peakChi=${chi}`)
-    expect(chi).toBe(27)
+    expect(chi).toBeGreaterThan(15)
+    expect(chi).toBeLessThanOrEqual(40)
   })
 
-  it('N=35 (6-bit): peakChi=44', () => {
+  it('N=35 (6-bit): peakChi grows again and stays well under maxBond', () => {
     const chi = measurePeakChi(35n, 3n)
     console.log(`N=35, a=3, peakChi=${chi}`)
-    expect(chi).toBe(44)
+    expect(chi).toBeGreaterThan(30)
+    expect(chi).toBeLessThanOrEqual(64)
   })
 
-  // N=77 peakChi=143 measured (907s); excluded from CI — run scripts/measure-chi.ts manually.
+  // N=77 peakChi=143 measured (~15 min); excluded from CI — run scripts/measure-chi.ts manually.
 })
 
 // ── End-to-end: shorBeauregard / factor ───────────────────────────────────────

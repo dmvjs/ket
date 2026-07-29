@@ -6,14 +6,14 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, StateVector, zero } from './statevector.js'
 import {
   simCNOT, simControlled, simCsrSwap, simCSwap, simFromSparse, simProbabilities,
   simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary, simZero,
   type SimState,
 } from './hybrid.js'
 import { Complex, ZERO } from './complex.js'
-import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp } from './mps.js'
+import { controlledGate, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
 import { wt } from './worker-shim.js'
 import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
@@ -889,6 +889,50 @@ function latexCtrlTargetLabel(op: ControlledOp): string {
 
 /** Format a radian angle using Unicode π for draw() / toSVG() labels. */
 function drawAngle(r: number): string { return fmtAngle(r, 'π') }
+
+/**
+ * Measure ops of a circuit whose measurements are all *terminal*, or null if any
+ * is not.
+ *
+ * A measurement is terminal when no gate touches that qubit afterwards. Such a
+ * circuit does not need re-simulating per shot: measuring in the computational
+ * basis is a dephasing channel, and dephasing a qubit nothing else will touch
+ * cannot change the joint outcome distribution. So the state can be built once
+ * and sampled `shots` times, with each measurement reading a bit straight out of
+ * the sampled index.
+ *
+ * Disqualifiers, all of which make later gates depend on an outcome:
+ *   - `reset`, which conditions on the collapsed value
+ *   - `if`, which feeds a classical bit back into the circuit
+ *   - any gate on an already-measured qubit, whose lost coherence now matters
+ *
+ * A control-only use of a measured qubit would in fact be safe — CNOT is
+ * diagonal in its control's basis and commutes with the dephasing — but that is
+ * not worth the subtlety, so any involvement disqualifies.
+ *
+ * Returns `[]` for a circuit with no measurements at all, which is the same
+ * simulate-once case.
+ */
+function terminalMeasurements(ops: readonly FlatOp[]): MeasureOp[] | null {
+  const measured = new Set<number>()
+  const found: MeasureOp[] = []
+
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'reset': case 'if':
+        return null
+      case 'measure':
+        measured.add(op.q)
+        found.push(op)
+        break
+      case 'barrier':
+        break   // annotation only — touches no state
+      default:
+        if (measured.size > 0 && opQubits(op).some(q => measured.has(q))) return null
+    }
+  }
+  return found
+}
 
 /** All qubit indices touched by an op (the full span is handled by the caller). */
 function opQubits(op: Op): number[] {
@@ -2556,7 +2600,6 @@ export class Circuit {
           case 'CSWAP':  c = c.cswap(q0!, q1!, q2!);           break
           default: throw new TypeError(`fromQuil: unknown gate '${gName}'`)
         }
-        continue
       }
     }
     return c
@@ -2743,7 +2786,6 @@ export class Circuit {
           case 'CSWAP': c = c.cswap(qs[0]!, qs[1]!, qs[2]!);  break
           default:      throw new TypeError(`fromCirq: unknown gate '${simple[1]}'`)
         }
-        continue
       }
     }
     return c
@@ -3059,7 +3101,6 @@ export class Circuit {
    */
   toQSharp(): string {
     const pi = 'PI()'
-    const a = (r: number) => fmtAngle(r, pi).replace(/(\d+)\*PI/, '$1.0*PI').replace(/PI\(?\)?\/(\d+)/, `PI()/${`$1`.padStart(1)}`)
     // Q# needs float literals for division: PI()/2.0 not PI()/2
     const qsharpAngle = (r: number): string => {
       if (Math.abs(r) < 1e-14) return '0.0'
@@ -3785,8 +3826,12 @@ export class Circuit {
       Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
 
-    // ── Fast path: pure circuit without noise — simulate once, sample N times ──
-    if (!noiseParams && !this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+    // ── Fast path: no noise, and every measurement (if any) is terminal ──
+    // Simulate once, sample N times. Covers both the pure circuit and the far
+    // more common "gates then measure everything" shape, which would otherwise
+    // pay a full re-simulation per shot.
+    const terminal = noiseParams ? null : terminalMeasurements(flattenOps(this.#ops))
+    if (terminal) {
       // Sampling only needs probabilities, so skip materialising the sparse map.
       const probs  = simProbabilities(simulatePureState(this.#ops, this.qubits, init))
       const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
@@ -3800,6 +3845,14 @@ export class Circuit {
       const last = cdf.at(-1)
       if (last) last.cumP = 1.0
 
+      // Pre-resolve each terminal measurement to (bit mask, target creg slot) so
+      // the per-shot loop is a shift and a test rather than a map lookup.
+      const readouts = terminal.map(m => ({
+        mask: 1n << BigInt(m.q),
+        acc:  cregCounts.get(m.creg),
+        bit:  m.bit,
+      })).filter((r): r is { mask: bigint; acc: number[]; bit: number } => r.acc !== undefined)
+
       const counts = new Map<bigint, number>()
       for (let i = 0; i < shots; i++) {
         const r  = rng()
@@ -3812,6 +3865,8 @@ export class Circuit {
         }
         const idx = cdf[lo]?.idx ?? 0n
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
+        // A terminal measurement just reads its qubit's bit out of the sample.
+        for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
       }
 
       return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
@@ -3860,7 +3915,12 @@ export class Circuit {
    * with random Pauli errors injected after each gate. Noise limits entanglement growth so bond
    * dimension stays tractable even at 100+ qubits. Simulates realistic NISQ hardware accurately.
    *
-   * @param maxBond Initial bond dimension χ (default 64). Grows automatically — set higher to reduce reallocation overhead for high-entanglement circuits.
+   * Options: `shots` measurement samples (default 1024); `seed` for reproducibility;
+   * `maxBond` the initial bond dimension χ (default 64) — not a cap, χ grows on demand,
+   * so raise it only to avoid reallocation on high-entanglement circuits; `truncErr` the
+   * relative singular-value cutoff (default 0, meaning exact); `initialState` a basis
+   * state to start from; `noise` a device name or explicit rates; and `workers` a
+   * trajectory worker count for the noisy path.
    */
   runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
     // Resolve noise: named device profile → NoiseParams, or use as-is
@@ -4642,10 +4702,10 @@ export class Circuit {
    *
    * Non-Clifford gates (T, Rx(θ≠kπ/2), etc.) cause a TypeError.
    *
-   * @param opts.shots  Number of measurement shots (default 1024).
-   * @param opts.seed   Optional PRNG seed for reproducibility.
-   * @param opts.noise  Device name (any key of `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or
-   *                    `{ p1?, p2?, pMeas? }` depolarizing + readout error rates.
+   * `shots` is the number of measurement shots (default 1024), `seed` an optional
+   * PRNG seed for reproducibility, and `noise` either a device name (any key of
+   * `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or `{ p1?, p2?, pMeas? }`
+   * depolarizing and readout error rates.
    */
   runClifford({ shots = 1024, seed, noise }: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
     // ── Validate: check all ops are Clifford (recursing into if bodies) ─────
