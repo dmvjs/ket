@@ -9,6 +9,11 @@
 
 import { add, Complex, conj, isNegligible, mul, ZERO } from './complex.js'
 import { Gate2x2, Gate4x4 } from './statevector.js'
+import {
+  ddAmplitudeDamping1, ddDepolarize1, ddDepolarize2, ddKraus1, ddKraus2, ddPerm,
+  ddPhaseDamping1, ddSingle, ddTwo, ddUnitaryN, denseDmGet, dmFromSparse,
+  MAX_DENSE_DM_QUBITS, type DenseDM,
+} from './density-dense.js'
 import { controlledGate } from './mps.js'
 
 // ─── Sparse DM type ────────────────────────────────────────────────────────
@@ -43,7 +48,7 @@ function dmAcc(dm: DM, shift: bigint, r: bigint, c: bigint, v: Complex): void {
  *   1. Left-multiply row part by U
  *   2. Right-multiply col part by U†
  */
-function applySingle(dm: DM, n: number, q: number, [[a, b], [c, d]]: Gate2x2): DM {
+function spSingle(dm: DM, n: number, q: number, [[a, b], [c, d]]: Gate2x2): DM {
   const next: DM = new Map()
   const shift    = BigInt(n)
   const dimMask  = (1n << shift) - 1n
@@ -78,7 +83,7 @@ function applySingle(dm: DM, n: number, q: number, [[a, b], [c, d]]: Gate2x2): D
 }
 
 /** ρ → G_{ab} ρ G_{ab}†  — 4×4 two-qubit gate on qubits a (MSB), b. */
-function applyTwo(dm: DM, n: number, a: number, b: number, gate: Gate4x4): DM {
+function spTwo(dm: DM, n: number, a: number, b: number, gate: Gate4x4): DM {
   const next: DM = new Map()
   const shift   = BigInt(n)
   const dimMask = (1n << shift) - 1n
@@ -119,7 +124,7 @@ function applyTwo(dm: DM, n: number, a: number, b: number, gate: Gate4x4): DM {
 }
 
 /** ρ → perm(ρ)  — pure-permutation unitary (CNOT, SWAP, Toffoli, CSwap). */
-function applyPerm(dm: DM, n: number, f: (i: bigint) => bigint): DM {
+function spPerm(dm: DM, n: number, f: (i: bigint) => bigint): DM {
   const shift = BigInt(n), dimMask = (1n << shift) - 1n
   const next: DM = new Map()
   for (const [k, v] of dm) {
@@ -130,7 +135,7 @@ function applyPerm(dm: DM, n: number, f: (i: bigint) => bigint): DM {
 }
 
 /** ρ → U ρ U†  — N-qubit unitary on qubits `qs` (qs[0] = MSB of local index). */
-function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonly (readonly Complex[])[]): DM {
+function spUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonly (readonly Complex[])[]): DM {
   const next: DM = new Map()
   const shift    = BigInt(n)
   const dimMask  = (1n << shift) - 1n
@@ -190,7 +195,7 @@ function applyUnitaryN(dm: DM, n: number, qs: readonly number[], matrix: readonl
  *   - same parity  (bit_q(r) == bit_q(c)):  (1−2p/3)·ρ[r][c] + (2p/3)·ρ[r^m][c^m]
  *   - cross parity (bit_q(r) != bit_q(c)):  (1−4p/3)·ρ[r][c]
  */
-function depolarize1(dm: DM, n: number, q: number, p: number): DM {
+function spDepolarize1(dm: DM, n: number, q: number, p: number): DM {
   if (p <= 0) return dm
   const next: DM = new Map()
   const shift    = BigInt(n)
@@ -236,7 +241,7 @@ const PAULI15: readonly [0|1, 0|1, 0|1, 0|1][] = [
  * For each entry ρ[r][c], each Pauli Pa⊗Pb maps it to a phase · ρ[r^perm][c^perm].
  * The phase is (−1) raised to the XOR of the z-components and the bit values.
  */
-function depolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
+function spDepolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
   if (p <= 0) return dm
   const next: DM = new Map()
   const shift   = BigInt(n)
@@ -270,7 +275,7 @@ function depolarize2(dm: DM, n: number, a: number, b: number, p: number): DM {
  *   r_q=1, c_q=1: (1−γ)·ρ[r][c]
  *   r_q≠c_q:       √(1−γ)·ρ[r][c]             (damp off-diagonal)
  */
-function amplitudeDamping1(dm: DM, n: number, q: number, gamma: number): DM {
+function spAmplitudeDamping1(dm: DM, n: number, q: number, gamma: number): DM {
   if (gamma <= 0) return dm
   const next: DM = new Map()
   const shift  = BigInt(n)
@@ -306,7 +311,7 @@ function amplitudeDamping1(dm: DM, n: number, q: number, gamma: number): DM {
  *
  * Effect: diagonal elements unchanged; off-diagonal elements (r_q ≠ c_q) scaled by √(1−λ).
  */
-function phaseDamping1(dm: DM, n: number, q: number, lambda: number): DM {
+function spPhaseDamping1(dm: DM, n: number, q: number, lambda: number): DM {
   if (lambda <= 0) return dm
   const sqL  = Math.sqrt(1 - lambda)
   const next: DM = new Map()
@@ -326,7 +331,7 @@ function phaseDamping1(dm: DM, n: number, q: number, lambda: number): DM {
 /**
  * Apply a single-qubit Kraus channel ε(ρ) = Σ_k K_k ρ K_k† on qubit q.
  */
-function applyKraus1DM(dm: DM, n: number, q: number, kraus: readonly Gate2x2[]): DM {
+function spKraus1(dm: DM, n: number, q: number, kraus: readonly Gate2x2[]): DM {
   const shift  = BigInt(n)
   const dimMsk = (1n << shift) - 1n
   const qMask  = 1n << BigInt(q)
@@ -374,7 +379,7 @@ function applyKraus1DM(dm: DM, n: number, q: number, kraus: readonly Gate2x2[]):
 /**
  * Apply a two-qubit Kraus channel ε(ρ) = Σ_k K_k ρ K_k† on qubits a and b.
  */
-function applyKraus2DM(dm: DM, n: number, a: number, b: number, kraus: readonly Gate4x4[]): DM {
+function spKraus2(dm: DM, n: number, a: number, b: number, kraus: readonly Gate4x4[]): DM {
   const shift  = BigInt(n)
   const dimMsk = (1n << shift) - 1n
   const ma = 1n << BigInt(a), mb = 1n << BigInt(b)
@@ -432,6 +437,102 @@ function applyKraus2DM(dm: DM, n: number, a: number, b: number, kraus: readonly 
   return next
 }
 
+// ─── Hybrid dispatch ────────────────────────────────────────────────────────
+//
+// ρ starts sparse and is promoted once it fills in. The sparse map is right for
+// a near-pure state under light noise; it collapses under a genuinely mixed one,
+// where at n=12 it needs 4¹² boxed entries and exhausts the heap. Dense costs a
+// flat 16·4ⁿ bytes — 256 MiB at n=12 — and every channel becomes a tight loop.
+
+/** ρ in whichever representation currently suits it. */
+type DmState =
+  | { readonly kind: 'sparse'; readonly dm: DM }
+  | { readonly kind: 'dense';  readonly d: DenseDM }
+
+/**
+ * Promote at 1/32 fill.
+ *
+ * Sparse costs roughly 100 bytes per entry against dense's flat 16·4ⁿ, and each
+ * sparse operation carries BigInt keys and boxed values through its inner loop.
+ * A thirty-second full is early enough to catch a densifying state well before
+ * the map becomes the larger of the two, and late enough to leave genuinely
+ * sparse states alone.
+ */
+const DM_PROMOTE_FILL = 32
+
+function dmSettle(dm: DM, n: number): DmState {
+  if (n <= MAX_DENSE_DM_QUBITS && dm.size * DM_PROMOTE_FILL > 4 ** n) {
+    return { kind: 'dense', d: dmFromSparse(dm, n) }
+  }
+  return { kind: 'sparse', dm }
+}
+
+const dmZeroState = (): DmState => ({ kind: 'sparse', dm: new Map([[0n, { re: 1, im: 0 }]]) })
+
+/**
+ * Force the dense representation regardless of fill.
+ * @internal — exported so tests can run the same circuit down both paths.
+ */
+export function dmPromote(s: DmState, n: number): DmState {
+  return s.kind === 'dense' ? s : { kind: 'dense', d: dmFromSparse(s.dm, n) }
+}
+
+// Dense states mutate in place and return the same object; sparse ones rebuild
+// and re-test for promotion.
+
+function applySingle(s: DmState, n: number, q: number, g: Gate2x2): DmState {
+  if (s.kind === 'dense') { ddSingle(s.d, q, g); return s }
+  return dmSettle(spSingle(s.dm, n, q, g), n)
+}
+
+function applyTwo(s: DmState, n: number, a: number, b: number, g: Gate4x4): DmState {
+  if (s.kind === 'dense') { ddTwo(s.d, a, b, g); return s }
+  return dmSettle(spTwo(s.dm, n, a, b, g), n)
+}
+
+function applyPerm(s: DmState, n: number, f: (i: bigint) => bigint): DmState {
+  // A permutation cannot change the number of non-zero entries, so no promotion
+  // test is needed. The dense path converts the index map once per call, not per
+  // entry — ddPerm evaluates f exactly `dim` times.
+  if (s.kind === 'dense') { ddPerm(s.d, i => Number(f(BigInt(i)))); return s }
+  return { kind: 'sparse', dm: spPerm(s.dm, n, f) }
+}
+
+function applyUnitaryN(s: DmState, n: number, qs: readonly number[], m: readonly (readonly Complex[])[]): DmState {
+  if (s.kind === 'dense') { ddUnitaryN(s.d, qs, m); return s }
+  return dmSettle(spUnitaryN(s.dm, n, qs, m), n)
+}
+
+function depolarize1(s: DmState, n: number, q: number, p: number): DmState {
+  if (s.kind === 'dense') { ddDepolarize1(s.d, q, p); return s }
+  return dmSettle(spDepolarize1(s.dm, n, q, p), n)
+}
+
+function depolarize2(s: DmState, n: number, a: number, b: number, p: number): DmState {
+  if (s.kind === 'dense') { ddDepolarize2(s.d, a, b, p, PAULI15); return s }
+  return dmSettle(spDepolarize2(s.dm, n, a, b, p), n)
+}
+
+function amplitudeDamping1(s: DmState, n: number, q: number, gamma: number): DmState {
+  if (s.kind === 'dense') { ddAmplitudeDamping1(s.d, q, gamma); return s }
+  return dmSettle(spAmplitudeDamping1(s.dm, n, q, gamma), n)
+}
+
+function phaseDamping1(s: DmState, n: number, q: number, lambda: number): DmState {
+  if (s.kind === 'dense') { ddPhaseDamping1(s.d, q, lambda); return s }
+  return dmSettle(spPhaseDamping1(s.dm, n, q, lambda), n)
+}
+
+function applyKraus1DM(s: DmState, n: number, q: number, kraus: readonly Gate2x2[]): DmState {
+  if (s.kind === 'dense') { ddKraus1(s.d, q, kraus); return s }
+  return dmSettle(spKraus1(s.dm, n, q, kraus), n)
+}
+
+function applyKraus2DM(s: DmState, n: number, a: number, b: number, kraus: readonly Gate4x4[]): DmState {
+  if (s.kind === 'dense') { ddKraus2(s.d, a, b, kraus); return s }
+  return dmSettle(spKraus2(s.dm, n, a, b, kraus), n)
+}
+
 // ─── DensityMatrix class ────────────────────────────────────────────────────
 
 /**
@@ -444,21 +545,43 @@ function applyKraus2DM(dm: DM, n: number, a: number, b: number, kraus: readonly 
  */
 export class DensityMatrix {
   readonly qubits: number
-  readonly #dm: DM
+  readonly #state: DmState
   readonly #shift: bigint
   readonly #dimMask: bigint
 
   /** @internal */
-  constructor(qubits: number, dm: DM) {
+  constructor(qubits: number, state: DmState) {
     this.qubits   = qubits
-    this.#dm      = dm
+    this.#state   = state
     this.#shift   = BigInt(qubits)
     this.#dimMask = (1n << this.#shift) - 1n
   }
 
+  /**
+   * Iterate the non-zero entries as (row, col, value), whichever representation
+   * is live. Lets the accessors below share one traversal instead of each
+   * branching on the representation.
+   */
+  * #entries(): Generator<[bigint, bigint, Complex]> {
+    if (this.#state.kind === 'sparse') {
+      for (const [k, v] of this.#state.dm) yield [k >> this.#shift, k & this.#dimMask, v]
+      return
+    }
+    const { dim, data } = this.#state.d
+    for (let r = 0; r < dim; r++) {
+      for (let c = 0; c < dim; c++) {
+        const p = ((r * dim + c) << 1)
+        const re = data[p]!, im = data[p + 1]!
+        if (re * re + im * im >= 1e-14) yield [BigInt(r), BigInt(c), { re, im }]
+      }
+    }
+  }
+
   /** ρ[row][col]. */
   get(row: bigint, col: bigint): Complex {
-    return dmGet(this.#dm, this.#shift, row, col)
+    return this.#state.kind === 'sparse'
+      ? dmGet(this.#state.dm, this.#shift, row, col)
+      : denseDmGet(this.#state.d, Number(row), Number(col))
   }
 
   /**
@@ -469,8 +592,7 @@ export class DensityMatrix {
    */
   probabilities(): Readonly<Record<string, number>> {
     const out: Record<string, number> = {}
-    for (const [k, v] of this.#dm) {
-      const r = k >> this.#shift, c = k & this.#dimMask
+    for (const [r, c, v] of this.#entries()) {
       if (r === c && v.re > 1e-14) out[r.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = v.re
     }
     return Object.freeze(out)
@@ -484,7 +606,7 @@ export class DensityMatrix {
    */
   purity(): number {
     let p = 0
-    for (const v of this.#dm.values()) p += v.re * v.re + v.im * v.im
+    for (const [, , v] of this.#entries()) p += v.re * v.re + v.im * v.im
     return p
   }
 
@@ -503,8 +625,8 @@ export class DensityMatrix {
     // Build dense Hermitian matrix
     const re = new Float64Array(dim * dim)
     const im = new Float64Array(dim * dim)
-    for (const [k, v] of this.#dm) {
-      const r = Number(k >> this.#shift), c = Number(k & this.#dimMask)
+    for (const [rb, cb, v] of this.#entries()) {
+      const r = Number(rb), c = Number(cb)
       re[r * dim + c] = v.re
       im[r * dim + c] = v.im
     }
@@ -528,8 +650,7 @@ export class DensityMatrix {
     const qMask = 1n << BigInt(q)
     let rho00 = 0, rho11 = 0, rho01re = 0, rho01im = 0
 
-    for (const [k, v] of this.#dm) {
-      const r = k >> this.#shift, c = k & this.#dimMask
+    for (const [r, c, v] of this.#entries()) {
       if (r === c) {
         if ((r & qMask) === 0n) rho00 += v.re   // Tr_{others}(Π₀ ρ)
         else                    rho11 += v.re   // Tr_{others}(Π₁ ρ)
@@ -571,29 +692,33 @@ function jacobiEigenvalues(re: Float64Array, im: Float64Array, n: number): numbe
         const off2 = oRe * oRe + oIm * oIm
         if (off2 < 1e-28) continue
 
-        // Phase-rotate the (p,q) entry to be real positive, then apply real Jacobi
+        // Annihilate the (p,q) entry with a complex Givens rotation
+        //   G = [[cg, w], [-conj(w), cg]],  w = sg·e^{iφ},  φ = arg(ρ[p,q])
+        // applied as A ← G A G†. G is unitary because its lower-left entry is
+        // −conj(w), not −w; getting that wrong leaves G non-unitary, which is
+        // invisible for a single rotation but compounds badly over a sweep.
         const phi = Math.atan2(oIm, oRe)  // angle of R[p,q]
         const mag = Math.sqrt(off2)
 
-        // Givens angle
-        const tau = (R[q * n + q]! - R[p * n + p]!) / 2
+        // A'[p][q] ∝ cg·sg·(b − a) + (cg² − sg²)·mag, so annihilation needs
+        // (cg² − sg²)/(cg·sg) = (a − b)/mag with a = A[p][p], b = A[q][q].
+        // Taking tau = (a − b)/2 and the smaller root keeps |t| ≤ 1.
+        const tau = (R[p * n + p]! - R[q * n + q]!) / 2
         const t   = mag / (Math.abs(tau) + Math.sqrt(tau * tau + mag * mag)) * (tau < 0 ? -1 : 1)
         const cg  = 1 / Math.sqrt(1 + t * t)
         const sg  = t * cg
 
-        // The rotation mixes rows/cols p and q with a complex Givens rotation
-        // U = diag(..., cg, ..., sg*e^{iφ}, ..., -sg*e^{-iφ}, ..., cg, ...)
-        const sre = sg * Math.cos(phi), sim = sg * Math.sin(phi)
+        const sre = sg * Math.cos(phi), sim = sg * Math.sin(phi)   // w = sre + i·sim
 
         for (let k = 0; k < n; k++) {
           const xRe = R[p * n + k]!, xIm = Im[p * n + k]!
           const yRe = R[q * n + k]!, yIm = Im[q * n + k]!
-          // Row p: cg·x + (sre+i·sim)·y
+          // Row p: cg·x + w·y
           R[p * n + k]  =  cg * xRe + sre * yRe - sim * yIm
           Im[p * n + k] =  cg * xIm + sre * yIm + sim * yRe
-          // Row q: -conj(sre+i·sim)·x + cg·y = (-sre+i·sim)·x + cg·y
-          R[q * n + k]  = -sre * xRe + sim * xIm + cg * yRe
-          Im[q * n + k] = -sre * xIm - sim * xRe + cg * yIm
+          // Row q: −conj(w)·x + cg·y = (−sre + i·sim)·x + cg·y
+          R[q * n + k]  = -sre * xRe - sim * xIm + cg * yRe
+          Im[q * n + k] = -sre * xIm + sim * xRe + cg * yIm
         }
         for (let k = 0; k < n; k++) {
           const xRe = R[k * n + p]!, xIm = Im[k * n + p]!
@@ -674,7 +799,7 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
   const lambda = noise?.lambda ?? 0
   const kraus1 = noise?.kraus1
   const kraus2 = noise?.kraus2
-  let dm: DM = new Map([[0n, { re: 1, im: 0 }]])
+  let dm: DmState = dmZeroState()
   const n = qubits
 
   const sq2 = 1 / Math.sqrt(2)
@@ -745,50 +870,17 @@ export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParam
         break
       }
       case 'csrswap': {
-        // C-√iSWAP = |0⟩⟨0|_ctrl ⊗ I + |1⟩⟨1|_ctrl ⊗ √iSWAP
-        // Apply √iSWAP only on the (a,b) sub-block where ctrl=1 in BOTH row and col.
-        // Cross-coherence terms (ctrl=0 in row, ctrl=1 in col or vice versa) require
-        // left-multiply-only or right-multiply-only operations — handled via block split.
-        const cm     = 1n << BigInt(op.control)
-        const shift  = BigInt(n)
-        const dimMsk = (1n << shift) - 1n
-
-        // Split DM into 4 blocks by control bit: (cr, cc) ∈ {00, 01, 10, 11}
-        const blocks: [DM, DM, DM, DM] = [new Map(), new Map(), new Map(), new Map()]
-        for (const [k, v] of dm) {
-          const r = k >> shift, c = k & dimMsk
-          const idx = ((r & cm) !== 0n ? 2 : 0) | ((c & cm) !== 0n ? 1 : 0)
-          blocks[idx as 0|1|2|3]!.set(k, v)
-        }
-
-        // Block (1,1): apply full √iSWAP on (a,b) — both row and col ctrl=1
-        let dm11 = applyTwo(blocks[3]!, n, op.a, op.b, SRISW)
-
-        // Block (0,1): right-multiply col (a,b) by √iSWAP†
-        //   new[r][c] = Σ_l ρ[r][l] · (√iSWAP†)[l_ab][c_ab]
-        //   = left-multiply cols by √iSWAP† = (√iSWAP)†
-        // Implemented as applyTwo on the transposed block (swap row/col, apply √iSWAP, swap back)
-        const dm01t: DM = new Map()
-        for (const [k, v] of blocks[1]!) {
-          const r = k >> shift, c = k & dimMsk
-          dm01t.set((c << shift) | r, v)  // transpose
-        }
-        let dm01tApplied = applyTwo(dm01t, n, op.a, op.b, SRISW)
-        const dm01: DM = new Map()
-        for (const [k, v] of dm01tApplied) {
-          const r = k >> shift, c = k & dimMsk
-          dm01.set((c << shift) | r, v)  // transpose back
-        }
-
-        // Block (1,0): left-multiply row (a,b) by √iSWAP
-        let dm10 = applyTwo(blocks[2]!, n, op.a, op.b, SRISW)
-
-        // Block (0,0): unchanged
-        const dmNext: DM = new Map(blocks[0]!)
-        for (const [k, v] of dm01)  dmAcc(dmNext, shift, k >> shift, k & dimMsk, v)
-        for (const [k, v] of dm10)  dmAcc(dmNext, shift, k >> shift, k & dimMsk, v)
-        for (const [k, v] of dm11)  dmAcc(dmNext, shift, k >> shift, k & dimMsk, v)
-        dm = dmNext
+        // Controlled-√iSWAP as a single 3-qubit unitary: block-diag(I₄, √iSWAP)
+        // with the control as the MSB of the local index. Expressing it this way
+        // rather than splitting ρ into control-parity blocks keeps it on the
+        // shared conjugation path, so it works on either representation.
+        const C_SRISW: Complex[][] = Array.from({ length: 8 }, (_, i) =>
+          Array.from({ length: 8 }, (_, j) => {
+            if (i < 4 || j < 4) return i === j ? { re: 1, im: 0 } : { re: 0, im: 0 }
+            return SRISW[i - 4]![j - 4]!
+          })
+        )
+        dm = applyUnitaryN(dm, n, [op.control, op.a, op.b], C_SRISW)
         break
       }
       case 'unitary':

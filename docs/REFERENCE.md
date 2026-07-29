@@ -43,7 +43,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle ships in two flavours — `ket.js` (300kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (136kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
+The ESM bundle ships in two flavours — `ket.js` (311kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (142kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 

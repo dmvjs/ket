@@ -111,7 +111,7 @@ Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at i
 dense statevector kernels are differentially tested against each other gate by gate,
 over every qubit ordering, so promotion can never change a result.
 
-**Zero dependencies.** 136 KB minified, total. Nothing to audit but ket.
+**Zero dependencies.** 142 KB minified, total. Nothing to audit but ket.
 
 ## Measured against `quantum-circuit`
 
@@ -125,7 +125,7 @@ Statevector construction, median of 3, Node 22 / Apple silicon
 | QFT-16 | 11.5ms | 126.7ms | **11×** |
 | random-16, depth 4 | 16.5ms | 5,250ms | **318×** |
 
-Install footprint: **136 KB vs 36 MB** — `quantum-circuit` pulls in mathjs and antlr4.
+Install footprint: **142 KB vs 36 MB** — `quantum-circuit` pulls in mathjs and antlr4.
 
 Those two rows come from opposite representations, which is the whole design. A GHZ
 state holds two amplitudes at any width, so ket keeps it in a sparse map and never
