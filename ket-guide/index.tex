@@ -1,0 +1,2868 @@
+% Options for packages loaded elsewhere
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[
+  11pt,
+  letterpaper,
+  oneside]{scrbook}
+\usepackage{xcolor}
+\usepackage[top=1in,bottom=1in,left=1.25in,right=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{5}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\usepackage{setspace}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+% Make \paragraph and \subparagraph free-standing
+\makeatletter
+\ifx\paragraph\undefined\else
+  \let\oldparagraph\paragraph
+  \renewcommand{\paragraph}{
+    \@ifstar
+      \xxxParagraphStar
+      \xxxParagraphNoStar
+  }
+  \newcommand{\xxxParagraphStar}[1]{\oldparagraph*{#1}\mbox{}}
+  \newcommand{\xxxParagraphNoStar}[1]{\oldparagraph{#1}\mbox{}}
+\fi
+\ifx\subparagraph\undefined\else
+  \let\oldsubparagraph\subparagraph
+  \renewcommand{\subparagraph}{
+    \@ifstar
+      \xxxSubParagraphStar
+      \xxxSubParagraphNoStar
+  }
+  \newcommand{\xxxSubParagraphStar}[1]{\oldsubparagraph*{#1}\mbox{}}
+  \newcommand{\xxxSubParagraphNoStar}[1]{\oldsubparagraph{#1}\mbox{}}
+\fi
+\makeatother
+
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{241,243,245}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{#1}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.40,0.45,0.13}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\BuiltInTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{#1}}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.13,0.47,0.30}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{#1}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{\textit{#1}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{\textit{#1}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\ExtensionTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{#1}}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.28,0.35,0.67}{#1}}
+\newcommand{\ImportTok}[1]{\textcolor[rgb]{0.00,0.46,0.62}{#1}}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{#1}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{#1}}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{#1}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.68,0.00,0.00}{#1}}
+\newcommand{\RegionMarkerTok}[1]{\textcolor[rgb]{0.00,0.23,0.31}{#1}}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{#1}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.13,0.47,0.30}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.13,0.47,0.30}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.07,0.07,0.07}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.13,0.47,0.30}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.37,0.37,0.37}{\textit{#1}}}
+
+\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+
+
+
+
+
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+
+
+ 
+
+
+\usepackage{braket}
+\usepackage{physics}
+\usepackage{xcolor}
+\definecolor{ketblue}{HTML}{1a6eb5}
+\makeatletter
+\@ifpackageloaded{bookmark}{}{\usepackage{bookmark}}
+\makeatother
+\makeatletter
+\@ifpackageloaded{caption}{}{\usepackage{caption}}
+\AtBeginDocument{%
+\ifdefined\contentsname
+  \renewcommand*\contentsname{Table of contents}
+\else
+  \newcommand\contentsname{Table of contents}
+\fi
+\ifdefined\listfigurename
+  \renewcommand*\listfigurename{List of Figures}
+\else
+  \newcommand\listfigurename{List of Figures}
+\fi
+\ifdefined\listtablename
+  \renewcommand*\listtablename{List of Tables}
+\else
+  \newcommand\listtablename{List of Tables}
+\fi
+\ifdefined\figurename
+  \renewcommand*\figurename{Figure}
+\else
+  \newcommand\figurename{Figure}
+\fi
+\ifdefined\tablename
+  \renewcommand*\tablename{Table}
+\else
+  \newcommand\tablename{Table}
+\fi
+}
+\@ifpackageloaded{float}{}{\usepackage{float}}
+\floatstyle{ruled}
+\@ifundefined{c@chapter}{\newfloat{codelisting}{h}{lop}}{\newfloat{codelisting}{h}{lop}[chapter]}
+\floatname{codelisting}{Listing}
+\newcommand*\listoflistings{\listof{codelisting}{List of Listings}}
+\makeatother
+\makeatletter
+\makeatother
+\makeatletter
+\@ifpackageloaded{caption}{}{\usepackage{caption}}
+\@ifpackageloaded{subcaption}{}{\usepackage{subcaption}}
+\makeatother
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={Quantum Computing with ket},
+  pdfauthor={Elliott Kirk},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+
+\title{Quantum Computing with ket}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
+}
+\makeatother
+\subtitle{From classical bits to Shor's algorithm}
+\author{Elliott Kirk}
+\date{2026-03-13}
+\begin{document}
+\frontmatter
+\maketitle
+
+\renewcommand*\contentsname{Table of contents}
+{
+\setcounter{tocdepth}{2}
+\tableofcontents
+}
+
+\setstretch{1.25}
+\mainmatter
+\bookmarksetup{startatroot}
+
+\chapter*{Preface}\label{preface}
+\addcontentsline{toc}{chapter}{Preface}
+
+\markboth{Preface}{Preface}
+
+This book teaches quantum computing by doing it.
+
+Every concept is introduced alongside runnable code using
+\href{https://github.com/dmvjs/ket}{\texttt{ket}} --- a TypeScript
+quantum circuit simulator. You don't need a physics degree. You need
+curiosity and a willingness to play with the examples.
+
+\section*{How to read this book}\label{how-to-read-this-book}
+\addcontentsline{toc}{section}{How to read this book}
+
+\markright{How to read this book}
+
+The book is structured in three parts:
+
+\textbf{The Foundations} (Chapters 1--4) covers the vocabulary of
+quantum computing: qubits, gates, superposition, and entanglement. These
+chapters assume no physics background --- only familiarity with the idea
+of a computer program.
+
+\textbf{Algorithms} (Chapters 5--8) shows why quantum computers are
+interesting: they can solve certain problems faster than any classical
+computer. We'll build up to Shor's algorithm, which can factor large
+numbers and is the reason quantum computers make cryptographers nervous.
+
+\textbf{Reality} (Chapters 9--10) grounds everything in how quantum
+hardware actually behaves. Real qubits are noisy. We'll see what that
+means and how to work with it.
+
+\section*{The interactive examples}\label{the-interactive-examples}
+\addcontentsline{toc}{section}{The interactive examples}
+
+\markright{The interactive examples}
+
+In the HTML version of this book, code blocks run live in your browser.
+Every visualization is produced by \texttt{ket} --- no screenshots, no
+mock data. You can modify the code and re-run it.
+
+In the PDF version, code is shown with its pre-rendered output.
+
+\section*{A note on math}\label{a-note-on-math}
+\addcontentsline{toc}{section}{A note on math}
+
+\markright{A note on math}
+
+Quantum computing has precise mathematical foundations. This book uses
+that math when it clarifies rather than obscures. Key equations are
+introduced slowly, with plain-English translations. If you've seen a
+matrix before, you have enough math to read this book.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\emph{``If you think you understand quantum mechanics, you don't
+understand quantum mechanics.''} --- Richard Feynman
+
+(Feynman also said quantum computers might be the only way to simulate
+nature efficiently. That idea still drives the field.)
+
+\part{The Foundations}
+
+\chapter{From Bits to Qubits}\label{sec-bits}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+A classical bit is a light switch --- off (0) or on (1). Every computer
+you've ever used is built from billions of these, flipping furiously.
+
+A qubit is stranger. Flip one and measure it: you get 0 or 1 with equal
+probability. Every time, random. But apply the same flip \emph{twice}
+and you always get back exactly where you started. No classical random
+process can do that.
+
+That's interference. It's what makes quantum computing interesting.
+
+\section{Superposition}\label{superposition}
+
+The \textbf{Hadamard gate} (\texttt{h}) takes a definite \(|0\rangle\)
+and puts it into equal superposition:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_h = new ket.Circuit(1).h(0)}
+\NormalTok{svg(c\_h.simulate(\{ shots: 10000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+50/50 --- each run varies slightly due to sampling, but the true
+probability is exactly \(\frac{1}{2}\). Now apply it twice:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_hh = new ket.Circuit(1).h(0).h(0)}
+\NormalTok{svg(c\_hh.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Always \texttt{\textbar{}0⟩}. The randomness cancels perfectly. This is
+\textbf{interference} --- the defining feature that separates a qubit
+from a coin flip.
+
+\section{The math (briefly)}\label{the-math-briefly}
+
+A qubit's state is written as:
+
+\[|\psi\rangle = \alpha|0\rangle + \beta|1\rangle\]
+
+\(\alpha\) and \(\beta\) are complex numbers called \textbf{amplitudes}.
+The probability of measuring 0 is \(|\alpha|^2\), and of measuring 1 is
+\(|\beta|^2\). They always sum to 1.
+
+After \texttt{h(0)}, both amplitudes are \(\frac{1}{\sqrt{2}}\), so both
+probabilities are \(\frac{1}{2}\).
+
+You can read the amplitudes directly with \texttt{stateAsArray()}:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{new ket.Circuit(1).h(0).stateAsArray()}
+\end{Highlighting}
+\end{Shaded}
+
+Both amplitudes are exactly \(1/\sqrt{2} \approx 0.707\), with phase 0.
+The \texttt{prob} column is \(|0.707|^2 = 0.5\). After a Z gate the
+probabilities don't change --- but the phase does:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{new ket.Circuit(1).h(0).z(0).stateAsArray()}
+\end{Highlighting}
+\end{Shaded}
+
+Same probabilities, but the \(|1\rangle\) amplitude is now \(-0.707\)
+(phase = \(\pi\)). Measurement can't see this --- but the next gate can.
+Phase is invisible to the observer, but real to the computation.
+
+The notation \(|\cdot\rangle\) (a \textbf{ket}) is standard physics
+shorthand for a quantum state. This library is named after it.
+
+\section{Measurement collapses the
+state}\label{measurement-collapses-the-state}
+
+Before you measure, the qubit is genuinely in superposition --- not
+secretly one or the other. The moment you measure, it collapses to a
+definite 0 or 1 and the amplitude information is gone.
+
+This is why H·H works: both gates interact with the amplitudes
+\emph{before} any measurement. Once you measure, the phase is lost.
+
+To see it: a measurement between the two H gates collapses the qubit to
+either \(|0\rangle\) or \(|1\rangle\). Then the second H acts on a
+classical state --- and both \texttt{H\textbar{}0⟩} and
+\texttt{H\textbar{}1⟩} give 50/50, not the original certainty:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).h(0).simulate(\{ shots: 10000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).x(0).h(0).simulate(\{ shots: 10000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Both are 50/50 --- the bars may differ by a percent or two from shot
+noise, but the underlying probability is exactly \(\frac{1}{2}\) in both
+cases. The second H has no memory of the first. Contrast with H·H, which
+always returns \texttt{\textbar{}0⟩}.
+
+\section{Bits vs.~qubits}\label{bits-vs.-qubits}
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule\noalign{}
+& Classical bit & Qubit \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+State & Always 0 or 1 & Superposition until measured \\
+Measurement effect & None & Collapses the state \\
+Interference & No & Yes \\
+\end{longtable}
+
+A qubit doesn't store more information than a classical bit --- a
+measurement still yields one bit. The advantage is what you can do with
+amplitudes \emph{before} measurement: steer interference toward right
+answers and away from wrong ones.
+
+That's the rest of this book.
+
+\section{What's next}\label{whats-next}
+
+Chapter 2 introduces the \textbf{Bloch sphere} --- a geometric picture
+of every possible single-qubit state --- and the full set of
+single-qubit gates.
+
+\chapter{Single-Qubit Gates}\label{sec-single-qubit}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+A qubit's state is a point on a sphere.
+
+Every single-qubit gate is a rotation of that sphere. This isn't an
+analogy --- it's the geometry. Understanding it makes every gate
+intuitive.
+
+\section{The Bloch sphere}\label{the-bloch-sphere}
+
+The state \(|\psi\rangle = \alpha|0\rangle + \beta|1\rangle\) has two
+real degrees of freedom (after accounting for normalisation and global
+phase). Two angles --- \(\theta\) and \(\phi\) --- are enough to pin
+down any single-qubit state:
+
+\[|\psi\rangle = \cos\frac{\theta}{2}|0\rangle + e^{i\phi}\sin\frac{\theta}{2}|1\rangle\]
+
+\(\theta\) runs from 0 (north pole, \(|0\rangle\)) to \(\pi\) (south
+pole, \(|1\rangle\)). \(\phi\) is the angle around the equator. Together
+they define a point on a unit sphere --- the \textbf{Bloch sphere}.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).x(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).h(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+From left to right: \(|0\rangle\) (north pole), \(|1\rangle\) (south
+pole), \(H|0\rangle = |{+}\rangle\) (equator). The equator is equal
+superposition. Every point in between is a valid qubit state.
+
+\section{The Pauli gates --- axis
+flips}\label{the-pauli-gates-axis-flips}
+
+The three \textbf{Pauli gates} are 180° rotations around the three axes.
+
+\textbf{X} rotates 180° around the X axis --- the quantum NOT gate,
+swapping \(|0\rangle \leftrightarrow |1\rangle\):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).x(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).x(0).simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Z} rotates 180° around the Z axis. It leaves \(|0\rangle\)
+unchanged but flips the sign of \(|1\rangle\):
+\(Z|1\rangle = -|1\rangle\). This is a \textbf{phase flip} --- invisible
+to single-qubit measurement, but it changes how the state interferes in
+a larger circuit.
+
+\textbf{Y} is X followed by Z (up to a global phase). Less common in
+introductory circuits, but completes the Pauli set.
+
+\section{H revisited --- a diagonal
+rotation}\label{h-revisited-a-diagonal-rotation}
+
+H is a 180° rotation around the axis halfway between X and Z. That's why
+it maps poles to equator and back:
+
+\begin{itemize}
+\tightlist
+\item
+  \(H|0\rangle = |{+}\rangle\) → equator
+\item
+  \(H|{+}\rangle = |0\rangle\) → back to north pole
+\item
+  \(HH = I\) --- two 180° rotations around the same axis cancel
+\end{itemize}
+
+The last point explains Chapter 1's interference result. H is its own
+inverse.
+
+\section{Phase gates --- spinning around
+Z}\label{phase-gates-spinning-around-z}
+
+\textbf{S} and \textbf{T} are partial rotations around the Z axis: 90°
+and 45° respectively. They don't change measurement probabilities ---
+the state stays on the equator --- but they shift the phase \(\phi\),
+which changes how the qubit interferes with others.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).h(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).h(0).t(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).h(0).s(0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+Left to right: \texttt{H\textbar{}0⟩}, \texttt{T·H\textbar{}0⟩} (+45°),
+\texttt{S·H\textbar{}0⟩} (+90°). Same latitude --- same measurement
+probabilities --- different phase.
+
+\section{Rotation gates --- arbitrary
+angles}\label{rotation-gates-arbitrary-angles}
+
+\texttt{rx}, \texttt{ry}, \texttt{rz} rotate by any angle around each
+axis. The argument order is \texttt{(angle,\ qubit)}.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).rx(Math.PI / 4, 0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).rx(Math.PI / 2, 0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(1).rx(Math.PI, 0).blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{rx(π)} is exactly X. \texttt{rx(π/2)} is halfway --- a common
+building block on real hardware, where every gate is ultimately
+expressed as a combination of \texttt{rz} and \texttt{ry} rotations.
+
+\section{Gate summary}\label{gate-summary}
+
+\begin{longtable}[]{@{}llll@{}}
+\toprule\noalign{}
+Gate & Rotation & Effect on \(|0\rangle\) & Effect on \(|1\rangle\) \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+X & 180° around X & → \(|1\rangle\) & → \(|0\rangle\) \\
+Y & 180° around Y & → \(i|1\rangle\) & → \(-i|0\rangle\) \\
+Z & 180° around Z & unchanged & → \(-|1\rangle\) \\
+H & 180° around X+Z & → \(|{+}\rangle\) & → \(|{-}\rangle\) \\
+S & 90° around Z & unchanged & → \(i|1\rangle\) \\
+T & 45° around Z & unchanged & → \(e^{i\pi/4}|1\rangle\) \\
+\end{longtable}
+
+\section{What's next}\label{whats-next-1}
+
+Chapter 3 adds a second qubit and introduces \textbf{entanglement} ---
+the phenomenon that makes quantum computing qualitatively more powerful
+than anything classical.
+
+\chapter{Multiple Qubits}\label{sec-multi-qubit}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+One qubit has two basis states: \(|0\rangle\) and \(|1\rangle\).
+
+Two qubits have four: \(|00\rangle\), \(|01\rangle\), \(|10\rangle\),
+\(|11\rangle\).
+
+\(n\) qubits have \(2^n\) basis states --- and a quantum state is a
+superposition over \emph{all of them simultaneously}. This exponential
+state space is where quantum computing gets its leverage.
+
+\section{Two-qubit states}\label{two-qubit-states}
+
+A two-qubit state is written:
+
+\[|\psi\rangle = \alpha_{00}|00\rangle + \alpha_{01}|01\rangle + \alpha_{10}|10\rangle + \alpha_{11}|11\rangle\]
+
+Four amplitudes, each complex, summing to 1 in squared magnitude.
+Putting both qubits in equal superposition with H gives all four
+outcomes equally likely:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_2h = new ket.Circuit(2).h(0).h(1)}
+\NormalTok{svg(c\_2h.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(c\_2h.draw())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(c\_2h.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Each of the four basis states gets amplitude \(\frac{1}{2}\),
+probability \(\frac{1}{4}\). The histogram shows them equally
+distributed. With 3 qubits it would be 8 outcomes. With 10, 1024.
+
+\section{Individual qubits are still independent
+here}\label{individual-qubits-are-still-independent-here}
+
+When there's no two-qubit gate connecting them, each qubit evolves on
+its own. We can see this on the Bloch sphere --- each qubit lives at its
+own point, independently:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_ind = new ket.Circuit(2).h(0).x(1)}
+\NormalTok{svg(c\_ind.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Qubit 0 is at the equator (superposition). Qubit 1 is at the south pole
+(\(|1\rangle\)).
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(c\_ind.blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(c\_ind.blochSphere(1))}
+\end{Highlighting}
+\end{Shaded}
+
+Two different poles. The state is a product state --- it factors as
+\(|{+}\rangle \otimes |1\rangle\). The qubits are completely
+independent.
+
+\section{The CNOT gate}\label{the-cnot-gate}
+
+Single-qubit gates act on one qubit at a time. To create correlations
+between qubits, you need a two-qubit gate.
+
+The \textbf{CNOT} (controlled-NOT) is the workhorse:
+
+\begin{itemize}
+\tightlist
+\item
+  If the control is \(|0\rangle\), do nothing to the target
+\item
+  If the control is \(|1\rangle\), flip the target
+\end{itemize}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(new ket.Circuit(2).cx(0, 1).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(new ket.Circuit(2).cx(0, 1).draw())}
+\end{Highlighting}
+\end{Shaded}
+
+The filled dot is the control; the ⊕ is the target. On classical inputs
+it's just XOR. We can verify each row of the truth table by preparing
+each input state and measuring:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{cnot\_00 = new ket.Circuit(2).cx(0, 1)}
+\NormalTok{svg(cnot\_00.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{cnot\_10 = new ket.Circuit(2).x(0).cx(0, 1)}
+\NormalTok{svg(cnot\_10.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{cnot\_01 = new ket.Circuit(2).x(1).cx(0, 1)}
+\NormalTok{svg(cnot\_01.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{cnot\_11 = new ket.Circuit(2).x(0).x(1).cx(0, 1)}
+\NormalTok{svg(cnot\_11.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Each histogram has a single bar --- the classical inputs map
+deterministically to classical outputs. On superpositions, the CNOT does
+something more interesting, which is the subject of Chapter 4.
+
+\section{Building up circuits}\label{building-up-circuits}
+
+Gates chain left to right. Each is a matrix acting on the joint state
+vector. Here is a three-qubit circuit that puts each qubit through a
+different single-qubit gate:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_3 = new ket.Circuit(3).h(0).x(1).rx(Math.PI / 3, 2)}
+\NormalTok{svg(c\_3.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(c\_3.draw())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(c\_3.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Qubit 0 is in superposition (H), qubit 1 is always \(|1\rangle\) (X),
+qubit 2 has a partial rotation. The joint measurement reflects all
+three: the second bit is always 1, the other two vary.
+
+\section{Product states have zero
+entanglement}\label{product-states-have-zero-entanglement}
+
+When there are no two-qubit gates, the state is a product state and has
+no entanglement across any bond. \texttt{bondEntropies()} gives the log₂
+entanglement entropy across each consecutive pair of qubits:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_product = new ket.Circuit(4).h(0).x(1).h(2).rx(Math.PI/4, 3)}
+\NormalTok{svg(c\_product.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_product.bondEntropies()}
+\end{Highlighting}
+\end{Shaded}
+
+All zeros. No gate has connected any qubit to any other. Each qubit is
+an island. Chapter 4 shows what happens when CNOT introduces
+correlations --- and how the entropy changes.
+
+\section{Circuit depth and width}\label{circuit-depth-and-width}
+
+Two dimensions describe the cost of a quantum circuit:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Width} --- number of qubits (space)
+\item
+  \textbf{Depth} --- longest path from input to output (time; determines
+  exposure to noise)
+\end{itemize}
+
+Gates on separate qubits can run in parallel, reducing depth:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// depth 1: all three H gates run simultaneously}
+\NormalTok{c\_parallel = new ket.Circuit(3).h(0).h(1).h(2)}
+\NormalTok{svg(c\_parallel.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// depth 3: same H gates but forced to run on one qubit serially}
+\NormalTok{c\_serial = new ket.Circuit(1).h(0).h(0).h(0)}
+\NormalTok{svg(c\_serial.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The three-qubit version has depth 1 --- all three H gates execute
+simultaneously. The single-qubit version has depth 3. Both apply three H
+gates total, but the three-qubit circuit finishes three times faster on
+hardware.
+
+Real hardware runs gates in parallel where qubits don't interact.
+Minimising depth is one of the key tasks in quantum compilation.
+
+\section{What's next}\label{whats-next-2}
+
+CNOT acting on a superposition creates something classical circuits
+can't: \textbf{entanglement}. Chapter 4 explores what that means, how to
+measure it, and why it's the engine behind every quantum speedup.
+
+\chapter{Entanglement}\label{sec-entanglement}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+Apply H to qubit 0, then CNOT with qubit 0 as control and qubit 1 as
+target:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{bell = new ket.Circuit(2).h(0).cx(0, 1)}
+\NormalTok{svg(bell.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(bell.draw())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Only \(|00\rangle\) and \(|11\rangle\). Never \(|01\rangle\) or
+\(|10\rangle\).
+
+The two qubits are \textbf{entangled}. Measure one and you instantly
+know the other --- perfectly correlated, no matter how far apart they
+are.
+
+\section{What entanglement is}\label{what-entanglement-is}
+
+Before measurement, neither qubit has a definite value. The joint state
+is:
+
+\[|\Phi^+\rangle = \frac{1}{\sqrt{2}}|00\rangle + \frac{1}{\sqrt{2}}|11\rangle\]
+
+This is a \textbf{Bell state} --- the simplest maximally entangled
+state. It cannot be written as a product of two independent qubit
+states. There is no \(|\psi_0\rangle \otimes |\psi_1\rangle\) that
+equals it.
+
+That factorability is the test: if you can write the state as a product,
+the qubits are independent. If you can't, they're entangled.
+
+\section{Entanglement entropy}\label{entanglement-entropy}
+
+There's a quantitative measure. \texttt{bondEntropies()} returns the
+log₂ von Neumann entropy across each consecutive bond. A product state
+scores 0. Maximal entanglement scores 1.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Product state: no entanglement}
+\NormalTok{product = new ket.Circuit(2).h(0).x(1)}
+\NormalTok{product.bondEntropies()}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Bell state: maximum entanglement}
+\NormalTok{bell.bondEntropies()}
+\end{Highlighting}
+\end{Shaded}
+
+The product state scores exactly 0. The Bell state scores exactly 1 ---
+one full bit of entanglement entropy across the bond between qubit 0 and
+qubit 1. This is the physics. The histogram alone can't tell you this;
+the entropy can.
+
+\section{Looking at the Bloch sphere}\label{looking-at-the-bloch-sphere}
+
+In a product state, each qubit has a well-defined Bloch vector:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(product.blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(product.blochSphere(1))}
+\end{Highlighting}
+\end{Shaded}
+
+Qubit 0 sits on the equator (superposition). Qubit 1 sits at the south
+pole (\(|1\rangle\)). Each qubit has a pure state of its own.
+
+Now look at the same qubits in the Bell state:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.blochSphere(1))}
+\end{Highlighting}
+\end{Shaded}
+
+Both qubits sit at the \emph{origin} of the Bloch sphere --- not on the
+surface, but at the centre. A point on the surface is a pure state. The
+centre is a maximally mixed state. Each qubit, viewed alone, is
+completely undetermined. The information lives only in the correlation
+between them.
+
+This is the geometric signature of entanglement: entangled qubits have
+no individual Bloch vectors. The description of the pair cannot be
+reduced to descriptions of two individuals.
+
+\section{The four Bell states}\label{the-four-bell-states}
+
+There are four maximally entangled two-qubit states, one for each
+combination of relative phase and parity:
+
+\[|\Phi^+\rangle = \tfrac{1}{\sqrt{2}}(|00\rangle + |11\rangle) \qquad |\Phi^-\rangle = \tfrac{1}{\sqrt{2}}(|00\rangle - |11\rangle)\]
+\[|\Psi^+\rangle = \tfrac{1}{\sqrt{2}}(|01\rangle + |10\rangle) \qquad |\Psi^-\rangle = \tfrac{1}{\sqrt{2}}(|01\rangle - |10\rangle)\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{phi\_plus  = new ket.Circuit(2).h(0).cx(0,1)}
+\NormalTok{phi\_minus = new ket.Circuit(2).h(0).cx(0,1).z(0)}
+\NormalTok{psi\_plus  = new ket.Circuit(2).h(0).cx(0,1).x(1)}
+\NormalTok{psi\_minus = new ket.Circuit(2).h(0).cx(0,1).x(1).z(0)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(phi\_plus.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(phi\_plus.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(phi\_minus.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(phi\_minus.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(psi\_plus.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(psi\_plus.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(psi\_minus.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(psi\_minus.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\(\Phi^+\) and \(\Phi^-\) show only \(|00\rangle\)/\(|11\rangle\).
+\(\Psi^+\) and \(\Psi^-\) show only \(|01\rangle\)/\(|10\rangle\). The
+\(\pm\) phase difference is invisible in the histograms --- it matters
+when these states enter further gates. All four score entropy = 1:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{[phi\_plus, phi\_minus, psi\_plus, psi\_minus].map(c =\textgreater{} c.bondEntropies())}
+\end{Highlighting}
+\end{Shaded}
+
+\section{Why it's strange}\label{why-its-strange}
+
+The correlations are stronger than anything classical physics allows.
+
+Imagine two coins that always land the same way --- both heads or both
+tails --- no matter how far apart they are. Classically, you'd explain
+this by assuming they were preset: heads-heads or tails-tails, decided
+before they separated. Hidden information.
+
+Quantum mechanics rules this out. The Bell inequalities are a
+mathematical test: correlations from hidden preset values can only be so
+strong. Entangled particles violate them. The correlations are not
+pre-agreed --- they're genuinely created at the moment of measurement.
+
+This is what Einstein called ``spooky action at a distance.'' He thought
+it meant quantum mechanics was incomplete. Experiments since the 1980s
+have confirmed it isn't: entanglement is real, and the hidden-variable
+explanation doesn't work.
+
+\section{Three-qubit entanglement ---
+GHZ}\label{three-qubit-entanglement-ghz}
+
+The pattern extends. The \textbf{GHZ state} entangles three qubits:
+
+\[|GHZ\rangle = \frac{1}{\sqrt{2}}|000\rangle + \frac{1}{\sqrt{2}}|111\rangle\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ghz = new ket.Circuit(3).h(0).cx(0,1).cx(0,2)}
+\NormalTok{svg(ghz.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(ghz.draw())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(ghz.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Only \(|000\rangle\) and \(|111\rangle\). Measure any one qubit and the
+other two are determined. The bond entropies tell the full story:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ghz.bondEntropies()}
+\end{Highlighting}
+\end{Shaded}
+
+Both bonds carry entanglement. The three qubits are collectively
+correlated across the whole register.
+
+Now look at what the individual Bloch spheres show:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(ghz.blochSphere(0))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(ghz.blochSphere(1))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(ghz.blochSphere(2))}
+\end{Highlighting}
+\end{Shaded}
+
+All three qubits are at the origin --- maximally mixed individually,
+even though the joint state is pure. The information is entirely
+non-local: it exists only in the three-way correlation.
+
+\section{Entanglement as a resource}\label{entanglement-as-a-resource}
+
+Entanglement isn't just philosophically interesting --- it's a
+computational resource:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Quantum teleportation} --- transmit a qubit's full state using
+  only classical bits, via a shared Bell pair
+\item
+  \textbf{Superdense coding} --- send two classical bits by physically
+  transmitting one qubit
+\item
+  \textbf{Quantum error correction} --- detect and fix errors without
+  measuring the data directly
+\item
+  \textbf{Every quantum speedup} --- Grover's, Shor's, and everything
+  beyond --- depends on building and exploiting entanglement across many
+  qubits
+\end{itemize}
+
+The exponential state space from Chapter 3 is only useful \emph{because}
+entanglement lets you act on all of it coherently. Without entanglement,
+a quantum computer is just a slow classical one.
+
+\section{What's next}\label{whats-next-3}
+
+Chapter 5 combines interference and entanglement into the first real
+algorithm: Deutsch--Jozsa, a problem where a quantum computer beats any
+classical computer in a single query.
+
+\part{Algorithms}
+
+\chapter{Quantum Algorithms}\label{sec-algorithms}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+The ingredients are in place: superposition, single-qubit gates,
+multi-qubit states, entanglement. A quantum algorithm uses all of them
+together --- amplifying the amplitudes of correct answers and cancelling
+the rest.
+
+The first clean example is \textbf{Deutsch--Jozsa}.
+
+\section{The problem}\label{the-problem}
+
+You're given a black-box function \(f : \{0,1\}^n \to \{0,1\}\). You're
+promised it's either:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Constant} --- same output for every input (all 0s or all 1s)
+\item
+  \textbf{Balanced} --- exactly half the inputs map to 0, half to 1
+\end{itemize}
+
+Classically, worst case requires \(2^{n-1}+1\) queries --- you must
+check more than half the inputs. Quantum mechanics does it in
+\textbf{one query}.
+
+\section{The circuit}\label{the-circuit}
+
+The phase oracle encodes \(f\) as a phase flip \((-1)^{f(x)}\) on each
+basis state \(|x\rangle\). The circuit is: H on all qubits → oracle → H
+on all qubits → measure.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{dj = (n, oracle) =\textgreater{} \{}
+\NormalTok{  let c = new ket.Circuit(n)}
+\NormalTok{  for (let q = 0; q \textless{} n; q++) c = c.h(q)}
+\NormalTok{  c = oracle(c)}
+\NormalTok{  for (let q = 0; q \textless{} n; q++) c = c.h(q)}
+\NormalTok{  return c}
+\NormalTok{\}}
+
+\NormalTok{constantOracle = (c) =\textgreater{} c}
+\NormalTok{balancedOracle = (c) =\textgreater{} c.cz(0, 1)}
+
+\NormalTok{svg(dj(3, balancedOracle).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Constant oracle} --- all amplitude returns to \(|000\rangle\):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(dj(3, constantOracle).simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Balanced oracle} --- \(|000\rangle\) amplitude cancels to zero:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(dj(3, balancedOracle).simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+One circuit, one measurement, certain answer.
+
+\section{Why it works}\label{why-it-works}
+
+Apply H to all qubits: uniform superposition over all \(2^n\) inputs.
+The oracle applies phase \((-1)^{f(x)}\) to each \(|x\rangle\).
+
+\textbf{Constant}: every state gets the same phase. The second H
+perfectly reverses the first --- all amplitude flows back to
+\(|00\ldots0\rangle\).
+
+\textbf{Balanced}: half the states get a phase flip. The symmetry is
+broken. \(|00\ldots0\rangle\) accumulates destructive interference ---
+its amplitude cancels exactly to zero.
+
+This is interference doing useful work: one global property determined
+by the coherent interaction of all \(2^n\) amplitudes simultaneously.
+
+\section{Bernstein--Vazirani}\label{bernsteinvazirani}
+
+A closely related algorithm finds a hidden \(n\)-bit string \(s\) with a
+single query. The oracle computes \(f(x) = s \cdot x \pmod{2}\). The
+circuit is identical to Deutsch--Jozsa --- the measurement directly
+reads out \(s\):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Hidden string s = 101 — phase oracle: Z on each qubit where s[i] = 1}
+\NormalTok{bvOracle = (c) =\textgreater{} c.z(0).z(2)}
+\NormalTok{svg(dj(3, bvOracle).simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The measurement gives \texttt{101} with certainty. Classically: \(n\)
+queries. Quantum: one.
+
+\section{What's next}\label{whats-next-4}
+
+Deutsch--Jozsa solves a contrived problem. Chapter 6 covers
+\textbf{Grover's algorithm} --- a quadratic speedup for unstructured
+search, applicable to any problem expressible as ``find the input
+satisfying this condition.''
+
+\chapter{Grover's Search}\label{sec-grover}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+Search an unsorted list of \(N\) items for the one satisfying some
+condition. Classically: \(O(N)\) queries worst case. Grover's algorithm:
+\(O(\sqrt{N})\) queries.
+
+That's a quadratic speedup, and it applies to \emph{any} problem where
+you can write a function that recognises a correct answer.
+
+\section{The idea}\label{the-idea}
+
+Start in uniform superposition over all \(N = 2^n\) states. Each Grover
+iteration does two things:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Oracle}: phase-flip the marked state --- multiply its
+  amplitude by \(-1\)
+\item
+  \textbf{Diffusion}: reflect all amplitudes around their average ---
+  amplifies the flipped state
+\end{enumerate}
+
+After \(\approx \frac{\pi}{4}\sqrt{N}\) iterations the marked amplitude
+is near 1. Measure and you get the answer.
+
+\section{Two qubits --- searching 4
+items}\label{two-qubits-searching-4-items}
+
+Searching for \(|11\rangle\). The oracle is a CZ (phase-flips
+\(|11\rangle\)). One iteration suffices:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{oracle\_11 = (c) =\textgreater{} c.cz(0, 1)}
+\NormalTok{g2 = ket.grover(2, oracle\_11, 1)}
+\NormalTok{svg(g2.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(g2.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\(|11\rangle\) with certainty. One oracle call, one item in four.
+
+\section{Three qubits --- searching 8
+items}\label{three-qubits-searching-8-items}
+
+Searching for \(|101\rangle\). The oracle flips the middle qubit to
+convert \(|101\rangle \to |111\rangle\), applies a multi-controlled
+phase flip, then undoes:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{oracle\_101 = (c) =\textgreater{} c.x(1).h(2).ccx(0, 1, 2).h(2).x(1)}
+\NormalTok{g3 = ket.grover(3, oracle\_101)   // optimal iterations chosen automatically}
+\NormalTok{svg(g3.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(g3.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\(|101\rangle\) dominates. Optimal iterations for \(n=3\):
+\(\approx\frac{\pi}{4}\sqrt{8} \approx 2\).
+
+\section{Over-iterating}\label{over-iterating}
+
+Grover is a rotation, not a one-way boost. Iterate past the optimum and
+the probability cycles back down:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{g3\_over = ket.grover(3, oracle\_101, 5)}
+\NormalTok{svg(g3\_over.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+At 5 iterations --- past the optimum of 2 for \(n=3\) --- the
+probability of \(|101\rangle\) has decayed from \textasciitilde93\% back
+toward the noise floor. Stopping at the right point is part of the
+algorithm.
+
+\section{What Grover can and can't
+do}\label{what-grover-can-and-cant-do}
+
+Grover provides a \textbf{provable} \(\sqrt{N}\) speedup for
+unstructured search. It speeds up brute-force components of many
+classical problems: constraint satisfaction, collision finding, key
+search.
+
+What it can't do: provide an exponential speedup. Breaking a 128-bit
+symmetric key classically costs \(2^{128}\) operations. With Grover:
+\(2^{64}\) --- still astronomical. Symmetric cryptography needs longer
+keys in a quantum world, not redesign.
+
+Shor's algorithm, next, does achieve an exponential speedup --- but only
+for structured problems like factoring.
+
+\section{What's next}\label{whats-next-5}
+
+Grover's speedup comes from amplitude amplification. Shor's exponential
+speedup requires a more powerful subroutine: the \textbf{Quantum Fourier
+Transform}. Chapter 7 builds it.
+
+\chapter{The Quantum Fourier Transform}\label{sec-qft}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+The classical Fourier Transform decomposes a signal into its constituent
+frequencies. The \textbf{Quantum Fourier Transform} does the same to
+quantum amplitudes --- and it's the engine behind Shor's algorithm.
+
+The key difference from the classical FFT: the QFT on \(n\) qubits uses
+\(O(n^2)\) gates, while the best classical FFT on \(2^n\) data points
+needs \(O(n \cdot 2^n)\) operations. Exponentially fewer gates.
+
+The catch: you can't read out the transformed amplitudes directly ---
+measurement collapses them. The QFT is useful as a subroutine that
+restructures phases so subsequent gates can extract what you need.
+
+\section{What it does}\label{what-it-does}
+
+The QFT maps each basis state to a uniform superposition with phases
+encoding the input:
+
+\[\text{QFT}|j\rangle = \frac{1}{\sqrt{2^n}} \sum_{k=0}^{2^n-1} e^{2\pi i jk/2^n} |k\rangle\]
+
+Every output state has equal amplitude --- measurement after a bare QFT
+is uniform. The information is in the phases, which interfere with
+subsequent gates.
+
+\section{The circuit}\label{the-circuit-1}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{qftCircuit = (n) =\textgreater{} \{}
+\NormalTok{  let c = new ket.Circuit(n)}
+\NormalTok{  ket.qft(c, Array.from(\{ length: n \}, (\_, i) =\textgreater{} i))}
+\NormalTok{  return c}
+\NormalTok{\}}
+\NormalTok{svg(qftCircuit(4).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The structure: H on each qubit, followed by controlled phase rotations
+from subsequent qubits (angles \(\pi/2^k\) decreasing), then bit-order
+reversal swaps. For \(n=4\): 10 gates. Classical FFT on 16 points: 32
+multiplications.
+
+\section{Phase estimation}\label{phase-estimation}
+
+Phase estimation is the QFT's most important application. Given a
+unitary \(U\) with eigenstate \(|\psi\rangle\) satisfying
+\(U|\psi\rangle = e^{2\pi i\phi}|\psi\rangle\), it recovers \(\phi\) to
+\(n\) bits of precision using \(n\) ancilla qubits and \(O(2^n)\)
+applications of \(U\).
+
+The S gate has eigenvalue \(e^{i\pi/2} = e^{2\pi i \cdot 1/4}\) on
+\(|1\rangle\) --- phase \(\phi = 1/4\). With 4 precision qubits, the
+encoded integer is \(\phi \cdot 2^4 = 4 = 0100_2\). In ket's qubit
+ordering (qubit 0 is LSB), this registers as ancilla bits \texttt{0010}.
+The histogram shows all 5 qubits --- the last bit is the target staying
+in \(|1\rangle\):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{qpe\_s = \{}
+\NormalTok{  let c = new ket.Circuit(5).x(4)             // target qubit in eigenstate |1⟩}
+\NormalTok{  for (let k = 0; k \textless{} 4; k++) c = c.h(k)     // superpose ancillas}
+\NormalTok{  for (let k = 0; k \textless{} 4; k++)                 // controlled{-}S\^{}(2\^{}k)}
+\NormalTok{    for (let p = 0; p \textless{} 2 ** k; p++) c = c.cs(k, 4)}
+\NormalTok{  return ket.applyIqft(c, 4, 0)               // inverse QFT}
+\NormalTok{\}}
+\NormalTok{svg(qpe\_s.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(qpe\_s.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{00101} with certainty --- the 4 ancilla bits read \texttt{0010},
+meaning qubit 2 is set. In LSB-first encoding that's integer 4, and
+\(4/16 = 1/4\). Phase recovered exactly. One run, four bits of
+precision.
+
+\section{Connection to Shor's}\label{connection-to-shors}
+
+Shor's algorithm reduces factoring to period finding: given
+\(f(x) = a^x \bmod N\), find its period \(r\). Period finding is phase
+estimation on the unitary \(U_a|x\rangle = |ax \bmod N\rangle\) --- its
+eigenvalues encode \(1/r\).
+
+Building the circuit for \(U_a\) is the hard part (the Beauregard
+circuit). Once you have it, QPE extracts the period, and from the
+period, classical arithmetic gives the factors. Chapter 8 runs the whole
+thing.
+
+\chapter{Shor's Algorithm}\label{sec-shor}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+In 1994, Peter Shor showed that a quantum computer can factor large
+integers in polynomial time. This broke the assumption underpinning RSA
+encryption and started the modern era of quantum computing research.
+
+\section{Why factoring matters}\label{why-factoring-matters}
+
+RSA security rests on a simple asymmetry: multiplying two large primes
+is easy, factoring their product is hard. The best known classical
+algorithm runs in roughly \(e^{O(n^{1/3})}\) time for an \(n\)-bit
+number. Shor's algorithm runs in \(O(n^3)\) --- polynomial. A large
+enough quantum computer breaks RSA.
+
+\section{The reduction}\label{the-reduction}
+
+Shor doesn't factor directly. It reduces factoring to \textbf{period
+finding}:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Pick random \(a < N\) with \(\gcd(a, N) = 1\)
+\item
+  Find period \(r\) of \(f(x) = a^x \bmod N\)
+\item
+  Then \(\gcd(a^{r/2} \pm 1,\, N)\) gives the factors (if \(r\) is even
+  and \(a^{r/2} \not\equiv -1\))
+\end{enumerate}
+
+Steps 1 and 3 are classical. Step 2 is quantum --- period finding via
+phase estimation on the unitary \(U_a|x\rangle = |ax \bmod N\rangle\).
+
+\section{Running it}\label{running-it}
+
+\texttt{shorBeauregard} implements the full gate-decomposed Beauregard
+circuit:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{r15 = ket.shorBeauregard(15n, 7n)}
+\NormalTok{pre(\textasciigrave{}factors = $\{r15.factors.map(String).join(\textquotesingle{} \textbackslash{}xd7 \textquotesingle{})\}  (base $\{r15.a\}, $\{r15.qubits\} qubits)\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+The algorithm selects the most efficient base internally. Here it
+factors 15 into 3 and 5 using 19 qubits.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{r21 = ket.shorBeauregard(21n, 2n)}
+\NormalTok{pre(\textasciigrave{}21 = $\{r21.factors.map(String).join(\textquotesingle{} \textbackslash{}xd7 \textquotesingle{})\}  ($\{r21.qubits\} qubits)\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{r35 = ket.shorBeauregard(35n, 3n)}
+\NormalTok{pre(\textasciigrave{}35 = $\{r35.factors.map(String).join(\textquotesingle{} \textbackslash{}xd7 \textquotesingle{})\}  ($\{r35.qubits\} qubits)\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+\section{The qubit cost}\label{the-qubit-cost}
+
+The Beauregard circuit for factoring \(N\) requires \(O(\log N)\)
+qubits. For \(N=15\): 19 qubits. For a 2048-bit RSA key: roughly 4000
+logical qubits, plus thousands more for error correction. Current
+hardware has hundreds of noisy physical qubits.
+
+The algorithm works. The hardware isn't there yet.
+
+\section{Simulation limits}\label{simulation-limits}
+
+Simulation is feasible only for small \(N\) --- the circuit's state
+space grows with \(\log N\), but intermediate entanglement makes
+classical simulation exponentially expensive:
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule\noalign{}
+N & Qubits & Approx. simulation time \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+15 & 19 & \textless{} 1s \\
+21 & 22 & \textasciitilde3s \\
+35 & 25 & \textasciitilde30s \\
+77 & 29 & \textasciitilde15 min \\
+\end{longtable}
+
+This is the honest limit of classical simulation. To factor a
+cryptographically relevant number you need actual quantum hardware ---
+which is the entire point.
+
+\section{Try it --- QPE factoring}\label{try-it-qpe-factoring}
+
+This interactive demo runs the full quantum period-finding circuit in
+the browser. Select any number from the list --- including 4-digit
+semiprimes --- and watch the QPE counting register reveal the period and
+the factors.
+
+The approach: build a permutation unitary
+\(U_a|x\rangle = |ax \bmod N\rangle\) directly, embed it as a controlled
+gate, run QPE with 3 precision bits, then extract the period via
+continued fractions and compute \(\gcd(a^{r/2} \pm 1, N)\). Numbers
+marked ⚡ use 12 work qubits and take 5--10 seconds.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{shor\_gcd = (a, b) =\textgreater{} \{ while (b) [a, b] = [b, a \% b]; return a \}}
+
+\NormalTok{shor\_mulMatrix = (mul, N, n) =\textgreater{} \{}
+\NormalTok{  const dim = 1 \textless{}\textless{} n}
+\NormalTok{  const M = Array.from(\{ length: dim \}, () =\textgreater{} new Array(dim).fill(0))}
+\NormalTok{  for (let x = 0; x \textless{} dim; x++) M[x \textless{} N ? x * mul \% N : x][x] = 1}
+\NormalTok{  return M}
+\NormalTok{\}}
+
+\NormalTok{shor\_controlled = (U, n) =\textgreater{} \{}
+\NormalTok{  const dim = 1 \textless{}\textless{} n}
+\NormalTok{  const C = Array.from(\{ length: 2 * dim \}, (\_, i) =\textgreater{} \{}
+\NormalTok{    const row = new Array(2 * dim).fill(0)}
+\NormalTok{    if (i \textless{} dim) row[i] = 1}
+\NormalTok{    return row}
+\NormalTok{  \})}
+\NormalTok{  for (let i = 0; i \textless{} dim; i++)}
+\NormalTok{    for (let j = 0; j \textless{} dim; j++)}
+\NormalTok{      C[dim + i][dim + j] = U[i][j]}
+\NormalTok{  return C}
+\NormalTok{\}}
+
+\NormalTok{SHOR\_TARGETS = [}
+\NormalTok{  \{ N: 15,   a: 2,   aSq: 4,    n: 4,  label: "15 = 3 × 5" \},}
+\NormalTok{  \{ N: 21,   a: 8,   aSq: 1,    n: 5,  label: "21 = 7 × 3" \},}
+\NormalTok{  \{ N: 33,   a: 10,  aSq: 1,    n: 6,  label: "33 = 3 × 11" \},}
+\NormalTok{  \{ N: 35,   a: 6,   aSq: 1,    n: 6,  label: "35 = 5 × 7" \},}
+\NormalTok{  \{ N: 77,   a: 34,  aSq: 1,    n: 7,  label: "77 = 7 × 11" \},}
+\NormalTok{  \{ N: 1073, a: 813, aSq: 1,    n: 11, label: "1073 = 29 × 37" \},}
+\NormalTok{  \{ N: 1517, a: 778, aSq: 1,    n: 11, label: "1517 = 37 × 41" \},}
+\NormalTok{  \{ N: 1591, a: 1074,aSq: 1,    n: 11, label: "1591 = 37 × 43" \},}
+\NormalTok{  \{ N: 1763, a: 42,  aSq: 1,    n: 11, label: "1763 = 41 × 43" \},}
+\NormalTok{  \{ N: 1927, a: 565, aSq: 1270, n: 11, label: "1927 = 41 × 47" \},}
+\NormalTok{  \{ N: 2021, a: 988, aSq: 1,    n: 11, label: "2021 = 43 × 47" \},}
+\NormalTok{  \{ N: 2033, a: 322, aSq: 1,    n: 11, label: "2033 = 19 × 107" \},}
+\NormalTok{  \{ N: 2047, a: 390, aSq: 622,  n: 11, label: "2047 = 23 × 89" \},}
+\NormalTok{  \{ N: 2491, a: 847, aSq: 1,    n: 12, label: "2491 = 47 × 53 ⚡" \},}
+\NormalTok{  \{ N: 2701, a: 2554,aSq: 1,    n: 12, label: "2701 = 37 × 73 ⚡" \},}
+\NormalTok{]}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{viewof shor\_target = Inputs.select(SHOR\_TARGETS, \{}
+\NormalTok{  label: "N to factor",}
+\NormalTok{  format: t =\textgreater{} t.label.replace(/=.*/, "").trim()}
+\NormalTok{\})}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{shor\_computing = \{}
+\NormalTok{  shor\_target}
+\NormalTok{  const div = document.createElement(\textquotesingle{}div\textquotesingle{})}
+\NormalTok{  div.className = \textquotesingle{}shor{-}computing\textquotesingle{}}
+\NormalTok{  div.innerHTML = \textquotesingle{}\textless{}span class="shor{-}spinner"\textgreater{}\textless{}/span\textgreater{} running QPE circuit…\textquotesingle{}}
+\NormalTok{  yield div}
+\NormalTok{  await shor\_result}
+\NormalTok{  return document.createElement(\textquotesingle{}span\textquotesingle{})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{shor\_result = new Promise(resolve =\textgreater{} setTimeout(() =\textgreater{} \{}
+\NormalTok{  const \{ N, a, aSq, n \} = shor\_target}
+\NormalTok{  const t = 3}
+\NormalTok{  const aPows = [a, aSq, 1]}
+\NormalTok{  const workQ = Array.from(\{ length: n \}, (\_, i) =\textgreater{} t + i)}
+
+\NormalTok{  let c = new ket.Circuit(t + n).x(t + n {-} 1)}
+\NormalTok{  for (let i = 0; i \textless{} t; i++) c = c.h(i)}
+\NormalTok{  for (let k = 0; k \textless{} t; k++) \{}
+\NormalTok{    if (aPows[k] === 1) continue}
+\NormalTok{    c = c.unitary(shor\_controlled(shor\_mulMatrix(aPows[k], N, n), n), k, ...workQ)}
+\NormalTok{  \}}
+\NormalTok{  // Inverse QFT on counting register}
+\NormalTok{  for (let i = 0; i \textless{} Math.floor(t / 2); i++) c = c.swap(i, t {-} 1 {-} i)}
+\NormalTok{  for (let j = 0; j \textless{} t; j++) \{}
+\NormalTok{    for (let kk = j {-} 1; kk \textgreater{}= 0; kk{-}{-}) c = c.cu1({-}Math.PI / 2 ** (j {-} kk), kk, j)}
+\NormalTok{    c = c.h(j)}
+\NormalTok{  \}}
+
+\NormalTok{  // Read counting register probabilities from statevector}
+\NormalTok{  const sv = c.statevector()}
+\NormalTok{  const countProbs = \{\}}
+\NormalTok{  for (const [idx, amp] of sv) \{}
+\NormalTok{    const p = amp.re * amp.re + amp.im * amp.im}
+\NormalTok{    if (p \textless{} 1e{-}10) continue}
+\NormalTok{    const bits = idx.toString(2).padStart(t + n, \textquotesingle{}0\textquotesingle{})}
+\NormalTok{    const cb = bits.slice(0, t)}
+\NormalTok{    countProbs[cb] = (countProbs[cb] || 0) + p}
+\NormalTok{  \}}
+
+\NormalTok{  // Period extraction via continued fractions}
+\NormalTok{  const periods = new Set()}
+\NormalTok{  for (const [bits, p] of Object.entries(countProbs)) \{}
+\NormalTok{    if (p \textless{} 0.05) continue}
+\NormalTok{    const m = parseInt(bits, 2)}
+\NormalTok{    if (m === 0) continue}
+\NormalTok{    for (let r = 1; r \textless{}= 2 * (1 \textless{}\textless{} t); r++)}
+\NormalTok{      for (let s = 1; s \textless{} r; s++)}
+\NormalTok{        if (Math.abs(s / r {-} m / (1 \textless{}\textless{} t)) \textless{} 0.5 / (1 \textless{}\textless{} t)) periods.add(r)}
+\NormalTok{  \}}
+
+\NormalTok{  // Factor via GCD}
+\NormalTok{  const factors = []}
+\NormalTok{  for (const r of [...periods].sort((x, y) =\textgreater{} x {-} y)) \{}
+\NormalTok{    if (r \% 2 !== 0) continue}
+\NormalTok{    const x = r === 4 ? aSq : r === 2 ? a : null}
+\NormalTok{    if (!x || x === 1 || x === N {-} 1) continue}
+\NormalTok{    const f1 = shor\_gcd(x {-} 1, N), f2 = shor\_gcd(x + 1, N)}
+\NormalTok{    const fs = [f1, f2].filter(f =\textgreater{} f \textgreater{} 1 \&\& f \textless{} N)}
+\NormalTok{    if (fs.length) factors.push(\{ r, p: fs[0], q: N / fs[0] \})}
+\NormalTok{  \}}
+
+\NormalTok{  resolve(\{ N, a, t, countProbs, factors \})}
+\NormalTok{\}, 30))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{\{}
+\NormalTok{  const \{ N, a, t, countProbs, factors \} = shor\_result}
+\NormalTok{  const maxP = Math.max(...Object.values(countProbs))}
+\NormalTok{  const lines = [\textasciigrave{}N = $\{N\},  base a = $\{a\},  counting bits t = $\{t\}\textasciigrave{}, \textasciigrave{}\textasciigrave{}, \textasciigrave{}QPE counting register:\textasciigrave{}]}
+\NormalTok{  for (const [bits, p] of Object.entries(countProbs).sort((x,y) =\textgreater{} parseInt(x[0],2){-}parseInt(y[0],2))) \{}
+\NormalTok{    const m = parseInt(bits, 2)}
+\NormalTok{    const bar = \textquotesingle{}█\textquotesingle{}.repeat(Math.round(p / maxP * 24))}
+\NormalTok{    lines.push(\textasciigrave{}  m=$\{String(m).padStart(2)\}  φ=$\{m\}/$\{1\textless{}\textless{}t\}  $\{(p*100).toFixed(0).padStart(3)\}\%  $\{bar\}\textasciigrave{})}
+\NormalTok{  \}}
+\NormalTok{  lines.push(\textasciigrave{}\textasciigrave{})}
+\NormalTok{  if (factors.length) \{}
+\NormalTok{    lines.push(\textasciigrave{}Period r = $\{factors[0].r\}\textasciigrave{})}
+\NormalTok{    lines.push(\textasciigrave{}$\{N\} = $\{factors[0].p\} × $\{factors[0].q\}  ✓\textasciigrave{})}
+\NormalTok{  \} else \{}
+\NormalTok{    lines.push(\textasciigrave{}No factors found — try a different base\textasciigrave{})}
+\NormalTok{  \}}
+\NormalTok{  return pre(lines.join(\textquotesingle{}\textbackslash{}n\textquotesingle{}))}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+The counting register peaks at multiples of \texttt{2\^{}t\ /\ r}. For
+r=2 with t=3 precision bits: peaks at m=0 and m=4. For r=4: peaks at
+m=0, 2, 4, 6. Continued fractions recovers r from any non-zero peak.
+
+\section{What's next}\label{whats-next-6}
+
+All the circuits so far assumed perfect gates. Chapter 9 covers noise:
+what goes wrong on real hardware and how \texttt{ket} models it.
+
+\part{Reality}
+
+\chapter{Noise and Real Hardware}\label{sec-noise}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+Every circuit in the previous chapters ran perfectly. Real quantum
+hardware doesn't.
+
+Qubits are physical objects --- superconducting circuits, trapped ions,
+photons. They interact with their environment, and that interaction
+corrupts the quantum state. Understanding noise is the difference
+between a textbook circuit and one that works in practice.
+
+\section{Decoherence}\label{decoherence}
+
+A qubit's coherence is its ability to maintain superposition. Two
+timescales govern how quickly it's lost:
+
+\textbf{\(T_1\) --- relaxation time}: the qubit spontaneously decays
+from \(|1\rangle\) to \(|0\rangle\), like an excited atom emitting a
+photon. Energy leaks to the environment.
+
+\textbf{\(T_2\) --- dephasing time}: the phase relationship between
+\(|0\rangle\) and \(|1\rangle\) randomises, collapsing superposition
+without flipping the bit. Always \(T_2 \leq 2T_1\).
+
+A circuit's total runtime must be well below both timescales or errors
+accumulate faster than computation.
+
+\section{Simulating noise}\label{simulating-noise}
+
+Pass a noise profile to \texttt{run()} to apply \(T_1\)/\(T_2\) decay.
+The same Bell state, clean vs noisy:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{bell = new ket.Circuit(2).h(0).cx(0, 1)}
+\NormalTok{svg(bell.simulate(\{ shots: 2000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: \{ t1: 50, t2: 30 \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The clean Bell state shows only \(|00\rangle\) and \(|11\rangle\). The
+noisy run leaks into \(|01\rangle\) and \(|10\rangle\) --- decoherence
+partially collapses the entanglement during the circuit.
+
+Stronger decoherence (\(T_1\) and \(T_2\) measured in microseconds;
+shorter means noisier):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: \{ t1: 10, t2: 5 \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+At \(T_1 = 10\,\mu\text{s}\), the correlation is almost entirely
+destroyed. The histogram looks nearly uniform --- noise has randomised
+the result.
+
+\section{Circuit depth matters}\label{circuit-depth-matters}
+
+A shallower circuit has less time to decohere. The same identity
+operation at different depths:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{shallow = new ket.Circuit(1).h(0).h(0)   // H·H = I, depth 2}
+\NormalTok{svg(shallow.run(\{ shots: 2000, noise: \{ t1: 100, t2: 50 \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{deep = (() =\textgreater{} \{ let c = new ket.Circuit(1); for (let i = 0; i \textless{} 10; i++) c = c.h(0); return c \})()}
+\NormalTok{svg(deep.run(\{ shots: 2000, noise: \{ t1: 100, t2: 50 \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Both are mathematically identity --- they should always return
+\(|0\rangle\). The deep circuit leaks into \(|1\rangle\) substantially
+more. More time in the circuit means more exposure to noise.
+
+\section{Real device profiles}\label{real-device-profiles}
+
+\texttt{ket} ships with noise models calibrated from real hardware:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(Object.keys(ket.DEVICES).join(\textquotesingle{}\textbackslash{}n\textquotesingle{}))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: "harmony" \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: "ibm\_sherbrooke" \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Different hardware, different error profiles. IonQ's trapped-ion systems
+tend to have higher gate fidelity but slower gate times. IBM's
+superconducting systems are faster but noisier per gate. The device
+string selects the full calibrated noise model including \(T_1\),
+\(T_2\), gate error rates, and readout error.
+
+\section{Readout error mitigation}\label{readout-error-mitigation}
+
+Not all noise happens during the circuit. Measurement itself is
+imperfect: a qubit in \(|0\rangle\) occasionally registers as 1, and
+vice versa. This is \textbf{readout error} --- it's separate from
+decoherence and can be corrected after the fact.
+
+\texttt{run()} accepts \texttt{readoutMitigation:\ true} to apply a
+simple matrix inversion correction:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: "harmony" \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(bell.run(\{ shots: 2000, noise: "harmony", readoutMitigation: true \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The mitigated histogram is closer to the ideal
+\(|00\rangle\)/\(|11\rangle\) split. The correction is linear: the
+simulator estimates the readout error matrix from the device profile and
+inverts it. It doesn't fix decoherence --- only the measurement step ---
+but on current hardware, readout error is often the dominant source of
+error for short circuits.
+
+\section{Error correction (the idea)}\label{error-correction-the-idea}
+
+The solution to decoherence is \textbf{quantum error correction} (QEC):
+encode one logical qubit across several physical qubits so that any
+single error can be detected and corrected without measuring --- and
+thus collapsing --- the data.
+
+The simplest example: the three-qubit bit-flip code encodes
+\(|0\rangle \to |000\rangle\) and \(|1\rangle \to |111\rangle\). A
+single bit-flip is detectable by comparing pairs --- majority vote
+restores the original.
+
+Full QEC requires 50--1000 physical qubits per logical qubit depending
+on the code and target error rate. The algorithms in Chapters 6--8
+assume perfect logical qubits. Getting there is the work of the next
+decade.
+
+\section{Simulating at scale with
+MPS}\label{simulating-at-scale-with-mps}
+
+The chapters so far have used a statevector simulator: it stores all
+\(2^n\) amplitudes in memory and applies gates as matrix
+multiplications. For 30 qubits, that's \(2^{30} \approx 10^9\) complex
+numbers --- a few gigabytes. For 50 qubits it's a petabyte. For 100
+qubits, more memory than exists on Earth.
+
+But many circuits of practical interest don't actually need all of that.
+If a circuit has low entanglement, it has structure that can be
+exploited. The \textbf{Matrix Product State} (MPS) representation stores
+a chain of small tensors instead of one giant vector. The cost is
+controlled by a single number: \(\chi\), the \textbf{bond dimension},
+which equals the maximum Schmidt rank across any bipartition of the
+qubits.
+
+For a circuit with no entanglement, \(\chi = 1\). For a moderately
+entangled circuit, \(\chi\) might be 10 or 100. Only for highly
+entangled states does \(\chi\) grow to \(2^{n/2}\) --- and only then
+does MPS hit the same wall as statevector.
+
+\subsection{A 1024-qubit circuit}\label{a-1024-qubit-circuit}
+
+A classical statevector simulator would need \(2^{1024}\) amplitudes to
+represent the following circuit. That number has about 300 digits --- it
+dwarfs the number of atoms in the observable universe. No computer will
+ever store it.
+
+Yet \texttt{runMps} returns in milliseconds:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{result\_1024 = \{}
+\NormalTok{  let c = new ket.Circuit(1024).h(0)}
+\NormalTok{  for (let i = 0; i \textless{} 1023; i++) c = c.cx(i, i+1)}
+\NormalTok{  return c.runMps(\{ shots: 200 \})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}backend: $\{result\_1024.backend\}   peakChi: $\{result\_1024.peakChi\}   qubits: $\{result\_1024.qubits\}\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{peakChi\ =\ 2}. That's why it's fast. The GHZ circuit --- H
+followed by a chain of CNOTs --- produces a state with exactly two
+Schmidt values across every bipartition. Despite spanning 1024 qubits,
+the entanglement is as simple as a Bell state. MPS captures it in a
+chain of 2×2 tensors.
+
+The outcome is only ever \(|00\ldots0\rangle\) or \(|11\ldots1\rangle\).
+Here's what the histogram looks like on a smaller GHZ (8 qubits) where
+the bitstrings fit on screen:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ghz8\_circ = \{}
+\NormalTok{  let c = new ket.Circuit(8).h(0)}
+\NormalTok{  for (let i = 0; i \textless{} 7; i++) c = c.cx(i, i+1)}
+\NormalTok{  return c}
+\NormalTok{\}}
+\NormalTok{svg(ghz8\_circ.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\subsection{Entanglement entropy at
+scale}\label{entanglement-entropy-at-scale}
+
+The bond entropies make this precise:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ghz8\_circ.bondEntropies()}
+\end{Highlighting}
+\end{Shaded}
+
+Every bond carries exactly 1 bit of entanglement entropy --- the maximum
+for a two-outcome superposition. But \(\chi = 2\) is the minimum
+non-trivial bond dimension. The entanglement is wide (spread across
+every bond) but shallow (only two branches). MPS handles this
+efficiently because the tensor dimensions stay small.
+
+Compare a product state:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{\{}
+\NormalTok{  let prod = new ket.Circuit(8).h(0).h(1).h(2).h(3).h(4).h(5).h(6).h(7)}
+\NormalTok{  return prod.bondEntropies()}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+All zeros. No gate connects any qubit to any other, so no entanglement
+crosses any bond. \(\chi = 1\) throughout.
+
+\subsection{When MPS is fast --- and when it
+isn't}\label{when-mps-is-fast-and-when-it-isnt}
+
+The cost of MPS scales as \(O(n \chi^3)\) per gate layer. For
+low-entanglement circuits, \(\chi\) stays small regardless of \(n\), and
+the simulation is efficient. For high-entanglement circuits, \(\chi\)
+grows and eventually the simulation becomes as hard as statevector.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Low entanglement: GHZ on 50 qubits — chi stays at 2}
+\NormalTok{mps\_ghz50 = \{}
+\NormalTok{  let c = new ket.Circuit(50).h(0)}
+\NormalTok{  for (let i = 0; i \textless{} 49; i++) c = c.cx(i, i+1)}
+\NormalTok{  return c.runMps(\{ shots: 100 \})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}GHZ{-}50 — backend: $\{mps\_ghz50.backend\}   peakChi: $\{mps\_ghz50.peakChi\}\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Higher entanglement: brickwork circuit on 20 qubits — chi grows}
+\NormalTok{mps\_brick20 = \{}
+\NormalTok{  let c = new ket.Circuit(20)}
+\NormalTok{  for (let layer = 0; layer \textless{} 6; layer++) \{}
+\NormalTok{    for (let i = 0; i \textless{} 19; i += 2) c = c.h(i).cx(i, i+1)}
+\NormalTok{    for (let i = 1; i \textless{} 18; i += 2) c = c.h(i).cx(i, i+1)}
+\NormalTok{  \}}
+\NormalTok{  return c.runMps(\{ shots: 100, maxBond: 64 \})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}Brickwork{-}20 — backend: $\{mps\_brick20.backend\}   peakChi: $\{mps\_brick20.peakChi\}\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+The GHZ chain on 50 qubits has \texttt{peakChi\ =\ 2} and runs
+instantly. The brickwork circuit --- alternating layers of H and CX ---
+builds up genuine entanglement and \texttt{peakChi} climbs. The
+\texttt{maxBond} parameter caps the bond dimension and introduces an
+approximation; without the cap, the simulation would be exact but
+exponentially slow.
+
+\subsection{MPS is not an approximation (for low-entanglement
+circuits)}\label{mps-is-not-an-approximation-for-low-entanglement-circuits}
+
+This is the key point: when \texttt{maxBond} is not set, \texttt{runMps}
+is \textbf{exact}. For any circuit where \(\chi\) stays below a
+manageable threshold --- GHZ states, many chemistry ansätze, QAOA at low
+depth, any circuit with a brickwork structure that doesn't fully
+scramble --- the MPS simulation gives the same result as a perfect
+statevector simulation.
+
+The exponential difficulty of simulating quantum systems is not
+universal. It depends on the entanglement structure of the state.
+Circuits with low entanglement are efficiently simulable classically ---
+and that's not a bug, it's a feature: it tells you exactly how much
+quantum advantage a given circuit has.
+
+When \(\chi\) grows exponentially, you've found a circuit that is
+genuinely hard to simulate classically. That's the regime where quantum
+hardware offers real advantage --- and where MPS, too, runs out of room.
+
+\section{What's next}\label{whats-next-7}
+
+The final chapter applies quantum circuits to their original motivation:
+simulating physics. Hamiltonians, Trotterisation, and the Variational
+Quantum Eigensolver.
+
+\chapter{Hamiltonians and Quantum Simulation}\label{sec-hamiltonian}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+Feynman's original motivation for quantum computers was simulation:
+classical computers are exponentially slow at simulating quantum
+systems. A quantum computer, being quantum itself, should be able to do
+it efficiently.
+
+A \textbf{Hamiltonian} is the operator that governs a quantum system's
+energy and time evolution. Finding its lowest-energy state --- the
+\emph{ground state} --- answers questions in chemistry, materials
+science, and drug discovery that classical computers can't reach.
+
+\section{Hamiltonians as Pauli
+strings}\label{hamiltonians-as-pauli-strings}
+
+Any Hamiltonian on \(n\) qubits can be written as a sum of Pauli
+operator products:
+
+\[H = \sum_i c_i \; P_i\]
+
+where each \(P_i\) is a tensor product of \(I, X, Y, Z\) across qubits
+--- a \textbf{Pauli string}. In \texttt{ket}, each term is
+\texttt{\{\ ops:\ \textquotesingle{}ZZ\textquotesingle{},\ coeff:\ -1.0\ \}}
+where the string encodes the Pauli on each qubit.
+
+\section{Trotter simulation}\label{trotter-simulation}
+
+To simulate time evolution
+\(|\psi(t)\rangle = e^{-iHt}|\psi(0)\rangle\), we use
+\textbf{Trotterisation}: split time into small steps \(\Delta t\) and
+apply each Pauli term separately per step:
+
+\[e^{-iHt} \approx \left(\prod_i e^{-ic_i P_i \Delta t}\right)^{N_\text{steps}}\]
+
+Evolving a single qubit under \(H = X\) --- starting in \(|0\rangle\),
+at \(t = \pi/2\) the state reaches \(|1\rangle\) with certainty (a full
+population inversion):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{H\_x = [\{ ops: \textquotesingle{}X\textquotesingle{}, coeff: 1.0 \}]}
+\NormalTok{trot = ket.trotter(1, H\_x, Math.PI / 2, 8)}
+\NormalTok{svg(trot.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{evolution = new ket.Circuit(1).compose(trot)}
+\NormalTok{svg(evolution.simulate(\{ shots: 500 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\(|0\rangle\) has been driven to \(|1\rangle\) by the Hamiltonian ---
+the quantum analogue of Rabi oscillations in a two-level atom.
+
+\section{The Variational Quantum
+Eigensolver}\label{the-variational-quantum-eigensolver}
+
+\textbf{VQE} is a hybrid classical-quantum algorithm for ground state
+energies, designed for near-term hardware with shallow, noise-tolerant
+circuits.
+
+Parameterise a circuit (the \emph{ansatz}), measure the expectation
+value \(\langle\psi(\theta)|H|\psi(\theta)\rangle\), and use a classical
+optimiser to minimise it. By the variational principle the minimum is an
+upper bound on the true ground state energy.
+
+For \(H = Z\) the ground state is \(|1\rangle\) with energy \(-1\):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{H\_single = [\{ ops: \textquotesingle{}Z\textquotesingle{}, coeff: 1.0 \}]}
+\NormalTok{ansatz\_1q = (params) =\textgreater{} new ket.Circuit(1).ry(params[0], 0)}
+\NormalTok{result\_1q = ket.minimize(ansatz\_1q, H\_single, [0.1])}
+\NormalTok{pre(\textasciigrave{}Ground state energy: $\{result\_1q.energy.toFixed(6)\}   (exact: {-}1.0)\textbackslash{}nOptimal \textbackslash{}u03b8:           $\{result\_1q.params[0].toFixed(6)\} rad  (= \textbackslash{}u03c0)\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+The optimiser finds \(\theta = \pi\) --- \texttt{ry(π)} maps
+\(|0\rangle \to |1\rangle\). Energy \(-1\), exact.
+
+\section{A two-qubit molecule}\label{a-two-qubit-molecule}
+
+A simplified model of the hydrogen molecule H₂ near its equilibrium bond
+length fits in a two-qubit Hamiltonian. The coefficients come from
+quantum chemistry:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{H\_h2 = [}
+\NormalTok{  \{ ops: \textquotesingle{}II\textquotesingle{}, coeff: {-}0.8105 \},}
+\NormalTok{  \{ ops: \textquotesingle{}ZI\textquotesingle{}, coeff:  0.1722 \},}
+\NormalTok{  \{ ops: \textquotesingle{}IZ\textquotesingle{}, coeff: {-}0.2228 \},}
+\NormalTok{  \{ ops: \textquotesingle{}ZZ\textquotesingle{}, coeff:  0.1201 \},}
+\NormalTok{  \{ ops: \textquotesingle{}XX\textquotesingle{}, coeff:  0.1686 \},}
+\NormalTok{]}
+
+\NormalTok{ansatz\_2q = (params) =\textgreater{}}
+\NormalTok{  new ket.Circuit(2).ry(params[0], 0).ry(params[1], 1).cx(0, 1)}
+
+\NormalTok{result\_2q = ket.minimize(ansatz\_2q, H\_h2, [0.1, 0.1])}
+\NormalTok{pre(\textasciigrave{}H\textbackslash{}u2082 ground state energy: $\{result\_2q.energy.toFixed(6)\} Hartree\textbackslash{}nOptimal params:         [$\{result\_2q.params.map(p =\textgreater{} p.toFixed(3)).join(\textquotesingle{}, \textquotesingle{})\}]\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+Ground state energy of H₂ from a quantum circuit, found by optimising
+two rotation angles. For larger molecules --- where the classical
+simulation becomes intractable --- this is the kind of calculation
+quantum computers are expected to accelerate dramatically.
+
+\section{QAOA --- optimization on
+graphs}\label{qaoa-optimization-on-graphs}
+
+The \textbf{Quantum Approximate Optimization Algorithm} applies the same
+hybrid idea to combinatorial problems. Where VQE finds ground state
+energies, QAOA finds approximate solutions to optimization problems like
+Max-Cut: partition a graph's nodes into two sets to maximise the number
+of edges between them.
+
+The ansatz alternates between a problem Hamiltonian \(e^{-i\gamma H_C}\)
+(which encodes the objective) and a mixing Hamiltonian
+\(e^{-i\beta H_B}\) (which explores solutions). Depth \(p\) means \(p\)
+rounds of each.
+
+A 4-node square graph has two optimal cuts --- alternating nodes
+\(0101\) and \(1010\), each severing all 4 edges:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{qaoa\_edges = [[0,1],[1,2],[2,3],[3,0]]}
+\NormalTok{H\_maxcut = ket.maxCutHamiltonian(4, qaoa\_edges)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// p=1 QAOA}
+\NormalTok{ansatz\_qaoa1 = (params) =\textgreater{} ket.qaoa(4, qaoa\_edges, [params[0]], [params[1]])}
+\NormalTok{result\_qaoa1 = ket.minimize(ansatz\_qaoa1, H\_maxcut, [0.3, 0.7])}
+\NormalTok{svg(ansatz\_qaoa1(result\_qaoa1.params).simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// p=2 QAOA — deeper circuit, better approximation}
+\NormalTok{ansatz\_qaoa2 = (params) =\textgreater{} ket.qaoa(4, qaoa\_edges, [params[0], params[1]], [params[2], params[3]])}
+\NormalTok{result\_qaoa2 = ket.minimize(ansatz\_qaoa2, H\_maxcut, [0.3, 0.6, 0.7, 0.4])}
+\NormalTok{svg(ansatz\_qaoa2(result\_qaoa2.params).simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+At \(p=1\) the optimal states get a modest boost. At \(p=2\),
+\texttt{0101} and \texttt{1010} dominate --- the circuit has learned to
+concentrate probability on the two maximum cuts. More layers means a
+better approximation; in the limit \(p \to \infty\), QAOA finds the
+exact optimum.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}p=1 energy: $\{result\_qaoa1.energy.toFixed(4)\}   p=2 energy: $\{result\_qaoa2.energy.toFixed(4)\}   (max cut = 4)\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+The energy rises toward 4 with depth. This is the variational principle
+at work on a combinatorial problem --- the same machinery as VQE,
+applied to graphs instead of molecules.
+
+\section{Where this is going}\label{where-this-is-going}
+
+The circuits in this book run on a simulator. The algorithms are
+correct; the hardware to run them at useful scale is still being built.
+
+The near-term roadmap:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{NISQ era} (now): 100--1000 noisy qubits. VQE, QAOA, quantum ML
+  --- shallow circuits that tolerate noise.
+\item
+  \textbf{Early fault-tolerant} (\textasciitilde5--10 years): logical
+  qubits via error correction. First practical advantage for quantum
+  chemistry and optimisation.
+\item
+  \textbf{Full fault-tolerant} (\textasciitilde15+ years): millions of
+  physical qubits. Shor's at cryptographic scale, full Hamiltonian
+  simulation of useful molecules.
+\end{itemize}
+
+The mathematics in this book is complete. The engineering is the work of
+the next decade.
+
+\chapter{Backends and Classical Control}\label{sec-backends}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{//| echo: false}
+\NormalTok{ket = window.\_\_ket\_load}
+\NormalTok{svg = (s) =\textgreater{} \{ const d = document.createElement("div"); d.innerHTML = s; return d; \}}
+\NormalTok{pre = (s) =\textgreater{} \{ const d = document.createElement("pre"); d.textContent = s; return d; \}}
+\end{Highlighting}
+\end{Shaded}
+
+The same \texttt{.simulate()} call handles circuits ranging from 2
+qubits to 1000+. It does this by routing to different backends depending
+on what the circuit contains:
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Backend
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+When used
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Cost
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\textbf{Clifford} & Circuits using only H, S, X, Y, Z, CNOT, CZ, SWAP &
+\(O(n^2)\) per gate --- handles 1000+ qubits \\
+\textbf{Statevector} & General circuits, no mid-circuit measurement &
+\(O(2^n)\) memory --- exact, small \(n\) \\
+\textbf{MPS} & Low-entanglement circuits via \texttt{runMps()} &
+\(O(n \chi^3)\) --- scales with entanglement \\
+\textbf{Density matrix} & Any circuit via \texttt{run(\{\ noise\ \})} &
+\(O(4^n)\) --- exact noise simulation \\
+\end{longtable}
+
+The routing is automatic. You don't select a backend ---
+\texttt{simulate()} inspects the circuit and picks the right one.
+
+\section{Clifford circuits at scale}\label{clifford-circuits-at-scale}
+
+A \textbf{Clifford circuit} uses only stabilizer gates: H, S, X, Y, Z,
+CNOT, CZ, SWAP, and measurement. The Gottesman--Knill theorem says these
+circuits are classically simulable in polynomial time using a
+\emph{stabilizer tableau} --- a compact \(O(n^2)\) representation that
+never touches the exponential state space.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// 1000{-}qubit circuit — every qubit put in superposition}
+\NormalTok{clifford\_1000 = \{}
+\NormalTok{  let c = new ket.Circuit(1000)}
+\NormalTok{  for (let i = 0; i \textless{} 1000; i++) c = c.h(i)}
+\NormalTok{  return c.simulate(\{ shots: 200 \})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}backend: $\{clifford\_1000.backend\}   qubits: $\{clifford\_1000.qubits\}\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+A 1000-qubit statevector would need \(2^{1000}\) amplitudes --- a number
+with 300 digits. The Clifford backend handles it by never constructing
+that vector at all.
+
+The price: Clifford circuits can't produce arbitrary quantum states. The
+Clifford group is exactly the set of circuits that \emph{don't} require
+exponential classical resources to simulate. This is why random Clifford
+circuits don't give quantum advantage --- they sit inside the simulable
+region. Quantum speedup requires gates that escape it (like T, Toffoli,
+and the gates inside Shor's controlled-\(U_a\)).
+
+Here's the same 1000-qubit structure but with a CNOT chain, which is
+still Clifford:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{clifford\_ghz = \{}
+\NormalTok{  let c = new ket.Circuit(1000).h(0)}
+\NormalTok{  for (let i = 0; i \textless{} 999; i++) c = c.cx(i, i+1)}
+\NormalTok{  return c.simulate(\{ shots: 200 \})}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{pre(\textasciigrave{}backend: $\{clifford\_ghz.backend\}   qubits: $\{clifford\_ghz.qubits\}\textasciigrave{})}
+\end{Highlighting}
+\end{Shaded}
+
+Only \(|00\ldots0\rangle\) and \(|11\ldots1\rangle\) --- a 1000-qubit
+GHZ state, simulated classically in seconds.
+
+\section{Mid-circuit measurement and classical
+control}\label{mid-circuit-measurement-and-classical-control}
+
+Every circuit so far measured at the end. \texttt{ket} supports
+measuring qubits \textbf{mid-circuit} and using the classical result to
+conditionally apply gates --- the same feedback loop used in quantum
+error correction and teleportation.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Measure |+⟩, then conditionally flip a second qubit to match}
+\NormalTok{c\_midmeas = new ket.Circuit(2)}
+\NormalTok{  .h(0)}
+\NormalTok{  .measure(0, \textquotesingle{}m\textquotesingle{}, 0)}
+\NormalTok{  .if(\textquotesingle{}m\textquotesingle{}, 1, c =\textgreater{} c.x(1))}
+\NormalTok{svg(c\_midmeas.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(c\_midmeas.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Qubit 0 is measured. If it came out 1, qubit 1 is flipped. The result is
+always \(|00\rangle\) or \(|11\rangle\) --- the two qubits are forced to
+agree by classical feedback, even though they were never entangled.
+
+\subsection{Quantum teleportation}\label{quantum-teleportation}
+
+The canonical application of mid-circuit measurement is \textbf{quantum
+teleportation}: transmitting a qubit's full quantum state using only
+classical bits and a pre-shared entangled pair.
+
+The protocol:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Alice and Bob share a Bell pair (qubits 1 and 2)
+\item
+  Alice holds the qubit to teleport (qubit 0)
+\item
+  Alice entangles her qubit with her half of the Bell pair and measures
+  both
+\item
+  Alice sends her two classical measurement bits to Bob
+\item
+  Bob applies conditional X and Z corrections to his qubit
+\end{enumerate}
+
+The state of qubit 0 arrives at qubit 2 --- no quantum channel, just two
+classical bits.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Teleport |1⟩ from qubit 0 to qubit 2}
+\NormalTok{tele = new ket.Circuit(3)}
+\NormalTok{  .x(0)                         // state to teleport: |1⟩}
+\NormalTok{  .h(1).cx(1, 2)                // Bell pair on qubits 1 and 2}
+\NormalTok{  .cx(0, 1).h(0)                // Alice\textquotesingle{}s Bell{-}basis measurement}
+\NormalTok{  .measure(0, \textquotesingle{}m0\textquotesingle{}, 0)}
+\NormalTok{  .measure(1, \textquotesingle{}m1\textquotesingle{}, 0)}
+\NormalTok{  .if(\textquotesingle{}m1\textquotesingle{}, 1, c =\textgreater{} c.x(2))    // Bob\textquotesingle{}s correction: X if m1 = 1}
+\NormalTok{  .if(\textquotesingle{}m0\textquotesingle{}, 1, c =\textgreater{} c.z(2))    // Bob\textquotesingle{}s correction: Z if m0 = 1}
+\NormalTok{svg(tele.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(tele.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Alice's measurement outcomes (\(m_0\), \(m_1\)) are random and uniformly
+distributed across all four combinations. But qubit 2 --- Bob's qubit
+--- is always \(|1\rangle\) regardless of which outcome Alice got. The
+corrections steer it to the right state every time.
+
+This is what makes teleportation remarkable: the quantum information
+travels without a quantum channel. The two classical bits tell Bob which
+of four correction operations to apply, and after applying it, he holds
+the original state exactly.
+
+\section{Quantum error correction}\label{quantum-error-correction}
+
+Mid-circuit measurement makes \textbf{quantum error correction} (QEC)
+possible. The idea: encode one logical qubit across several physical
+qubits, measure \emph{parities} (not values) to detect errors, then
+correct without ever touching the logical state.
+
+The simplest code is the \textbf{3-qubit bit-flip code}:
+
+\begin{itemize}
+\tightlist
+\item
+  Encode: \(|\psi\rangle = \alpha|0\rangle + \beta|1\rangle\) →
+  \(\alpha|000\rangle + \beta|111\rangle\)
+\item
+  Two syndrome ancillas measure \(Z_0Z_1\) and \(Z_1Z_2\) --- the parity
+  of adjacent qubit pairs
+\item
+  Any single bit-flip changes exactly two parities, uniquely identifying
+  which qubit flipped
+\item
+  Classical control corrects the right qubit; the logical state is
+  unchanged
+\end{itemize}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Qubits 0,1,2 = logical data  |  qubits 3,4 = syndrome ancillas}
+\NormalTok{qec\_error = new ket.Circuit(5)}
+\NormalTok{  .h(0)                                      // logical |+⟩ to protect}
+\NormalTok{  .cx(0, 1).cx(0, 2)                         // encode}
+\NormalTok{  .x(1)                                      // inject error: flip qubit 1}
+\NormalTok{  .cx(0, 3).cx(1, 3).measure(3, \textquotesingle{}s\textquotesingle{}, 0)     // syndrome: parity(q0,q1) → s[0]}
+\NormalTok{  .cx(1, 4).cx(2, 4).measure(4, \textquotesingle{}s\textquotesingle{}, 1)     // syndrome: parity(q1,q2) → s[1]}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 1, c =\textgreater{} c.x(0))                  // s=01 → correct q0}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 3, c =\textgreater{} c.x(1))                  // s=11 → correct q1}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 2, c =\textgreater{} c.x(2))                  // s=10 → correct q2}
+\NormalTok{  .cx(0, 1).cx(0, 2)                        // decode}
+\NormalTok{svg(qec\_error.toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(qec\_error.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+The histogram shows only two outcomes --- qubit 0 is 50/50 (the original
+\(|+\rangle\) recovered), qubits 1 and 2 are always \(|0\rangle\) after
+decoding, and the syndrome ancillas (qubits 3 and 4) are always
+\(|11\rangle\), confirming that a qubit-1 error was detected and
+corrected every shot.
+
+Compare the clean case --- no error injected:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{qec\_clean = new ket.Circuit(5)}
+\NormalTok{  .h(0)}
+\NormalTok{  .cx(0, 1).cx(0, 2)}
+\NormalTok{  .cx(0, 3).cx(1, 3).measure(3, \textquotesingle{}s\textquotesingle{}, 0)}
+\NormalTok{  .cx(1, 4).cx(2, 4).measure(4, \textquotesingle{}s\textquotesingle{}, 1)}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 1, c =\textgreater{} c.x(0))}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 3, c =\textgreater{} c.x(1))}
+\NormalTok{  .if(\textquotesingle{}s\textquotesingle{}, 2, c =\textgreater{} c.x(2))}
+\NormalTok{  .cx(0, 1).cx(0, 2)}
+\NormalTok{svg(qec\_clean.simulate(\{ shots: 1000 \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+Syndrome ancillas are \(|00\rangle\) --- no error detected. Logical
+qubit 0 is still \(|+\rangle\). The parity measurements extracted error
+information without disturbing the encoded data.
+
+This is the principle behind every fault-tolerant quantum computer:
+errors are detectable and correctable because the logical state is
+spread across multiple qubits, and syndromes can be measured without
+collapsing the logical superposition.
+
+\section{Custom noise channels}\label{custom-noise-channels}
+
+The T1/T2 model from Chapter 9 describes thermal relaxation and
+dephasing. But real hardware has many other error types. \texttt{run()}
+accepts custom \textbf{Kraus operators} --- the most general way to
+describe any quantum channel.
+
+A Kraus channel \(\mathcal{E}(\rho) = \sum_k K_k \rho K_k^\dagger\) is
+valid whenever \(\sum_k K_k^\dagger K_k = I\). The simulator applies the
+channel after each single-qubit gate (pass \texttt{kraus1}) or two-qubit
+gate (pass \texttt{kraus2}).
+
+\textbf{Amplitude damping} models energy loss to the environment --- a
+qubit in \(|1\rangle\) spontaneously decays to \(|0\rangle\) with
+probability \(\gamma\):
+
+\[K_0 = \begin{pmatrix} 1 & 0 \\ 0 & \sqrt{1-\gamma} \end{pmatrix} \qquad K_1 = \begin{pmatrix} 0 & \sqrt{\gamma} \\ 0 & 0 \end{pmatrix}\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_kraus = (re, im = 0) =\textgreater{} (\{ re, im \})}
+
+\NormalTok{// Amplitude damping: qubit decays from |1⟩ to |0⟩ with probability gamma per gate}
+\NormalTok{gamma\_low  = 0.05}
+\NormalTok{gamma\_high = 0.40}
+
+\NormalTok{K0\_low  = [[c\_kraus(1), c\_kraus(0)], [c\_kraus(0), c\_kraus(Math.sqrt(1 {-} gamma\_low))]]}
+\NormalTok{K1\_low  = [[c\_kraus(0), c\_kraus(Math.sqrt(gamma\_low))],  [c\_kraus(0), c\_kraus(0)]]}
+\NormalTok{K0\_high = [[c\_kraus(1), c\_kraus(0)], [c\_kraus(0), c\_kraus(Math.sqrt(1 {-} gamma\_high))]]}
+\NormalTok{K1\_high = [[c\_kraus(0), c\_kraus(Math.sqrt(gamma\_high))], [c\_kraus(0), c\_kraus(0)]]}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{// Start in |1⟩ — amplitude damping pulls it toward |0⟩}
+\NormalTok{circ\_damp = new ket.Circuit(1).x(0)}
+\NormalTok{svg(circ\_damp.run(\{ shots: 2000, noise: \{ kraus1: [K0\_low,  K1\_low]  \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{svg(circ\_damp.run(\{ shots: 2000, noise: \{ kraus1: [K0\_high, K1\_high] \} \}).toSVG())}
+\end{Highlighting}
+\end{Shaded}
+
+At \(\gamma = 0.05\) most population stays in \(|1\rangle\). At
+\(\gamma = 0.40\) the decay is severe --- the energy loss dominates.
+Amplitude damping is not captured by dephasing alone: T2 noise
+randomises the phase but doesn't move population between \(|0\rangle\)
+and \(|1\rangle\). Kraus operators let you model both independently.
+
+\textbf{Phase damping} --- pure dephasing with no energy loss --- has
+its own Kraus form. You can also describe coherent errors, leakage to
+non-computational states, or any other physically motivated noise. The
+constraint is just \(\sum_k K_k^\dagger K_k = I\).
+
+\section{What this means}\label{what-this-means}
+
+The backend architecture reflects a real partition in quantum computing:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Clifford circuits} are classically simulable. They don't give
+  quantum advantage. They're useful for error correction codes and
+  benchmarking --- but not for computation.
+\item
+  \textbf{Non-Clifford circuits} (T gates, Toffoli, controlled
+  rotations) escape classical simulation and are where quantum advantage
+  lives.
+\item
+  \textbf{Low-entanglement circuits} (small \(\chi\)) can be handled by
+  MPS regardless of qubit count.
+\item
+  \textbf{Noisy circuits} require density matrix simulation --- the
+  state is now a \(2^n \times 2^n\) matrix, not a vector.
+\end{itemize}
+
+Mid-circuit measurement and classical control bridge classical and
+quantum computation --- they're how error-corrected logical qubits are
+implemented in practice, where syndrome measurements drive real-time
+correction without disturbing the data.
+
+\bookmarksetup{startatroot}
+
+\chapter*{API Reference}\label{sec-appendix}
+\addcontentsline{toc}{chapter}{API Reference}
+
+\markboth{API Reference}{API Reference}
+
+\section*{Circuit --- gates}\label{circuit-gates}
+\addcontentsline{toc}{section}{Circuit --- gates}
+
+\markright{Circuit --- gates}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Method
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Description
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{new\ Circuit(n)} & Create an n-qubit circuit \\
+\texttt{.h(q)} & Hadamard \\
+\texttt{.x(q)} / \texttt{.y(q)} / \texttt{.z(q)} & Pauli gates \\
+\texttt{.s(q)} / \texttt{.t(q)} & Phase / T gate \\
+\texttt{.rx(θ,\ q)} / \texttt{.ry(θ,\ q)} / \texttt{.rz(θ,\ q)} &
+Rotation gates --- angle first \\
+\texttt{.cx(ctrl,\ tgt)} & CNOT \\
+\texttt{.cz(ctrl,\ tgt)} / \texttt{.cs(ctrl,\ tgt)} & Controlled-Z /
+Controlled-S \\
+\texttt{.ccx(c1,\ c2,\ tgt)} & Toffoli (doubly controlled X) \\
+\texttt{.swap(a,\ b)} & SWAP \\
+\texttt{.measure(q?)} & Measure qubit(s); omit for all \\
+\texttt{.compose(other)} & Append another circuit \\
+\end{longtable}
+
+\section*{Circuit --- simulation}\label{circuit-simulation}
+\addcontentsline{toc}{section}{Circuit --- simulation}
+
+\markright{Circuit --- simulation}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Method
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Returns
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{.simulate(\{\ shots\ \})} & \texttt{Distribution} ---
+statevector/Clifford auto-routing \\
+\texttt{.run(\{\ shots,\ noise,\ readoutMitigation?\ \})} &
+\texttt{Distribution} --- density matrix with noise \\
+\texttt{.runMps(\{\ shots,\ maxBond?\ \})} &
+\texttt{\{\ backend,\ peakChi,\ probs,\ qubits\ \}} --- \texttt{probs}
+is a plain \texttt{\{\ bitstring:\ prob\ \}} map \\
+\texttt{.bondEntropies()} & \texttt{number{[}{]}} --- log₂ von Neumann
+entropy per bond \\
+\texttt{.stateAsArray()} &
+\texttt{{[}\{\ bitstring,\ re,\ im,\ prob,\ phase\ \}{]}} \\
+\texttt{.toSVG()} & Circuit diagram as SVG string \\
+\texttt{.draw()} & Circuit diagram as ASCII string \\
+\texttt{.blochSphere(q)} & Bloch sphere SVG for qubit q \\
+\texttt{.blochAngles(q)} & \texttt{\{\ theta,\ phi\ \}} in radians \\
+\end{longtable}
+
+\section*{Distribution}\label{distribution}
+\addcontentsline{toc}{section}{Distribution}
+
+\markright{Distribution}
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+Property / Method & Description \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{.probs} & \texttt{\{\ bitstring:\ probability\ \}} object \\
+\texttt{.toSVG()} & Histogram as SVG string \\
+\texttt{.backend} & Which backend ran the circuit \\
+\end{longtable}
+
+\section*{Algorithms}\label{algorithms-1}
+\addcontentsline{toc}{section}{Algorithms}
+
+\markright{Algorithms}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Symbol
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Signature
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Description
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{grover} & \texttt{(n,\ oracle,\ iters?)} & Grover's search;
+oracle is \texttt{(c)\ =\textgreater{}\ c} \\
+\texttt{trotter} & \texttt{(n,\ H,\ t,\ steps)} & Trotterised
+Hamiltonian simulation; H is \texttt{{[}\{ops,\ coeff\}{]}} \\
+\texttt{minimize} & \texttt{(ansatz,\ H,\ params)} & VQE; ansatz is
+\texttt{(params)\ =\textgreater{}\ Circuit} \\
+\texttt{shorBeauregard} & \texttt{(N,\ a)} (BigInt) & Beauregard Shor's;
+returns \texttt{\{\ factors,\ a,\ qubits\ \}} \\
+\texttt{factor} & \texttt{(N)} (BigInt) & Convenience wrapper around
+Shor's \\
+\texttt{qft} & \texttt{(circuit,\ qubits{[}{]})} & In-place QFT on named
+qubits \\
+\texttt{applyQft} & \texttt{(circuit,\ n,\ offset)} & QFT on n qubits at
+offset \\
+\texttt{applyIqft} & \texttt{(circuit,\ n,\ offset)} & Inverse QFT on n
+qubits at offset \\
+\texttt{DEVICES} & --- & Object of calibrated hardware noise profiles \\
+\end{longtable}
+
+\section*{Math notation glossary}\label{math-notation-glossary}
+\addcontentsline{toc}{section}{Math notation glossary}
+
+\markright{Math notation glossary}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Symbol
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Meaning
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\(\vert\psi\rangle\) & Quantum state (ket) \\
+\(\langle\psi\vert\) & Conjugate transpose (bra) \\
+\(\alpha, \beta \in \mathbb{C}\) & Complex amplitudes \\
+\(\vert\alpha\vert^2\) & Measurement probability \\
+\(\otimes\) & Tensor product \\
+\(U^\dagger\) & Conjugate transpose (inverse unitary) \\
+\(\langle H\rangle = \langle\psi\vert H\vert\psi\rangle\) & Expectation
+value \\
+\(\chi\) & MPS bond dimension \\
+\(S_\text{vN}\) & Von Neumann entanglement entropy \\
+\end{longtable}
+
+
+\backmatter
+
+
+\end{document}

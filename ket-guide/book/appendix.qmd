@@ -1,0 +1,67 @@
+# API Reference {#sec-appendix .unnumbered}
+
+## Circuit — gates
+
+| Method | Description |
+|---|---|
+| `new Circuit(n)` | Create an n-qubit circuit |
+| `.h(q)` | Hadamard |
+| `.x(q)` / `.y(q)` / `.z(q)` | Pauli gates |
+| `.s(q)` / `.t(q)` | Phase / T gate |
+| `.rx(θ, q)` / `.ry(θ, q)` / `.rz(θ, q)` | Rotation gates — angle first |
+| `.cx(ctrl, tgt)` | CNOT |
+| `.cz(ctrl, tgt)` / `.cs(ctrl, tgt)` | Controlled-Z / Controlled-S |
+| `.ccx(c1, c2, tgt)` | Toffoli (doubly controlled X) |
+| `.swap(a, b)` | SWAP |
+| `.measure(q?)` | Measure qubit(s); omit for all |
+| `.compose(other)` | Append another circuit |
+
+## Circuit — simulation
+
+| Method | Returns |
+|---|---|
+| `.simulate({ shots })` | `Distribution` — statevector/Clifford auto-routing |
+| `.run({ shots, noise, readoutMitigation? })` | `Distribution` — density matrix with noise |
+| `.runMps({ shots, maxBond? })` | `{ backend, peakChi, probs, qubits }` — `probs` is a plain `{ bitstring: prob }` map |
+| `.bondEntropies()` | `number[]` — log₂ von Neumann entropy per bond |
+| `.stateAsArray()` | `[{ bitstring, re, im, prob, phase }]` |
+| `.toSVG()` | Circuit diagram as SVG string |
+| `.draw()` | Circuit diagram as ASCII string |
+| `.blochSphere(q)` | Bloch sphere SVG for qubit q |
+| `.blochAngles(q)` | `{ theta, phi }` in radians |
+
+## Distribution
+
+| Property / Method | Description |
+|---|---|
+| `.probs` | `{ bitstring: probability }` object |
+| `.toSVG()` | Histogram as SVG string |
+| `.backend` | Which backend ran the circuit |
+
+## Algorithms
+
+| Symbol | Signature | Description |
+|---|---|---|
+| `grover` | `(n, oracle, iters?)` | Grover's search; oracle is `(c) => c` |
+| `trotter` | `(n, H, t, steps)` | Trotterised Hamiltonian simulation; H is `[{ops, coeff}]` |
+| `minimize` | `(ansatz, H, params)` | VQE; ansatz is `(params) => Circuit` |
+| `shorBeauregard` | `(N, a)` (BigInt) | Beauregard Shor's; returns `{ factors, a, qubits }` |
+| `factor` | `(N)` (BigInt) | Convenience wrapper around Shor's |
+| `qft` | `(circuit, qubits[])` | In-place QFT on named qubits |
+| `applyQft` | `(circuit, n, offset)` | QFT on n qubits at offset |
+| `applyIqft` | `(circuit, n, offset)` | Inverse QFT on n qubits at offset |
+| `DEVICES` | — | Object of calibrated hardware noise profiles |
+
+## Math notation glossary
+
+| Symbol | Meaning |
+|---|---|
+| $\vert\psi\rangle$ | Quantum state (ket) |
+| $\langle\psi\vert$ | Conjugate transpose (bra) |
+| $\alpha, \beta \in \mathbb{C}$ | Complex amplitudes |
+| $\vert\alpha\vert^2$ | Measurement probability |
+| $\otimes$ | Tensor product |
+| $U^\dagger$ | Conjugate transpose (inverse unitary) |
+| $\langle H\rangle = \langle\psi\vert H\vert\psi\rangle$ | Expectation value |
+| $\chi$ | MPS bond dimension |
+| $S_\text{vN}$ | Von Neumann entanglement entropy |

@@ -1,0 +1,72 @@
+project:
+  type: book
+  output-dir: _book
+  pre-render: sh pre-render.sh
+  resources:
+    - assets/ket.js
+
+book:
+  title: "Quantum Computing with ket"
+  subtitle: "From classical bits to Shor's algorithm"
+  author: "Elliott Kirk"
+  date: today
+  repo-url: https://github.com/dmvjs/ket
+  repo-actions: [issue]
+  chapters:
+    - index.qmd
+    - part: "The Foundations"
+      chapters:
+        - book/01-bits.qmd
+        - book/02-single-qubit.qmd
+        - book/03-superposition.qmd
+        - book/04-entanglement.qmd
+    - part: "Algorithms"
+      chapters:
+        - book/05-interference.qmd
+        - book/06-grover.qmd
+        - book/07-qft.qmd
+        - book/08-shor.qmd
+    - part: "Reality"
+      chapters:
+        - book/09-noise.qmd
+        - book/10-hamiltonian.qmd
+        - book/11-backends.qmd
+    - book/appendix.qmd
+
+format:
+  html:
+    theme:
+      light: flatly
+      dark: darkly
+    css: assets/style.css
+    include-in-header:
+      file: assets/ket-head.html
+    code-tools: true
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    smooth-scroll: true
+    highlight-style: github
+    html-math-method: mathjax
+  pdf:
+    documentclass: scrbook
+    classoption: [oneside]
+    papersize: letter
+    fontsize: 11pt
+    linestretch: 1.25
+    geometry:
+      - top=1in
+      - bottom=1in
+      - left=1.25in
+      - right=1in
+    include-in-header:
+      text: |
+        \usepackage{braket}
+        \usepackage{physics}
+        \usepackage{xcolor}
+        \definecolor{ketblue}{HTML}{1a6eb5}
+
+execute:
+  freeze: auto
+  echo: true
+  warning: false

@@ -1,0 +1,75 @@
+# Grover's Search {#sec-grover}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+```
+
+Search an unsorted list of $N$ items for the one satisfying some condition. Classically: $O(N)$ queries worst case. Grover's algorithm: $O(\sqrt{N})$ queries.
+
+That's a quadratic speedup, and it applies to *any* problem where you can write a function that recognises a correct answer.
+
+## The idea
+
+Start in uniform superposition over all $N = 2^n$ states. Each Grover iteration does two things:
+
+1. **Oracle**: phase-flip the marked state — multiply its amplitude by $-1$
+2. **Diffusion**: reflect all amplitudes around their average — amplifies the flipped state
+
+After $\approx \frac{\pi}{4}\sqrt{N}$ iterations the marked amplitude is near 1. Measure and you get the answer.
+
+## Two qubits — searching 4 items
+
+Searching for $|11\rangle$. The oracle is a CZ (phase-flips $|11\rangle$). One iteration suffices:
+
+```{ojs}
+oracle_11 = (c) => c.cz(0, 1)
+g2 = ket.grover(2, oracle_11, 1)
+svg(g2.toSVG())
+```
+
+```{ojs}
+svg(g2.simulate({ shots: 1000 }).toSVG())
+```
+
+$|11\rangle$ with certainty. One oracle call, one item in four.
+
+## Three qubits — searching 8 items
+
+Searching for $|101\rangle$. The oracle flips the middle qubit to convert $|101\rangle \to |111\rangle$, applies a multi-controlled phase flip, then undoes:
+
+```{ojs}
+oracle_101 = (c) => c.x(1).h(2).ccx(0, 1, 2).h(2).x(1)
+g3 = ket.grover(3, oracle_101)   // optimal iterations chosen automatically
+svg(g3.toSVG())
+```
+
+```{ojs}
+svg(g3.simulate({ shots: 1000 }).toSVG())
+```
+
+$|101\rangle$ dominates. Optimal iterations for $n=3$: $\approx\frac{\pi}{4}\sqrt{8} \approx 2$.
+
+## Over-iterating
+
+Grover is a rotation, not a one-way boost. Iterate past the optimum and the probability cycles back down:
+
+```{ojs}
+g3_over = ket.grover(3, oracle_101, 5)
+svg(g3_over.simulate({ shots: 1000 }).toSVG())
+```
+
+At 5 iterations — past the optimum of 2 for $n=3$ — the probability of $|101\rangle$ has decayed from ~93% back toward the noise floor. Stopping at the right point is part of the algorithm.
+
+## What Grover can and can't do
+
+Grover provides a **provable** $\sqrt{N}$ speedup for unstructured search. It speeds up brute-force components of many classical problems: constraint satisfaction, collision finding, key search.
+
+What it can't do: provide an exponential speedup. Breaking a 128-bit symmetric key classically costs $2^{128}$ operations. With Grover: $2^{64}$ — still astronomical. Symmetric cryptography needs longer keys in a quantum world, not redesign.
+
+Shor's algorithm, next, does achieve an exponential speedup — but only for structured problems like factoring.
+
+## What's next
+
+Grover's speedup comes from amplitude amplification. Shor's exponential speedup requires a more powerful subroutine: the **Quantum Fourier Transform**. Chapter 7 builds it.

@@ -1,0 +1,127 @@
+# Hamiltonians and Quantum Simulation {#sec-hamiltonian}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+Feynman's original motivation for quantum computers was simulation: classical computers are exponentially slow at simulating quantum systems. A quantum computer, being quantum itself, should be able to do it efficiently.
+
+A **Hamiltonian** is the operator that governs a quantum system's energy and time evolution. Finding its lowest-energy state — the *ground state* — answers questions in chemistry, materials science, and drug discovery that classical computers can't reach.
+
+## Hamiltonians as Pauli strings
+
+Any Hamiltonian on $n$ qubits can be written as a sum of Pauli operator products:
+
+$$H = \sum_i c_i \; P_i$$
+
+where each $P_i$ is a tensor product of $I, X, Y, Z$ across qubits — a **Pauli string**. In `ket`, each term is `{ ops: 'ZZ', coeff: -1.0 }` where the string encodes the Pauli on each qubit.
+
+## Trotter simulation
+
+To simulate time evolution $|\psi(t)\rangle = e^{-iHt}|\psi(0)\rangle$, we use **Trotterisation**: split time into small steps $\Delta t$ and apply each Pauli term separately per step:
+
+$$e^{-iHt} \approx \left(\prod_i e^{-ic_i P_i \Delta t}\right)^{N_\text{steps}}$$
+
+Evolving a single qubit under $H = X$ — starting in $|0\rangle$, at $t = \pi/2$ the state reaches $|1\rangle$ with certainty (a full population inversion):
+
+```{ojs}
+H_x = [{ ops: 'X', coeff: 1.0 }]
+trot = ket.trotter(1, H_x, Math.PI / 2, 8)
+svg(trot.toSVG())
+```
+
+```{ojs}
+evolution = new ket.Circuit(1).compose(trot)
+svg(evolution.simulate({ shots: 500 }).toSVG())
+```
+
+$|0\rangle$ has been driven to $|1\rangle$ by the Hamiltonian — the quantum analogue of Rabi oscillations in a two-level atom.
+
+## The Variational Quantum Eigensolver
+
+**VQE** is a hybrid classical-quantum algorithm for ground state energies, designed for near-term hardware with shallow, noise-tolerant circuits.
+
+Parameterise a circuit (the *ansatz*), measure the expectation value $\langle\psi(\theta)|H|\psi(\theta)\rangle$, and use a classical optimiser to minimise it. By the variational principle the minimum is an upper bound on the true ground state energy.
+
+For $H = Z$ the ground state is $|1\rangle$ with energy $-1$:
+
+```{ojs}
+H_single = [{ ops: 'Z', coeff: 1.0 }]
+ansatz_1q = (params) => new ket.Circuit(1).ry(params[0], 0)
+result_1q = ket.minimize(ansatz_1q, H_single, [0.1])
+pre(`Ground state energy: ${result_1q.energy.toFixed(6)}   (exact: -1.0)\nOptimal \u03b8:           ${result_1q.params[0].toFixed(6)} rad  (= \u03c0)`)
+```
+
+The optimiser finds $\theta = \pi$ — `ry(π)` maps $|0\rangle \to |1\rangle$. Energy $-1$, exact.
+
+## A two-qubit molecule
+
+A simplified model of the hydrogen molecule H₂ near its equilibrium bond length fits in a two-qubit Hamiltonian. The coefficients come from quantum chemistry:
+
+```{ojs}
+H_h2 = [
+  { ops: 'II', coeff: -0.8105 },
+  { ops: 'ZI', coeff:  0.1722 },
+  { ops: 'IZ', coeff: -0.2228 },
+  { ops: 'ZZ', coeff:  0.1201 },
+  { ops: 'XX', coeff:  0.1686 },
+]
+
+ansatz_2q = (params) =>
+  new ket.Circuit(2).ry(params[0], 0).ry(params[1], 1).cx(0, 1)
+
+result_2q = ket.minimize(ansatz_2q, H_h2, [0.1, 0.1])
+pre(`H\u2082 ground state energy: ${result_2q.energy.toFixed(6)} Hartree\nOptimal params:         [${result_2q.params.map(p => p.toFixed(3)).join(', ')}]`)
+```
+
+Ground state energy of H₂ from a quantum circuit, found by optimising two rotation angles. For larger molecules — where the classical simulation becomes intractable — this is the kind of calculation quantum computers are expected to accelerate dramatically.
+
+## QAOA — optimization on graphs
+
+The **Quantum Approximate Optimization Algorithm** applies the same hybrid idea to combinatorial problems. Where VQE finds ground state energies, QAOA finds approximate solutions to optimization problems like Max-Cut: partition a graph's nodes into two sets to maximise the number of edges between them.
+
+The ansatz alternates between a problem Hamiltonian $e^{-i\gamma H_C}$ (which encodes the objective) and a mixing Hamiltonian $e^{-i\beta H_B}$ (which explores solutions). Depth $p$ means $p$ rounds of each.
+
+A 4-node square graph has two optimal cuts — alternating nodes $0101$ and $1010$, each severing all 4 edges:
+
+```{ojs}
+qaoa_edges = [[0,1],[1,2],[2,3],[3,0]]
+H_maxcut = ket.maxCutHamiltonian(4, qaoa_edges)
+```
+
+```{ojs}
+// p=1 QAOA
+ansatz_qaoa1 = (params) => ket.qaoa(4, qaoa_edges, [params[0]], [params[1]])
+result_qaoa1 = ket.minimize(ansatz_qaoa1, H_maxcut, [0.3, 0.7])
+svg(ansatz_qaoa1(result_qaoa1.params).simulate({ shots: 1000 }).toSVG())
+```
+
+```{ojs}
+// p=2 QAOA — deeper circuit, better approximation
+ansatz_qaoa2 = (params) => ket.qaoa(4, qaoa_edges, [params[0], params[1]], [params[2], params[3]])
+result_qaoa2 = ket.minimize(ansatz_qaoa2, H_maxcut, [0.3, 0.6, 0.7, 0.4])
+svg(ansatz_qaoa2(result_qaoa2.params).simulate({ shots: 1000 }).toSVG())
+```
+
+At $p=1$ the optimal states get a modest boost. At $p=2$, `0101` and `1010` dominate — the circuit has learned to concentrate probability on the two maximum cuts. More layers means a better approximation; in the limit $p \to \infty$, QAOA finds the exact optimum.
+
+```{ojs}
+pre(`p=1 energy: ${result_qaoa1.energy.toFixed(4)}   p=2 energy: ${result_qaoa2.energy.toFixed(4)}   (max cut = 4)`)
+```
+
+The energy rises toward 4 with depth. This is the variational principle at work on a combinatorial problem — the same machinery as VQE, applied to graphs instead of molecules.
+
+## Where this is going
+
+The circuits in this book run on a simulator. The algorithms are correct; the hardware to run them at useful scale is still being built.
+
+The near-term roadmap:
+
+- **NISQ era** (now): 100–1000 noisy qubits. VQE, QAOA, quantum ML — shallow circuits that tolerate noise.
+- **Early fault-tolerant** (~5–10 years): logical qubits via error correction. First practical advantage for quantum chemistry and optimisation.
+- **Full fault-tolerant** (~15+ years): millions of physical qubits. Shor's at cryptographic scale, full Hamiltonian simulation of useful molecules.
+
+The mathematics in this book is complete. The engineering is the work of the next decade.

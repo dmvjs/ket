@@ -504,3 +504,54 @@ describe('shorBeauregard / factor — end-to-end', () => {
     expect(r.factor).toBeUndefined()
   })
 })
+
+describe('shorBeauregard — method reporting and retry behaviour', () => {
+  it('genuine period-finding is reported as method=quantum', () => {
+    // a=7 is coprime to 15 with period 4 — the textbook Shor case.
+    const r = shorBeauregard(15n, { a: 7n, seed: 1 })
+    expect(r.method).toBe('quantum')
+    expect(r.period).toBe(4n)
+    expect(r.factors?.[0]! * r.factors?.[1]!).toBe(15n)
+    expect(r.failure).toBeUndefined()
+  })
+
+  it('classical shortcuts are labelled, not passed off as quantum', () => {
+    expect(shorBeauregard(14n).method).toBe('classical-even')
+    // gcd(3, 15) = 3 — resolved without building a circuit
+    expect(shorBeauregard(15n, { a: 3n }).method).toBe('classical-gcd')
+  })
+
+  it('default shots recover the period in a single attempt', () => {
+    // Regression: shots defaulted to 1, so a dud QPE outcome (0 or 256 of
+    // {0,128,256,384} for N=15,a=7) failed the whole run. Sampling more
+    // outcomes per circuit build fixes it without extra circuit cost.
+    const r = shorBeauregard(15n, { a: 7n, seed: 1 })
+    expect(r.attempts).toBe(1)
+    expect(r.method).toBe('quantum')
+  })
+
+  it('a pinned bad base fails fast instead of retrying identically', () => {
+    // 5^6 ≡ 1 (mod 21) so r=6, but 5^3 = 125 ≡ 20 ≡ −1 (mod 21), which yields
+    // only trivial factors. No amount of resampling makes this base usable.
+    const r = shorBeauregard(21n, { a: 5n, seed: 1, maxAttempts: 20 })
+    expect(r.factors).toBeUndefined()
+    expect(r.failure).toBe('bad-base')
+    expect(r.attempts).toBe(1)   // bailed, did not burn all 20
+  })
+
+  it('a seed reproduces the full run including base selection', () => {
+    const a = shorBeauregard(15n, { seed: 3 })
+    const b = shorBeauregard(15n, { seed: 3 })
+    expect(a.a).toBe(b.a)
+    expect(a.method).toBe(b.method)
+    expect(a.factors).toEqual(b.factors)
+  })
+
+  it('retries vary the seed so a fresh sample is drawn each attempt', () => {
+    // maxAttempts > 1 with a pinned good base must not resample identically.
+    // Forcing precision low makes duds likely; the run should still converge.
+    const r = shorBeauregard(15n, { a: 7n, shots: 1, maxAttempts: 25, seed: 9 })
+    expect(r.factors?.[0]! * r.factors?.[1]!).toBe(15n)
+    expect(r.method).toBe('quantum')
+  })
+})

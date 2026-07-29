@@ -1,0 +1,63 @@
+# The Quantum Fourier Transform {#sec-qft}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+```
+
+The classical Fourier Transform decomposes a signal into its constituent frequencies. The **Quantum Fourier Transform** does the same to quantum amplitudes — and it's the engine behind Shor's algorithm.
+
+The key difference from the classical FFT: the QFT on $n$ qubits uses $O(n^2)$ gates, while the best classical FFT on $2^n$ data points needs $O(n \cdot 2^n)$ operations. Exponentially fewer gates.
+
+The catch: you can't read out the transformed amplitudes directly — measurement collapses them. The QFT is useful as a subroutine that restructures phases so subsequent gates can extract what you need.
+
+## What it does
+
+The QFT maps each basis state to a uniform superposition with phases encoding the input:
+
+$$\text{QFT}|j\rangle = \frac{1}{\sqrt{2^n}} \sum_{k=0}^{2^n-1} e^{2\pi i jk/2^n} |k\rangle$$
+
+Every output state has equal amplitude — measurement after a bare QFT is uniform. The information is in the phases, which interfere with subsequent gates.
+
+## The circuit
+
+```{ojs}
+qftCircuit = (n) => {
+  let c = new ket.Circuit(n)
+  ket.qft(c, Array.from({ length: n }, (_, i) => i))
+  return c
+}
+svg(qftCircuit(4).toSVG())
+```
+
+The structure: H on each qubit, followed by controlled phase rotations from subsequent qubits (angles $\pi/2^k$ decreasing), then bit-order reversal swaps. For $n=4$: 10 gates. Classical FFT on 16 points: 32 multiplications.
+
+## Phase estimation
+
+Phase estimation is the QFT's most important application. Given a unitary $U$ with eigenstate $|\psi\rangle$ satisfying $U|\psi\rangle = e^{2\pi i\phi}|\psi\rangle$, it recovers $\phi$ to $n$ bits of precision using $n$ ancilla qubits and $O(2^n)$ applications of $U$.
+
+The S gate has eigenvalue $e^{i\pi/2} = e^{2\pi i \cdot 1/4}$ on $|1\rangle$ — phase $\phi = 1/4$. With 4 precision qubits, the encoded integer is $\phi \cdot 2^4 = 4 = 0100_2$. In ket's qubit ordering (qubit 0 is LSB), this registers as ancilla bits `0010`. The histogram shows all 5 qubits — the last bit is the target staying in $|1\rangle$:
+
+```{ojs}
+qpe_s = {
+  let c = new ket.Circuit(5).x(4)             // target qubit in eigenstate |1⟩
+  for (let k = 0; k < 4; k++) c = c.h(k)     // superpose ancillas
+  for (let k = 0; k < 4; k++)                 // controlled-S^(2^k)
+    for (let p = 0; p < 2 ** k; p++) c = c.cs(k, 4)
+  return ket.applyIqft(c, 4, 0)               // inverse QFT
+}
+svg(qpe_s.toSVG())
+```
+
+```{ojs}
+svg(qpe_s.simulate({ shots: 500 }).toSVG())
+```
+
+`00101` with certainty — the 4 ancilla bits read `0010`, meaning qubit 2 is set. In LSB-first encoding that's integer 4, and $4/16 = 1/4$. Phase recovered exactly. One run, four bits of precision.
+
+## Connection to Shor's
+
+Shor's algorithm reduces factoring to period finding: given $f(x) = a^x \bmod N$, find its period $r$. Period finding is phase estimation on the unitary $U_a|x\rangle = |ax \bmod N\rangle$ — its eigenvalues encode $1/r$.
+
+Building the circuit for $U_a$ is the hard part (the Beauregard circuit). Once you have it, QPE extracts the period, and from the period, classical arithmetic gives the factors. Chapter 8 runs the whole thing.

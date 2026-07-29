@@ -1,6 +1,9 @@
 /**
  * Reads benchmark JSON from stdin, writes SVG charts, builds a markdown table,
- * and splices everything into README.md between the benchmark marker comments.
+ * and splices everything into docs/REFERENCE.md between the benchmark markers.
+ *
+ * The markers must exist — a missing pair is a hard error rather than a silent
+ * no-op, so a docs restructure can never quietly stop updating the numbers.
  *
  * Usage: node benchmark/run.mjs | node benchmark/update-readme.mjs
  */
@@ -11,8 +14,11 @@ import { fileURLToPath } from 'url'
 import { renderChart } from './chart.mjs'
 
 const root      = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const readmePath = resolve(root, 'README.md')
-const chartsDir  = resolve(root, 'benchmark', 'charts')
+const docsPath  = resolve(root, 'docs', 'REFERENCE.md')
+const chartsDir = resolve(root, 'benchmark', 'charts')
+
+const START = '<!-- benchmark:start -->'
+const END   = '<!-- benchmark:end -->'
 
 const chunks = []
 process.stdin.on('data', d => chunks.push(d))
@@ -55,37 +61,37 @@ process.stdin.on('end', () => {
     `| Random depth-4 | MPS χ=8     | 50 | ${fmt(r.mps_random_50q_chi8)} |`,
   ].join('\n')
 
+  // Paths are relative to docs/REFERENCE.md, hence the ../ prefix.
   const chartsBlock = r.charts ? [
-    '![Bell state benchmark](benchmark/charts/bell.svg)',
-    '![Uniform superposition benchmark](benchmark/charts/uniform.svg)',
-    '![QFT benchmark](benchmark/charts/qft.svg)',
+    '![Bell state benchmark](../benchmark/charts/bell.svg)',
+    '![Uniform superposition benchmark](../benchmark/charts/uniform.svg)',
+    '![QFT benchmark](../benchmark/charts/qft.svg)',
     '',
   ].join('\n') : ''
 
   const section = [
-    '<!-- benchmark:start -->',
+    START,
     '',
     'Measured on GitHub Actions `ubuntu-latest` (2-core, Node.js 22). Median of 5 runs.',
+    'Regenerated on every push to main — edits between these markers are overwritten.',
     '',
     'Statevector is exact but O(2ⁿ) — time and memory grow with the number of non-zero amplitudes, not just qubit count. Sparse circuits like Bell maintain two amplitudes at any width and run in near-constant time. Dense circuits (uniform superposition, QFT) fill all 2ⁿ entries and hit the exponential wall around 20 qubits. The MPS backend removes that ceiling for circuits with bounded entanglement.',
     '',
     chartsBlock,
     table,
     '',
-    '<!-- benchmark:end -->',
+    END,
   ].join('\n')
 
-  const readme = readFileSync(readmePath, 'utf8')
-  const start = readme.indexOf('<!-- benchmark:start -->')
-  const end   = readme.indexOf('<!-- benchmark:end -->') + '<!-- benchmark:end -->'.length
+  const doc   = readFileSync(docsPath, 'utf8')
+  const start = doc.indexOf(START)
+  const end   = doc.indexOf(END)
 
-  let updated
-  if (start !== -1 && end > start) {
-    updated = readme.slice(0, start) + section + readme.slice(end)
-  } else {
-    updated = readme.replace('## Testing\n', `## Performance\n\n${section}\n\n## Testing\n`)
+  if (start === -1 || end <= start) {
+    console.error(`error: could not find ${START} … ${END} in docs/REFERENCE.md`)
+    process.exit(1)
   }
 
-  writeFileSync(readmePath, updated)
-  console.log('README.md updated with benchmark results.')
+  writeFileSync(docsPath, doc.slice(0, start) + section + doc.slice(end + END.length))
+  console.log('docs/REFERENCE.md updated with benchmark results.')
 })

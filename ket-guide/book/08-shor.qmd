@@ -56,10 +56,13 @@ The full gate-decomposed Beauregard circuit is expensive to simulate classically
 
 | N | Qubits | Approx. simulation time |
 |---|---|---|
-| 15 | 19 | < 1s |
-| 21 | 22 | ~3s |
-| 35 | 25 | ~30s |
-| 77 | 29 | ~15 min |
+| 15 | 19 | 0.4s |
+| 21 | 23 | 3s |
+| 33 | 27 | 22s |
+| 35 | 27 | 29s |
+| 39 | 27 | 32s |
+| 51 | 27 | 52s |
+| 77 | 31 | ~15 min |
 
 Beyond N ≈ 77 the full Beauregard circuit becomes impractical to simulate exactly. The demo below takes a different path.
 

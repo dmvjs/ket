@@ -16,7 +16,7 @@
  *   6. shorBeauregard  — Full QPE Shor's circuit with retry loop
  */
 
-import { Circuit } from './circuit.js'
+import { Circuit, makePrng } from './circuit.js'
 
 // ── Qubit convention ───────────────────────────────────────────────────────────
 //
@@ -360,9 +360,23 @@ export function beauregardU(
 // ── Full Shor's QPE circuit ───────────────────────────────────────────────────
 
 /**
+ * How a factor was obtained.
+ *
+ * Only `'quantum'` means the QPE circuit actually ran and period-finding
+ * succeeded. The two `classical-*` values are the shortcuts Shor's algorithm
+ * takes before reaching for a quantum computer — they are correct answers, but
+ * they are *not* a demonstration of quantum factoring. Assert on this if you
+ * are benchmarking or writing a demo.
+ */
+export type ShorMethod =
+  | 'quantum'          // QPE ran, period recovered, factors derived from a^(r/2) ± 1
+  | 'classical-even'   // N was even — returned 2 × N/2 without building a circuit
+  | 'classical-gcd'    // random base shared a factor with N — gcd hit, no circuit built
+
+/**
  * Result of the Beauregard Shor's circuit.
  * `factor` is a non-trivial factor of N, or undefined if the run failed.
- * `attempts` is how many random bases were tried.
+ * `attempts` is how many bases were tried.
  */
 export interface ShorResult {
   readonly factor:   bigint | undefined
@@ -373,6 +387,43 @@ export interface ShorResult {
   readonly period:   bigint | undefined
   readonly attempts: number
   readonly qubits:   number
+  /** How the factors were found. `'quantum'` iff the QPE circuit ran and period-finding worked. */
+  readonly method:   ShorMethod | undefined
+  /**
+   * Set when the run failed. `'bad-base'` means the base is mathematically
+   * unusable (odd period, or a^(r/2) ≡ −1 mod N) — retrying it is pointless.
+   * `'no-period'` means no measurement yielded a valid period candidate.
+   */
+  readonly failure?: 'bad-base' | 'no-period'
+}
+
+/**
+ * Factor N into two non-trivial factors using Shor's algorithm.
+ *
+ * Convenience wrapper around {@link shorBeauregard}: handles even N classically,
+ * picks random coprime bases automatically, and retries on bad periods.
+ *
+ * **This does not guarantee a quantum factorization.** Shor's algorithm tries
+ * cheap classical shortcuts first, and for small N they hit often — an even N
+ * returns immediately, and a random base sharing a factor with N is resolved by
+ * `gcd` alone. Both return correct factors without ever building a circuit. If
+ * you need to know the QPE circuit actually ran, call {@link shorBeauregard}
+ * and check `method === 'quantum'`.
+ *
+ * @returns `[p, q]` with `p * q === N` and `1 < p, q < N`, or `undefined` if
+ *          factoring failed (N is prime, or every base gave odd/trivial periods).
+ *
+ * @example
+ * ```ts
+ * factor(15n)            // → [3n, 5n]  (may be a classical gcd hit)
+ * factor(15n, { a: 7n }) // → [5n, 3n]  via genuine period-finding
+ * ```
+ */
+export function factor(
+  N: number | bigint,
+  opts: Parameters<typeof shorBeauregard>[1] = {},
+): [bigint, bigint] | undefined {
+  return shorBeauregard(BigInt(N), opts).factors
 }
 
 /**
@@ -381,12 +432,18 @@ export interface ShorResult {
  * Builds the QPE circuit with an explicit quantum Fourier adder oracle —
  * no dense matrices, O(n³) gate count. Uses MPS simulation (required for n ≥ 7).
  *
+ * Check `method === 'quantum'` on the result to confirm period-finding ran
+ * rather than a classical shortcut succeeding first.
+ *
  * @param N         Semiprime to factor (must be odd, not a prime power).
  * @param opts.a    Base for modular exponentiation (default: random coprime to N).
+ *                  Pinning this disables base retries, so a mathematically bad
+ *                  base fails fast with `failure: 'bad-base'`.
  * @param opts.precision  QPE counting qubits (default: 2n+1 where n=⌈log₂N⌉).
- * @param opts.shots      Shots per QPE run (default: 1).
- * @param opts.maxAttempts  Maximum random-base retries (default: 20).
- * @param opts.seed  PRNG seed for reproducibility.
+ * @param opts.shots      Shots per QPE run (default: 16). Only some outcomes
+ *                        yield a usable period, so 1 shot fails often.
+ * @param opts.maxAttempts  Maximum retries (default: 20). Each attempt reseeds.
+ * @param opts.seed  PRNG seed — makes both base selection and sampling reproducible.
  *
  * Circuit layout (total = precision + 2n + 2 qubits):
  *   0..precision-1       — counting register (QPE)
@@ -394,25 +451,6 @@ export interface ShorResult {
  *   precision+n..+n      — b register (n+1 qubits, ancilla for multiplier)
  *   precision+2n+1       — ancilla qubit
  */
-/**
- * Factor N into two non-trivial factors using Shor's algorithm.
- *
- * Convenience wrapper around {@link shorBeauregard}: handles even N classically,
- * picks random coprime bases automatically, and retries on bad periods.
- *
- * @returns `[p, q]` with `p * q === N` and `1 < p, q < N`, or `undefined` if
- *          factoring failed (N is prime, or all random bases gave odd/trivial periods).
- *
- * @example
- * ```ts
- * factor(15n)  // → [3n, 5n]
- * factor(21n)  // → [3n, 7n]
- * factor(35n)  // → [5n, 7n]
- * ```
- */
-export function factor(N: number | bigint): [bigint, bigint] | undefined {
-  return shorBeauregard(BigInt(N)).factors
-}
 
 export function shorBeauregard(
   N: bigint,
@@ -427,7 +465,11 @@ export function shorBeauregard(
 ): ShorResult {
   const n          = Math.ceil(Math.log2(Number(N)))
   const precision  = opts.precision  ?? 2 * n + 1
-  const shots      = opts.shots      ?? 1
+  // Each shot is one sample of the QPE output register. Only a fraction of
+  // outcomes yield a usable period (for N=15, a=7 the good outcomes are 128 and
+  // 384 out of {0,128,256,384}), so a single shot fails outright about half the
+  // time. Sampling is far cheaper than rebuilding the circuit, so take several.
+  const shots      = opts.shots      ?? 16
   const maxTries   = opts.maxAttempts ?? 20
   const truncErr   = opts.truncErr   ?? 0
   const totalQ     = precision + 2 * n + 2
@@ -439,17 +481,22 @@ export function shorBeauregard(
 
   // Quick classical checks
   if (N < 4n) throw new RangeError('N must be ≥ 4')
-  if (N % 2n === 0n) return { factor: 2n, factors: [2n, N / 2n], a: 0n, period: undefined, attempts: 0, qubits: totalQ }
+  if (N % 2n === 0n) return { factor: 2n, factors: [2n, N / 2n], a: 0n, period: undefined, attempts: 0, qubits: totalQ, method: 'classical-even' }
 
   const Nnum = Number(N)
+  // Seeded base selection so a given `seed` reproduces the whole run, not just
+  // the measurement sampling. Falls back to Math.random when no seed is given.
+  const pickBase = opts.seed !== undefined
+    ? makePrng(opts.seed ^ 0x5eed)
+    : Math.random
 
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     // Pick a random base a with gcd(a, N) = 1
-    const aCand = opts.a ?? BigInt(2 + Math.floor(Math.random() * (Nnum - 3)))
+    const aCand = opts.a ?? BigInt(2 + Math.floor(pickBase() * (Nnum - 3)))
     const g = gcd(aCand, N)
     if (g > 1n) {
-      // Lucky: a shares a factor with N directly
-      return { factor: g, factors: [g, N / g], a: aCand, period: undefined, attempts: attempt, qubits: totalQ }
+      // Lucky: a shares a factor with N directly — no quantum circuit needed
+      return { factor: g, factors: [g, N / g], a: aCand, period: undefined, attempts: attempt, qubits: totalQ, method: 'classical-gcd' }
     }
 
     const a    = aCand
@@ -476,8 +523,14 @@ export function shorBeauregard(
     // Inverse QFT on counting register
     c = applyIqft(c, precision, 0)
 
-    // Run via MPS (handles the entanglement efficiently)
-    const dist = c.runMps({ shots, ...(opts.seed !== undefined && { seed: opts.seed }), truncErr })
+    // Run via MPS (handles the entanglement efficiently).
+    // Vary the seed per attempt — otherwise every retry rebuilds an identical
+    // circuit and resamples the identical dud outcome, turning maxAttempts into
+    // an expensive no-op.
+    const attemptSeed = opts.seed !== undefined
+      ? ((opts.seed + attempt * 0x9e3779b9) >>> 0) || 1
+      : undefined
+    const dist = c.runMps({ shots, ...(attemptSeed !== undefined && { seed: attemptSeed }), truncErr })
 
     // Extract period candidates from all measurement outcomes
     const candidates = new Set<bigint>()
@@ -490,21 +543,32 @@ export function shorBeauregard(
       candidates.add(r)
     }
 
+    // Did we recover the true period but find it unusable? That is a property of
+    // the base, not of this measurement — resampling cannot rescue it.
+    let sawBadBase = false
+
     for (const r of candidates) {
       if (r === 0n || r > N) continue
-      if (modPow(a, r, N) !== 1n) continue       // verify period
-      if (r % 2n !== 0n) continue                  // odd period — retry
+      if (modPow(a, r, N) !== 1n) continue         // not a real period — dud sample
+      if (r % 2n !== 0n) { sawBadBase = true; continue }   // odd period — bad base
       const halfPow = modPow(a, r / 2n, N)
-      if (halfPow === N - 1n) continue             // a^(r/2) ≡ -1 mod N — retry
+      if (halfPow === N - 1n) { sawBadBase = true; continue }  // a^(r/2) ≡ -1 — bad base
       const f1 = gcd(halfPow + 1n, N)
       const f2 = gcd(halfPow - 1n, N)
       for (const f of [f1, f2]) {
         if (f > 1n && f < N) {
-          return { factor: f, factors: [f, N / f], a, period: r, attempts: attempt, qubits: totalQ }
+          return { factor: f, factors: [f, N / f], a, period: r, attempts: attempt, qubits: totalQ, method: 'quantum' }
         }
       }
+      sawBadBase = true  // period valid and even, but both gcds were trivial
+    }
+
+    // A pinned base cannot be swapped out, so a proven-bad one can only fail
+    // again. Bail now instead of burning maxAttempts identical runs.
+    if (sawBadBase && opts.a !== undefined) {
+      return { factor: undefined, factors: undefined, a, period: undefined, attempts: attempt, qubits: totalQ, method: undefined, failure: 'bad-base' }
     }
   }
 
-  return { factor: undefined, factors: undefined, a: opts.a ?? 0n, period: undefined, attempts: maxTries, qubits: totalQ }
+  return { factor: undefined, factors: undefined, a: opts.a ?? 0n, period: undefined, attempts: maxTries, qubits: totalQ, method: undefined, failure: 'no-period' }
 }

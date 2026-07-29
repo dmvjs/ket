@@ -7,6 +7,11 @@
 
 import * as G from './gates.js'
 import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, probabilities, StateVector, zero } from './statevector.js'
+import {
+  simCNOT, simControlled, simCsrSwap, simCSwap, simFromSparse, simProbabilities,
+  simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary, simZero,
+  type SimState,
+} from './hybrid.js'
 import { Complex, ZERO } from './complex.js'
 import { CNOT4, controlledGate, MpsTrajectory, SWAP4, applyTrajOps, type TrajOp } from './mps.js'
 import { wt } from './worker-shim.js'
@@ -139,25 +144,36 @@ function svFromBitstring(s: string, qubits: number): StateVector {
   return new Map([[BigInt('0b' + [...s].reverse().join('')), { re: 1, im: 0 }]])
 }
 
-/** Simulate a pure (no measure/reset/if) circuit and return the statevector. */
-function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
-  let sv: StateVector = init ?? zero(qubits)
+/**
+ * Simulate a pure (no measure/reset/if) circuit on the hybrid backend.
+ *
+ * Returns the raw `SimState` so callers that only need probabilities can read a
+ * dense state directly instead of paying to materialise a `Map` of 2ⁿ entries.
+ * Callers wanting the public sparse form should use {@link simulatePure}.
+ */
+function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVector): SimState {
+  let s: SimState = init ? simFromSparse(init, qubits) : simZero(qubits)
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
-      case 'single':     sv = applySingle(sv, op.q, op.gate); break
-      case 'cnot':       sv = applyCNOT(sv, op.control, op.target); break
-      case 'controlled': sv = applyControlled(sv, op.control, op.target, op.gate); break
-      case 'swap':       sv = applySWAP(sv, op.a, op.b); break
-      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
-      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
-      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
-      case 'two':        sv = applyTwo(sv, op.a, op.b, op.gate); break
-      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'single':     s = simSingle(s, op.q, op.gate); break
+      case 'cnot':       s = simCNOT(s, op.control, op.target); break
+      case 'controlled': s = simControlled(s, op.control, op.target, op.gate); break
+      case 'swap':       s = simSWAP(s, op.a, op.b); break
+      case 'toffoli':    s = simToffoli(s, op.c1, op.c2, op.target); break
+      case 'cswap':      s = simCSwap(s, op.control, op.a, op.b); break
+      case 'csrswap':    s = simCsrSwap(s, op.control, op.a, op.b); break
+      case 'two':        s = simTwo(s, op.a, op.b, op.gate); break
+      case 'unitary':    s = simUnitary(s, op.qubits, op.matrix); break
       case 'barrier': case 'measure': case 'reset': case 'if': break
       default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
-  return sv
+  return s
+}
+
+/** Simulate a pure circuit and return the statevector in its public sparse form. */
+function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
+  return simToSparse(simulatePureState(ops, qubits, init))
 }
 
 /** Read a classical register as a little-endian integer (bit 0 = LSB). */
@@ -1069,7 +1085,7 @@ function distributeShots(shots: number, n: number): number[] {
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
 /** Seeded xorshift32 PRNG — same algorithm used by qsim for reproducibility. */
-function makePrng(seed?: number): () => number {
+export function makePrng(seed?: number): () => number {
   let s = seed !== undefined ? ((seed >>> 0) || 1) : ((Date.now() & 0xffffffff) >>> 0) || 1
   return () => {
     s ^= s << 13; s ^= s >>> 17; s ^= s << 5
@@ -3771,8 +3787,8 @@ export class Circuit {
 
     // ── Fast path: pure circuit without noise — simulate once, sample N times ──
     if (!noiseParams && !this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
-      const sv     = simulatePure(this.#ops, this.qubits, init)
-      const probs  = probabilities(sv)
+      // Sampling only needs probabilities, so skip materialising the sparse map.
+      const probs  = simProbabilities(simulatePureState(this.#ops, this.qubits, init))
       const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
 
       const cdf: { idx: bigint; cumP: number }[] = []
@@ -4069,9 +4085,10 @@ export class Circuit {
       throw new TypeError('exactProbs() requires a pure circuit — no measure, reset, or if ops')
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
-    const sv = simulatePure(this.#ops, this.qubits, init)
+    // Read probabilities off the raw state — a dense result never materialises a Map.
+    const state = simulatePureState(this.#ops, this.qubits, init)
     const out: Record<string, number> = {}
-    for (const [idx, p] of probabilities(sv)) {
+    for (const [idx, p] of simProbabilities(state)) {
       out[idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = p
     }
     return Object.freeze(out)

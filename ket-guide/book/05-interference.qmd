@@ -1,0 +1,79 @@
+# Quantum Algorithms {#sec-algorithms}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+```
+
+The ingredients are in place: superposition, single-qubit gates, multi-qubit states, entanglement. A quantum algorithm uses all of them together — amplifying the amplitudes of correct answers and cancelling the rest.
+
+The first clean example is **Deutsch–Jozsa**.
+
+## The problem
+
+You're given a black-box function $f : \{0,1\}^n \to \{0,1\}$. You're promised it's either:
+
+- **Constant** — same output for every input (all 0s or all 1s)
+- **Balanced** — exactly half the inputs map to 0, half to 1
+
+Classically, worst case requires $2^{n-1}+1$ queries — you must check more than half the inputs. Quantum mechanics does it in **one query**.
+
+## The circuit
+
+The phase oracle encodes $f$ as a phase flip $(-1)^{f(x)}$ on each basis state $|x\rangle$. The circuit is: H on all qubits → oracle → H on all qubits → measure.
+
+```{ojs}
+dj = (n, oracle) => {
+  let c = new ket.Circuit(n)
+  for (let q = 0; q < n; q++) c = c.h(q)
+  c = oracle(c)
+  for (let q = 0; q < n; q++) c = c.h(q)
+  return c
+}
+
+constantOracle = (c) => c
+balancedOracle = (c) => c.cz(0, 1)
+
+svg(dj(3, balancedOracle).toSVG())
+```
+
+**Constant oracle** — all amplitude returns to $|000\rangle$:
+
+```{ojs}
+svg(dj(3, constantOracle).simulate({ shots: 500 }).toSVG())
+```
+
+**Balanced oracle** — $|000\rangle$ amplitude cancels to zero:
+
+```{ojs}
+svg(dj(3, balancedOracle).simulate({ shots: 500 }).toSVG())
+```
+
+One circuit, one measurement, certain answer.
+
+## Why it works
+
+Apply H to all qubits: uniform superposition over all $2^n$ inputs. The oracle applies phase $(-1)^{f(x)}$ to each $|x\rangle$.
+
+**Constant**: every state gets the same phase. The second H perfectly reverses the first — all amplitude flows back to $|00\ldots0\rangle$.
+
+**Balanced**: half the states get a phase flip. The symmetry is broken. $|00\ldots0\rangle$ accumulates destructive interference — its amplitude cancels exactly to zero.
+
+This is interference doing useful work: one global property determined by the coherent interaction of all $2^n$ amplitudes simultaneously.
+
+## Bernstein–Vazirani
+
+A closely related algorithm finds a hidden $n$-bit string $s$ with a single query. The oracle computes $f(x) = s \cdot x \pmod{2}$. The circuit is identical to Deutsch–Jozsa — the measurement directly reads out $s$:
+
+```{ojs}
+// Hidden string s = 101 — phase oracle: Z on each qubit where s[i] = 1
+bvOracle = (c) => c.z(0).z(2)
+svg(dj(3, bvOracle).simulate({ shots: 500 }).toSVG())
+```
+
+The measurement gives `101` with certainty. Classically: $n$ queries. Quantum: one.
+
+## What's next
+
+Deutsch–Jozsa solves a contrived problem. Chapter 6 covers **Grover's algorithm** — a quadratic speedup for unstructured search, applicable to any problem expressible as "find the input satisfying this condition."
