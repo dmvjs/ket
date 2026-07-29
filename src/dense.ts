@@ -323,6 +323,112 @@ export function denseUnitary(d: DenseState, qs: readonly number[], matrix: reado
   }
 }
 
+// ── Measurement and channel primitives ────────────────────────────────────────
+//
+// These back the noise / mid-circuit path, where the state is repeatedly
+// projected, rescaled and sampled between gates.
+
+/** Independent copy — needed by Kraus channels, which trial every operator. */
+export const denseClone = (d: DenseState): DenseState =>
+  ({ n: d.n, data: d.data.slice() })
+
+/** Total ⟨ψ|ψ⟩. Not 1 after an unnormalised Kraus operator. */
+export function denseNorm2(d: DenseState): number {
+  const { data } = d
+  let s = 0
+  for (let i = 0; i < data.length; i += 2) s += data[i]! * data[i]! + data[i + 1]! * data[i + 1]!
+  return s
+}
+
+/** Multiply every amplitude by a real scalar. */
+export function denseScale(d: DenseState, f: number): void {
+  const { data } = d
+  for (let i = 0; i < data.length; i++) data[i]! *= f
+}
+
+/** Probability that qubit q reads 1. */
+export function denseProbOne(d: DenseState, q: number): number {
+  const { data } = d
+  const total = 1 << d.n
+  const mask = 1 << q
+  let p = 0
+  for (let i = 0; i < total; i++) {
+    if ((i & mask) !== 0) {
+      const re = data[i << 1]!, im = data[(i << 1) | 1]!
+      p += re * re + im * im
+    }
+  }
+  return p
+}
+
+/**
+ * Project onto `outcome` on qubit q and rescale the surviving branch by `inv`.
+ * The other branch is zeroed.
+ */
+export function denseCollapse(d: DenseState, q: number, outcome: 0 | 1, inv: number): void {
+  const { data } = d
+  const total = 1 << d.n
+  const mask = 1 << q
+  for (let i = 0; i < total; i++) {
+    const keep = ((i & mask) !== 0) === (outcome === 1)
+    const p = i << 1
+    if (keep) { data[p]! *= inv; data[p + 1]! *= inv }
+    else      { data[p] = 0;     data[p + 1] = 0 }
+  }
+}
+
+/** Scale the |1⟩ branch of qubit q by `sOne` and the |0⟩ branch by `sZero`. */
+export function denseScaleBranch(d: DenseState, q: number, sOne: number, sZero: number): void {
+  const { data } = d
+  const total = 1 << d.n
+  const mask = 1 << q
+  for (let i = 0; i < total; i++) {
+    const s = (i & mask) !== 0 ? sOne : sZero
+    const p = i << 1
+    data[p]! *= s; data[p + 1]! *= s
+  }
+}
+
+/**
+ * Amplitude-damping jump on qubit q: every |1⟩ amplitude moves to its |0⟩
+ * partner scaled by `inv`, and the original |1⟩ slot is cleared. Each |1⟩ index
+ * has exactly one |0⟩ partner, so this is a move, never an accumulation.
+ */
+export function denseDecay(d: DenseState, q: number, inv: number): void {
+  const { data } = d
+  const total = 1 << d.n
+  const stride = 1 << q
+  for (let i = 0; i < total; i++) {
+    if ((i & stride) !== 0) continue          // visit each pair from its |0⟩ member
+    const p0 = i << 1, p1 = (i | stride) << 1
+    data[p0]     = data[p1]! * inv
+    data[p0 + 1] = data[p1 + 1]! * inv
+    data[p1] = 0; data[p1 + 1] = 0
+  }
+}
+
+/**
+ * Sample one basis index.
+ *
+ * Walks indices in ascending order, matching the sparse sampler's sorted walk,
+ * so a given RNG draw picks the same outcome in either representation.
+ */
+export function denseSample(d: DenseState, rand: number): bigint {
+  const { data } = d
+  const total = 1 << d.n
+  let cum = 0
+  let last = 0
+  for (let i = 0; i < total; i++) {
+    const re = data[i << 1]!, im = data[(i << 1) | 1]!
+    const p = re * re + im * im
+    if (p <= 0) continue
+    last = i
+    cum += p
+    if (rand <= cum) return BigInt(i)
+  }
+  return BigInt(last)
+}
+
 /** Pack a 4×4 complex matrix into a flat f64 array: [re, im] per entry, row-major. */
 function flatten4(gate: Gate4x4): Float64Array {
   const g = new Float64Array(32)

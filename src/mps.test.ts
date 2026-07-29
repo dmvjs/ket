@@ -14,8 +14,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   mpsInit, mpsApply1, mpsApply2, mpsSample, mpsContract, mpsMaxBond, mpsTensor,
-  CNOT4, SWAP4, controlledGate, type MPS, type Tensor,
-} from './mps.js'
+  CNOT4, SWAP4, controlledGate, type MPS } from './mps.js'
 import { zero, applySingle, applyTwo, applyCNOT, applySWAP } from './statevector.js'
 import { H, X, Y, Z, S, T, Rx, Ry, Rz, Xx, Yy, Zz } from './gates.js'
 import type { Gate2x2, Gate4x4, StateVector } from './statevector.js'
@@ -34,7 +33,7 @@ const log  = (...a: unknown[]) => console.log(...a)
 
 const sq2 = 1 / Math.sqrt(2)
 const EPS = 1e-10  // tight tolerance for exact circuits
-const EPS_STAT = 0.05  // statistical tolerance for sample-based checks
+const _EPS_STAT = 0.05  // statistical tolerance for sample-based checks
 
 /** Sum of |amplitude|² for MPS full contraction. Must equal 1. */
 function mpsNorm(mps: MPS): number {
@@ -79,11 +78,11 @@ function sampleMPS(mps: MPS, shots: number, seed = 42): Map<string, number> {
 }
 
 /** Chi-squared p-value test (returns true if sample matches expected probs). */
-function chiSquaredPass(
+function _chiSquaredPass(
   freq: Map<string, number>,
   expected: Record<string, number>,
   shots: number,
-  threshold = 0.001,
+  _threshold = 0.001,
 ): boolean {
   let chi2 = 0
   for (const [k, p] of Object.entries(expected)) {
@@ -113,7 +112,7 @@ function ghzState(n: number, maxBond = 64): MPS {
 }
 
 /** Full statevector for cross-validation (small n only). */
-function referenceSV(n: number, gateSeq: Array<[string, ...number[]]>): StateVector {
+function _referenceSV(n: number, gateSeq: Array<[string, ...number[]]>): StateVector {
   let sv = zero(n)
   for (const [kind, ...args] of gateSeq) {
     switch (kind) {
@@ -990,7 +989,7 @@ describe('sampling — statistical correctness', () => {
   it('GHZ n=4: only |0000⟩ and |1111⟩ ever sampled', () => {
     const mps = ghzState(4)
     const freq = sampleMPS(mps, SHOTS, SEED)
-    for (const [k, v] of freq) {
+    for (const [k, _v] of freq) {
       expect(k === '0000' || k === '1111').toBe(true)
     }
     // Marginals
@@ -1056,10 +1055,10 @@ describe('sampling — statistical correctness', () => {
 describe('large-scale circuits — n=50+ qubits', () => {
   it('n=50 GHZ state: correct final amplitude structure', () => {
     const mps = ghzState(50, 64)
-    const norm = mpsNorm(mps)
+    const _norm = mpsNorm(mps)
     // Can't contract 2^50 amplitudes — use sampling instead
     const freq = sampleMPS(mps, 200, SEED)
-    for (const [k, v] of freq) {
+    for (const [k, _v] of freq) {
       expect(k === '0'.repeat(50) || k === '1'.repeat(50)).toBe(true)
     }
   })

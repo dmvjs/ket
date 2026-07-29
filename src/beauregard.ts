@@ -500,7 +500,6 @@ export function shorBeauregard(
     }
 
     const a    = aCand
-    const aInv = modInverse(a, N)
 
     // Build QPE circuit
     let c = new Circuit(totalQ)

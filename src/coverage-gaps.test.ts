@@ -7,9 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, DEVICES, IONQ_DEVICES } from './circuit.js'
 import { CliffordSim } from './clifford.js'
-import { trotter, iqft, qft, grover, vqe } from './algorithms.js'
+import { trotter, vqe } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
-import { c, add, mul, conj, norm2, ZERO, ONE, I } from './complex.js'
 
 // ─── pauliEvolution — Y-term sign ────────────────────────────────────────────
 //

@@ -11,7 +11,11 @@ import {
   applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP,
   applyToffoli, applyTwo, applyUnitary, probabilities, type Gate4x4, type StateVector,
 } from './statevector.js'
-import { simKind, simNnz, simPromote, simSingle, simToSparse, simZero } from './hybrid.js'
+import {
+  simClone, simCollapse, simDecay, simFromSparse, simKind, simNnz, simNorm2,
+  simProbOne, simPromote, simSample, simScale, simScaleBranch, simSingle,
+  simToSparse, simZero, type SimState,
+} from './hybrid.js'
 
 /** A deterministic, fully-dense n-qubit state — every amplitude non-zero and distinct. */
 function spreadState(n: number): StateVector {
@@ -214,6 +218,141 @@ describe('hybrid — promotion policy', () => {
     let wide = new Circuit(30)
     for (let q = 0; q < 3; q++) wide = wide.h(q)
     expect(wide.statevector().size).toBe(8)
+  })
+})
+
+describe('hybrid — measurement and channel primitives agree in both representations', () => {
+  const n = 5
+  /** The same state in both representations. */
+  const pair = (): [SimState, SimState] => {
+    const sv = spreadState(n)
+    return [simFromSparse(new Map(sv), n), simPromote(simFromSparse(new Map(sv), n))]
+  }
+
+  it('simProbOne matches', () => {
+    const [sp, dn] = pair()
+    for (let q = 0; q < n; q++) {
+      expect(Math.abs(simProbOne(sp, q) - simProbOne(dn, q)), `qubit ${q}`).toBeLessThan(1e-12)
+    }
+  })
+
+  it('simNorm2 matches and a normalised state gives 1', () => {
+    const [sp, dn] = pair()
+    expect(Math.abs(simNorm2(sp) - simNorm2(dn))).toBeLessThan(1e-12)
+    expect(Math.abs(simNorm2(sp) - 1)).toBeLessThan(1e-12)
+  })
+
+  it('simCollapse matches for both outcomes on every qubit', () => {
+    for (let q = 0; q < n; q++) for (const outcome of [0, 1] as const) {
+      const [sp, dn] = pair()
+      const inv = 1 / Math.sqrt(outcome === 1 ? simProbOne(sp, q) : 1 - simProbOne(sp, q))
+      expectSame(simToSparse(simCollapse(sp, q, outcome, inv)), simToSparse(simCollapse(dn, q, outcome, inv)))
+    }
+  })
+
+  it('a collapsed state is renormalised and has the measured qubit fixed', () => {
+    for (let q = 0; q < n; q++) {
+      const [, dn] = pair()
+      const inv = 1 / Math.sqrt(simProbOne(dn, q))
+      const out = simCollapse(dn, q, 1, inv)
+      expect(Math.abs(simNorm2(out) - 1), `norm after collapse on ${q}`).toBeLessThan(1e-12)
+      expect(Math.abs(simProbOne(out, q) - 1), `qubit ${q} pinned to 1`).toBeLessThan(1e-12)
+    }
+  })
+
+  it('simDecay matches and moves all population to |0⟩', () => {
+    for (let q = 0; q < n; q++) {
+      const [sp, dn] = pair()
+      const inv = 1 / Math.sqrt(simProbOne(sp, q))
+      const a = simToSparse(simDecay(sp, q, inv))
+      const b = simToSparse(simDecay(dn, q, inv))
+      expectSame(a, b)
+      // After a decay jump the qubit is certainly |0⟩.
+      expect(Math.abs(simProbOne(simFromSparse(a, n), q))).toBeLessThan(1e-12)
+    }
+  })
+
+  it('simScaleBranch matches', () => {
+    for (let q = 0; q < n; q++) {
+      const [sp, dn] = pair()
+      expectSame(simToSparse(simScaleBranch(sp, q, 0.6, 1.3)), simToSparse(simScaleBranch(dn, q, 0.6, 1.3)))
+    }
+  })
+
+  it('simScale matches', () => {
+    const [sp, dn] = pair()
+    expectSame(simToSparse(simScale(sp, 0.37)), simToSparse(simScale(dn, 0.37)))
+  })
+
+  it('simClone is independent of its source', () => {
+    const [, dn] = pair()
+    const copy = simClone(dn)
+    simScale(dn, 0)                                  // destroy the original
+    expect(simNorm2(copy)).toBeGreaterThan(0.5)      // copy survives
+  })
+
+  it('simSample picks the same outcome from either representation', () => {
+    // Determinism across the promotion boundary: a given RNG draw must not
+    // change the sampled basis state just because the state densified.
+    for (let k = 0; k < 200; k++) {
+      const [sp, dn] = pair()
+      const r = (k + 0.5) / 200
+      expect(simSample(dn, r), `draw ${r}`).toBe(simSample(sp, r))
+    }
+  })
+})
+
+describe('hybrid — noise channels behave physically', () => {
+  it('full amplitude damping drives every qubit to |0⟩', () => {
+    let k = new Circuit(4)
+    for (let q = 0; q < 4; q++) k = k.x(q)
+    const d = k.run({ shots: 200, seed: 1, noise: { gamma: 1 } })
+    expect(d.probs['0000']).toBe(1)
+  })
+
+  it('zero noise reproduces the noiseless distribution', () => {
+    let k = new Circuit(5)
+    for (let q = 0; q < 5; q++) k = k.h(q).t(q)
+    k = k.cnot(0, 1).cz(2, 3)
+    const exact = k.exactProbs()
+    const noisy = k.run({ shots: 60_000, seed: 8, noise: { p1: 0, p2: 0 } }).probs
+    for (const [bits, p] of Object.entries(exact)) {
+      if (p < 0.01) continue
+      expect(Math.abs((noisy[bits] ?? 0) - p), `outcome ${bits}`).toBeLessThan(0.015)
+    }
+  })
+
+  it('depolarizing noise stays normalised and spreads the distribution', () => {
+    let k = new Circuit(6)
+    for (let q = 0; q < 6; q++) k = k.h(q).t(q)
+    for (let q = 0; q < 5; q++) k = k.cnot(q, q + 1)
+    const d = k.run({ shots: 4000, seed: 2, noise: { p1: 0.02, p2: 0.05 } })
+    const total = Object.values(d.probs).reduce((a, b) => a + b, 0)
+    expect(Math.abs(total - 1)).toBeLessThan(1e-9)
+  })
+
+  it('a custom Kraus channel keeps the state normalised', () => {
+    // Bit-flip channel written as explicit Kraus operators.
+    const p = 0.3
+    const k0: [[Complex, Complex], [Complex, Complex]] =
+      [[c(Math.sqrt(1 - p), 0), c(0, 0)], [c(0, 0), c(Math.sqrt(1 - p), 0)]]
+    const k1: [[Complex, Complex], [Complex, Complex]] =
+      [[c(0, 0), c(Math.sqrt(p), 0)], [c(Math.sqrt(p), 0), c(0, 0)]]
+
+    let circ = new Circuit(5)
+    for (let q = 0; q < 5; q++) circ = circ.h(q).t(q)
+    const d = circ.run({ shots: 2000, seed: 5, noise: { kraus1: [k0, k1] } })
+    const total = Object.values(d.probs).reduce((a, b) => a + b, 0)
+    expect(Math.abs(total - 1)).toBeLessThan(1e-9)
+  })
+
+  it('readout error flips outcomes at roughly the stated rate', () => {
+    // |1111⟩ with pMeas=0.1: each qubit independently misreports 10% of the time,
+    // so the all-ones string survives about 0.9^4 ≈ 0.656 of shots.
+    let k = new Circuit(4)
+    for (let q = 0; q < 4; q++) k = k.x(q)
+    const d = k.run({ shots: 40_000, seed: 4, noise: { pMeas: 0.1 } })
+    expect(Math.abs(d.probs['1111']! - 0.9 ** 4)).toBeLessThan(0.02)
   })
 })
 

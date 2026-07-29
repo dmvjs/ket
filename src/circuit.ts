@@ -6,11 +6,12 @@
  */
 
 import * as G from './gates.js'
-import { applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP, applyToffoli, applyTwo, applyUnitary, Gate2x2, Gate4x4, StateVector, zero } from './statevector.js'
+import { Gate2x2, Gate4x4, StateVector } from './statevector.js'
 import {
-  simCNOT, simControlled, simCsrSwap, simCSwap, simFromSparse, simProbabilities,
-  simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary, simZero,
-  type SimState,
+  simClone, simCNOT, simCollapse, simControlled, simCsrSwap, simCSwap, simDecay,
+  simFromSparse, simNorm2, simProbabilities, simProbOne, simSample, simScale,
+  simScaleBranch, simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary,
+  simZero, type SimState,
 } from './hybrid.js'
 import { Complex, ZERO } from './complex.js'
 import { controlledGate, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
@@ -57,32 +58,11 @@ export type FlatOp = Exclude<Op, SubcircuitOp | ParametricOp>
  * Project the statevector onto the given qubit outcome and renormalize.
  * rand: a uniform random number in [0, 1) used to sample the outcome.
  */
-function collapseQubit(sv: StateVector, q: number, rand: number): { outcome: 0 | 1; sv: StateVector } {
-  const mask = 1n << BigInt(q)
-  let p1 = 0
-  for (const [idx, amp] of sv) {
-    if ((idx & mask) !== 0n) p1 += amp.re * amp.re + amp.im * amp.im
-  }
+function collapseQubit(s: SimState, q: number, rand: number): { outcome: 0 | 1; state: SimState } {
+  const p1 = simProbOne(s, q)
   const outcome: 0 | 1 = rand < p1 ? 1 : 0
   const invNorm = 1 / Math.sqrt(outcome === 1 ? p1 : 1 - p1)
-  const next: StateVector = new Map()
-  for (const [idx, amp] of sv) {
-    if (outcome === 1 ? (idx & mask) !== 0n : (idx & mask) === 0n) {
-      next.set(idx, { re: amp.re * invNorm, im: amp.im * invNorm })
-    }
-  }
-  return { outcome, sv: next }
-}
-
-/** Sample one basis-state index from a statevector using a uniform random number. */
-function sampleSV(sv: StateVector, rand: number): bigint {
-  const sorted = Array.from(sv.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
-  let cum = 0
-  for (const [idx, amp] of sorted) {
-    cum += amp.re * amp.re + amp.im * amp.im
-    if (rand <= cum) return idx
-  }
-  return sorted.at(-1)?.[0] ?? 0n
+  return { outcome, state: simCollapse(s, q, outcome, invNorm) }
 }
 
 /** Remap every qubit index in `op` through `qmap` (qmap[subcircuit-qubit] = parent-qubit). */
@@ -182,8 +162,8 @@ function cregValue(shotCregs: Map<string, boolean[]>, name: string): number {
 }
 
 /** Apply ops to `sv`, handling mid-circuit measurement with `rng`. Recursive for IfOp. */
-function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, boolean[]>, rng: () => number, noise?: NoiseParams): StateVector {
-  let sv = svIn
+function applyOps(ops: readonly Op[], stateIn: SimState, shotCregs: Map<string, boolean[]>, rng: () => number, noise?: NoiseParams): SimState {
+  let s = stateIn
   const p1     = noise?.p1     ?? 0
   const p2     = noise?.p2     ?? 0
   const pM     = noise?.pMeas  ?? 0
@@ -192,64 +172,64 @@ function applyOps(ops: readonly Op[], svIn: StateVector, shotCregs: Map<string, 
   const kraus1 = noise?.kraus1
   const kraus2 = noise?.kraus2
 
-  const noise1 = (s: StateVector, q: number): StateVector => {
-    if (p1)     s = dep1(s, q, p1, rng())
-    if (gamma)  s = dampAmp1(s, q, gamma, rng())
-    if (lambda) s = dampPhase1(s, q, lambda, rng())
-    if (kraus1) s = applyKraus1Channel(s, q, kraus1, rng)
-    return s
+  const noise1 = (st: SimState, q: number): SimState => {
+    if (p1)     st = dep1(st, q, p1, rng())
+    if (gamma)  st = dampAmp1(st, q, gamma, rng())
+    if (lambda) st = dampPhase1(st, q, lambda, rng())
+    if (kraus1) st = applyKraus1Channel(st, q, kraus1, rng)
+    return st
   }
-  const noise2 = (s: StateVector, qa: number, qb: number): StateVector => {
-    if (p2)     s = dep2(s, qa, qb, p2, rng())
-    if (gamma)  { s = dampAmp1(s, qa, gamma, rng()); s = dampAmp1(s, qb, gamma, rng()) }
-    if (lambda) { s = dampPhase1(s, qa, lambda, rng()); s = dampPhase1(s, qb, lambda, rng()) }
-    if (kraus2) s = applyKraus2Channel(s, qa, qb, kraus2, rng)
-    return s
+  const noise2 = (st: SimState, qa: number, qb: number): SimState => {
+    if (p2)     st = dep2(st, qa, qb, p2, rng())
+    if (gamma)  { st = dampAmp1(st, qa, gamma, rng()); st = dampAmp1(st, qb, gamma, rng()) }
+    if (lambda) { st = dampPhase1(st, qa, lambda, rng()); st = dampPhase1(st, qb, lambda, rng()) }
+    if (kraus2) st = applyKraus2Channel(st, qa, qb, kraus2, rng)
+    return st
   }
 
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
       case 'single':
-        sv = noise1(applySingle(sv, op.q, op.gate), op.q)
+        s = noise1(simSingle(s, op.q, op.gate), op.q)
         break
       case 'cnot':
-        sv = noise2(applyCNOT(sv, op.control, op.target), op.control, op.target)
+        s = noise2(simCNOT(s, op.control, op.target), op.control, op.target)
         break
       case 'controlled':
-        sv = noise2(applyControlled(sv, op.control, op.target, op.gate), op.control, op.target)
+        s = noise2(simControlled(s, op.control, op.target, op.gate), op.control, op.target)
         break
       case 'swap':
-        sv = noise2(applySWAP(sv, op.a, op.b), op.a, op.b)
+        s = noise2(simSWAP(s, op.a, op.b), op.a, op.b)
         break
-      case 'toffoli':    sv = applyToffoli(sv, op.c1, op.c2, op.target); break
-      case 'cswap':      sv = applyCSwap(sv, op.control, op.a, op.b); break
-      case 'csrswap':    sv = applyCsrSwap(sv, op.control, op.a, op.b); break
+      case 'toffoli':    s = simToffoli(s, op.c1, op.c2, op.target); break
+      case 'cswap':      s = simCSwap(s, op.control, op.a, op.b); break
+      case 'csrswap':    s = simCsrSwap(s, op.control, op.a, op.b); break
       case 'two':
-        sv = noise2(applyTwo(sv, op.a, op.b, op.gate), op.a, op.b)
+        s = noise2(simTwo(s, op.a, op.b, op.gate), op.a, op.b)
         break
-      case 'unitary':    sv = applyUnitary(sv, op.qubits, op.matrix); break
+      case 'unitary':    s = simUnitary(s, op.qubits, op.matrix); break
       case 'measure': {
-        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
+        const { outcome, state } = collapseQubit(s, op.q, rng())
         const reported: 0 | 1 = pM && rng() < pM ? (outcome === 1 ? 0 : 1) : outcome
-        sv = next
+        s = state
         const reg = shotCregs.get(op.creg)
         if (reg) reg[op.bit] = reported === 1
         break
       }
       case 'reset': {
-        const { outcome, sv: next } = collapseQubit(sv, op.q, rng())
-        sv = next
-        if (outcome === 1) sv = applySingle(sv, op.q, G.X)
+        const { outcome, state } = collapseQubit(s, op.q, rng())
+        s = state
+        if (outcome === 1) s = simSingle(s, op.q, G.X)
         break
       }
       case 'if':
-        if (cregValue(shotCregs, op.creg) === op.value) sv = applyOps(op.ops, sv, shotCregs, rng, noise)
+        if (cregValue(shotCregs, op.creg) === op.value) s = applyOps(op.ops, s, shotCregs, rng, noise)
         break
       case 'barrier': break
       default: { const _exhaustive: never = op; void _exhaustive }
     }
   }
-  return sv
+  return s
 }
 
 // ─── Noise simulation ─────────────────────────────────────────────────────────
@@ -371,21 +351,21 @@ const TWO_PAULI_IDX: readonly [number, number][] = [
 ]
 
 /** Apply single-qubit depolarizing channel: random Pauli X/Y/Z with total probability p. */
-function dep1(sv: StateVector, q: number, p: number, rand: number): StateVector {
-  if (rand >= p) return sv
+function dep1(s: SimState, q: number, p: number, rand: number): SimState {
+  if (rand >= p) return s
   const r = rand / p
-  if (r < 1/3) return applySingle(sv, q, G.X)
-  if (r < 2/3) return applySingle(sv, q, G.Y)
-  return applySingle(sv, q, G.Z)
+  if (r < 1/3) return simSingle(s, q, G.X)
+  if (r < 2/3) return simSingle(s, q, G.Y)
+  return simSingle(s, q, G.Z)
 }
 
 /** Apply two-qubit depolarizing channel: random non-identity 2-qubit Pauli with total probability p. */
-function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): StateVector {
-  if (rand >= p) return sv
+function dep2(s: SimState, a: number, b: number, p: number, rand: number): SimState {
+  if (rand >= p) return s
   const [pa, pb] = TWO_PAULI[Math.min(Math.floor(rand / p * 15), 14)]!
-  if (pa) sv = applySingle(sv, a, pa)
-  if (pb) sv = applySingle(sv, b, pb)
-  return sv
+  if (pa) s = simSingle(s, a, pa)
+  if (pb) s = simSingle(s, b, pb)
+  return s
 }
 
 /**
@@ -393,39 +373,18 @@ function dep2(sv: StateVector, a: number, b: number, p: number, rand: number): S
  * K0 = diag(1, √(1−γ)) (no decay), K1 = [[0,√γ],[0,0]] (decay |1⟩→|0⟩).
  * Uses one random number: fires K1 with probability γ·P(q=1), otherwise K0.
  */
-function dampAmp1(sv: StateVector, q: number, gamma: number, rand: number): StateVector {
-  const mask = 1n << BigInt(q)
-  let p1 = 0
-  for (const [idx, amp] of sv) {
-    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
-  }
+function dampAmp1(s: SimState, q: number, gamma: number, rand: number): SimState {
+  const p1 = simProbOne(s, q)
   const pJump = gamma * p1
-  if (pJump < JUMP_THRESHOLD) return sv
+  if (pJump < JUMP_THRESHOLD) return s
 
   if (rand < pJump) {
     // K1 fires: decay |1⟩ → |0⟩ (equivalent to project-to-|1⟩ then X)
-    const scale = 1 / Math.sqrt(p1)
-    const next: StateVector = new Map()
-    for (const [idx, amp] of sv) {
-      if (idx & mask) {
-        const flipped = idx ^ mask
-        const cur = next.get(flipped)
-        if (cur) next.set(flipped, { re: cur.re + amp.re * scale, im: cur.im + amp.im * scale })
-        else     next.set(flipped, { re: amp.re * scale,           im: amp.im * scale })
-      }
-    }
-    return next
-  } else {
-    // K0 fires: damp |1⟩ amplitudes, renormalize
-    const sqG = Math.sqrt(1 - gamma)
-    const inv = 1 / Math.sqrt(1 - pJump)
-    const next: StateVector = new Map()
-    for (const [idx, amp] of sv) {
-      const s = (idx & mask) ? sqG * inv : inv
-      next.set(idx, { re: amp.re * s, im: amp.im * s })
-    }
-    return next
+    return simDecay(s, q, 1 / Math.sqrt(p1))
   }
+  // K0 fires: damp |1⟩ amplitudes, renormalize
+  const inv = 1 / Math.sqrt(1 - pJump)
+  return simScaleBranch(s, q, Math.sqrt(1 - gamma) * inv, inv)
 }
 
 /**
@@ -433,104 +392,66 @@ function dampAmp1(sv: StateVector, q: number, gamma: number, rand: number): Stat
  * K0 = diag(1, √(1−λ)) (no dephasing), K1 = diag(0, √λ) (dephasing, projects to |1⟩).
  * Kills off-diagonal coherences without changing populations.
  */
-function dampPhase1(sv: StateVector, q: number, lambda: number, rand: number): StateVector {
-  const mask = 1n << BigInt(q)
-  let p1 = 0
-  for (const [idx, amp] of sv) {
-    if (idx & mask) p1 += amp.re * amp.re + amp.im * amp.im
-  }
+function dampPhase1(s: SimState, q: number, lambda: number, rand: number): SimState {
+  const p1 = simProbOne(s, q)
   const pJump = lambda * p1
-  if (pJump < JUMP_THRESHOLD) return sv
+  if (pJump < JUMP_THRESHOLD) return s
 
   if (rand < pJump) {
     // K1 fires: project to |1⟩ (dephasing collapse)
-    const scale = 1 / Math.sqrt(p1)
-    const next: StateVector = new Map()
-    for (const [idx, amp] of sv) {
-      if (idx & mask) next.set(idx, { re: amp.re * scale, im: amp.im * scale })
-    }
-    return next
-  } else {
-    // K0 fires: damp |1⟩ amplitudes, renormalize
-    const sqL = Math.sqrt(1 - lambda)
-    const inv = 1 / Math.sqrt(1 - pJump)
-    const next: StateVector = new Map()
-    for (const [idx, amp] of sv) {
-      const s = (idx & mask) ? sqL * inv : inv
-      next.set(idx, { re: amp.re * s, im: amp.im * s })
-    }
-    return next
+    return simCollapse(s, q, 1, 1 / Math.sqrt(p1))
   }
+  // K0 fires: damp |1⟩ amplitudes, renormalize
+  const inv = 1 / Math.sqrt(1 - pJump)
+  return simScaleBranch(s, q, Math.sqrt(1 - lambda) * inv, inv)
 }
 
 /**
- * Apply a custom single-qubit Kraus channel on qubit q.
- * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
+ * Apply a custom Kraus channel by trialling every operator.
+ *
+ * For each K_k it computes ‖K_k|ψ⟩‖², samples one branch with that weight, and
+ * renormalises. Each trial needs its own copy of the state, since the dense
+ * kernel applies gates in place.
  */
-function applyKraus1Channel(sv: StateVector, q: number, kraus: readonly Gate2x2[], rng: () => number): StateVector {
+function applyKrausChannel(
+  s: SimState,
+  kraus: readonly (Gate2x2 | Gate4x4)[],
+  rng: () => number,
+  apply: (state: SimState, K: never) => SimState,
+): SimState {
+  const probs:   number[]   = []
+  const results: SimState[] = []
   let cumP = 0
-  const probs: number[] = []
-  const results: StateVector[] = []
+
   for (const K of kraus) {
-    const out = applySingle(sv, q, K)
-    let p = 0
-    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
+    const out = apply(simClone(s), K as never)
+    const p   = simNorm2(out)
     probs.push(p)
     results.push(out)
     cumP += p
   }
+
   let r = rng() * cumP
   for (let k = 0; k < results.length; k++) {
     r -= probs[k]!
-    if (r <= 0) {
-      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
-      const next: StateVector = new Map()
-      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
-      return next
-    }
+    if (r <= 0) return simScale(results[k]!, probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0)
   }
-  // Floating-point rounding guard: cumP ≈ 1 for a valid channel; residual r > 0 is epsilon.
-  // Return the last operator's result rather than the un-evolved state.
+  // Floating-point rounding guard: cumP ≈ 1 for a valid channel; residual r > 0 is
+  // epsilon. Return the last operator's result rather than the un-evolved state.
   const last = results.length - 1
-  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
-  const fallback: StateVector = new Map()
-  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
-  return fallback
+  return simScale(results[last]!, probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0)
 }
 
-/**
- * Apply a custom two-qubit Kraus channel on qubits a and b.
- * Computes ||K_k|ψ⟩||² for each operator, samples one, applies and normalises.
- */
-function applyKraus2Channel(sv: StateVector, a: number, b: number, kraus: readonly Gate4x4[], rng: () => number): StateVector {
-  let cumP = 0
-  const probs: number[] = []
-  const results: StateVector[] = []
-  for (const K of kraus) {
-    const out = applyTwo(sv, a, b, K)
-    let p = 0
-    for (const amp of out.values()) p += amp.re * amp.re + amp.im * amp.im
-    probs.push(p)
-    results.push(out)
-    cumP += p
-  }
-  let r = rng() * cumP
-  for (let k = 0; k < results.length; k++) {
-    r -= probs[k]!
-    if (r <= 0) {
-      const inv = probs[k]! > 0 ? 1 / Math.sqrt(probs[k]!) : 0
-      const next: StateVector = new Map()
-      for (const [idx, amp] of results[k]!) next.set(idx, { re: amp.re * inv, im: amp.im * inv })
-      return next
-    }
-  }
-  // Floating-point rounding guard: return last operator's result.
-  const last = results.length - 1
-  const invLast = probs[last]! > 0 ? 1 / Math.sqrt(probs[last]!) : 0
-  const fallback: StateVector = new Map()
-  for (const [idx, amp] of results[last]!) fallback.set(idx, { re: amp.re * invLast, im: amp.im * invLast })
-  return fallback
+/** Apply a custom single-qubit Kraus channel on qubit q. */
+function applyKraus1Channel(s: SimState, q: number, kraus: readonly Gate2x2[], rng: () => number): SimState {
+  return applyKrausChannel(s, kraus, rng, (st, K) => simSingle(st, q, K as Gate2x2))
 }
+
+/** Apply a custom two-qubit Kraus channel on qubits a and b. */
+function applyKraus2Channel(s: SimState, a: number, b: number, kraus: readonly Gate4x4[], rng: () => number): SimState {
+  return applyKrausChannel(s, kraus, rng, (st, K) => simTwo(st, a, b, K as Gate4x4))
+}
+
 
 // ─── IonQ JSON types ──────────────────────────────────────────────────────────
 
@@ -2475,7 +2396,7 @@ export class Circuit {
       if (rst) { c = c.reset(parseInt(rst[1]!)); continue }
 
       // gatename[(params)] q[i](,q[j])*
-      const gate = stmt.match(/^(\w+)(?:\(([^)]*)\))?\s+([\w\[\],\s]+)$/)
+      const gate = stmt.match(/^(\w+)(?:\(([^)]*)\))?\s+([\w[\],\s]+)$/)
       if (gate) {
         const name   = gate[1]!
         const params = gate[2] ? gate[2].split(',').map(p => parseAngle(p)) : []
@@ -3100,7 +3021,6 @@ export class Circuit {
    * controlled rotations via Controlled Rx/Ry/Rz. Throws for gpi/gpi2/ms/two-qubit interaction gates/if.
    */
   toQSharp(): string {
-    const pi = 'PI()'
     // Q# needs float literals for division: PI()/2.0 not PI()/2
     const qsharpAngle = (r: number): string => {
       if (Math.abs(r) < 1e-14) return '0.0'
@@ -3881,10 +3801,14 @@ export class Circuit {
         Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
       )
 
-      const sv = applyOps(this.#ops, init ?? zero(this.qubits), shotCregs, rng, noiseParams)
+      const state = applyOps(
+        this.#ops,
+        init ? simFromSparse(init, this.qubits) : simZero(this.qubits),
+        shotCregs, rng, noiseParams,
+      )
 
       // Final readout: sample then apply SPAM noise per qubit
-      let finalIdx = sampleSV(sv, rng())
+      let finalIdx = simSample(state, rng())
       if (pMeas) {
         for (let q = 0; q < this.qubits; q++) {
           if (rng() < pMeas) finalIdx ^= (1n << BigInt(q))
@@ -4176,7 +4100,10 @@ export class Circuit {
     if (!/^[IXYZ]+$/.test(pauli)) throw new TypeError(`pauli must contain only I, X, Y, Z`)
     if (!/[XYZ]/.test(pauli)) return 1
 
-    // Rotate each qubit to the Z basis for its Pauli operator
+    // Rotate each qubit to the Z basis for its Pauli operator.
+    // Not `this`-aliasing for scope reasons — `rot` is an accumulator for the
+    // immutable builder, seeded from the current circuit.
+    // oxlint-disable-next-line typescript/no-this-alias
     let rot: Circuit = this
     for (let q = 0; q < n; q++) {
       if (pauli[q] === 'X') rot = rot.h(q)

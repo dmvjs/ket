@@ -531,7 +531,8 @@ describe('shorBeauregard — method reporting and retry behaviour', () => {
     const r = shorBeauregard(15n, { a: 7n, seed: 1 })
     expect(r.method).toBe('quantum')
     expect(r.period).toBe(4n)
-    expect(r.factors?.[0]! * r.factors?.[1]!).toBe(15n)
+    expect(r.factors).toBeDefined()
+    expect(r.factors![0] * r.factors![1]).toBe(15n)
     expect(r.failure).toBeUndefined()
   })
 
@@ -571,7 +572,8 @@ describe('shorBeauregard — method reporting and retry behaviour', () => {
     // maxAttempts > 1 with a pinned good base must not resample identically.
     // Forcing precision low makes duds likely; the run should still converge.
     const r = shorBeauregard(15n, { a: 7n, shots: 1, maxAttempts: 25, seed: 9 })
-    expect(r.factors?.[0]! * r.factors?.[1]!).toBe(15n)
+    expect(r.factors).toBeDefined()
+    expect(r.factors![0] * r.factors![1]).toBe(15n)
     expect(r.method).toBe('quantum')
   })
 })

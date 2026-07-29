@@ -5,7 +5,7 @@
  * Names match IonQ's native gate set (h, x, y, z, s, si, t, ti, v, vi, rx, ry, rz).
  */
 
-import { c, Complex, ONE, ZERO } from './complex.js'
+import { c, ONE, ZERO } from './complex.js'
 import { Gate2x2, Gate4x4 } from './statevector.js'
 
 const sq2 = 1 / Math.sqrt(2) // 1/√2

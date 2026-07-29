@@ -312,7 +312,6 @@ function phaseDamping1(dm: DM, n: number, q: number, lambda: number): DM {
   const next: DM = new Map()
   const shift  = BigInt(n)
   const dimMsk = (1n << shift) - 1n
-  const qMask  = 1n << BigInt(q)
 
   for (const [k, v] of dm) {
     const r = k >> shift, c = k & dimMsk

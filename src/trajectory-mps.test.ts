@@ -716,7 +716,7 @@ function makeQFT(n: number): Circuit {
 }
 
 /** Total variation distance between two probability distributions. */
-function tvd(
+function _tvd(
   a: Readonly<Record<string, number>>,
   b: Readonly<Record<string, number>>,
 ): number {

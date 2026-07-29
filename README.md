@@ -105,7 +105,7 @@ without defensive copying.
 **BigInt state indices.** No 32-bit overflow at qubit 31, the failure mode that silently
 corrupts integer-indexed simulators.
 
-**1,754 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
+**1,768 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
 Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at indices
 30/31/40, and full round-trips for every supported import/export format. The sparse and
 dense statevector kernels are differentially tested against each other gate by gate,

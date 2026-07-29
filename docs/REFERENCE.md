@@ -777,6 +777,10 @@ The two kernels are differentially tested against each other in `src/hybrid.test
 
 This matters more than it sounds, because "apply gates, then measure everything" is how most circuits are written. On a depth-4 random 12-qubit circuit with all twelve qubits measured, 200 shots went from 8,652 ms to 5 ms; 20,000 shots now costs 8.4 ms, where the per-shot path scaled linearly with shot count. `src/terminal-measure.test.ts` pins both halves: that ineligible circuits keep the per-shot path, and that both paths agree on the ones that could take either.
 
+The circuits that genuinely need one simulation per shot — noise, mid-circuit feedback — run on the hybrid representation too. Projection, renormalisation, amplitude and phase damping, custom Kraus channels and final sampling all have dense implementations alongside the sparse ones, so a noisy circuit densifies exactly as a pure one does. On the same 12-qubit circuit that is 42 ms per shot down to 0.9 ms, which takes the default 1024-shot noisy run from roughly 43 s to 0.69 s.
+
+Sampling deserves one note: both representations walk basis indices in ascending order, so a given RNG draw selects the same outcome whichever one is live. Promotion cannot change a seeded result, and `src/hybrid.test.ts` asserts that directly over 200 draws.
+
 The MPS backend represents state as a chain of tensors with an adaptive bond dimension χ. Memory is O(n·χ²) instead of O(2ⁿ), which makes circuits with limited entanglement — like GHZ, QFT, and most hardware-native gate sequences — practical at 50–100+ qubits. The bond dimension starts at `maxBond` (default 64) and grows automatically whenever a gate would require a larger χ, so simulation is always exact up to floating-point regardless of the starting value. For circuits with genuinely unbounded entanglement (deep random circuits), χ grows exponentially and memory eventually becomes the bottleneck — use `truncErr` to trade accuracy for a bounded χ when that matters. Each tensor is stored as a single contiguous `Float64Array` (interleaved re/im), eliminating per-element heap allocations and allowing V8 to JIT-compile the inner contraction loops as unboxed f64 operations. Mid-circuit measurement (`measure`), qubit reset (`reset`), and classical conditioning (`if`) are fully supported: measurement projects the site tensor in-place using the Vidal canonical form bond lambdas, restoring a normalised MPS without any SVD — O(χ²) per measurement. Each shot in a mid-circuit circuit runs as an independent trajectory with its own classical register state.
 
 The density matrix backend tracks the full ρ = |ψ⟩⟨ψ| matrix as a sparse map, applying exact per-gate depolarizing channels without Monte Carlo sampling. Noiseless circuits take the fast path — zero overhead compared to the statevector backend.
@@ -822,7 +826,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-1754 tests, ~60s (the Beauregard Shor's suite dominates). Run with:
+1768 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

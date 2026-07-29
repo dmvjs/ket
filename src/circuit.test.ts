@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Circuit, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
-import { qft, iqft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
+import { qft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 import { add, mul, scale, conj, norm2, isNegligible, c } from './complex.js'
@@ -106,7 +106,7 @@ describe('complex — construction and arithmetic', () => {
 // ─── Tolerance helpers ────────────────────────────────────────────────────────
 
 const SHOT_TOLERANCE  = 0.05  // ±5% for shot-based results (large N reduces variance)
-const EXACT_TOLERANCE = 1e-10 // for deterministic single-outcome circuits
+const _EXACT_TOLERANCE = 1e-10 // for deterministic single-outcome circuits
 
 function near(a: number, b: number, tol = SHOT_TOLERANCE): boolean {
   return Math.abs(a - b) <= tol
@@ -3551,7 +3551,7 @@ describe('MPS backend — large circuits (50+ qubits)', () => {
   it('GHZ-50: only all-0 and all-1 bitstrings observed', () => {
     let c = new Circuit(50).h(0)
     for (let q = 0; q < 49; q++) c = c.cnot(q, q + 1)
-    const r = new Circuit(50).h(0)
+    const _r = new Circuit(50).h(0)
     let circ = new Circuit(50).h(0)
     for (let q = 0; q < 49; q++) circ = circ.cnot(q, q + 1)
     const dist = circ.runMps({ shots: 500, seed: 42 })
@@ -4072,9 +4072,9 @@ describe('phaseEstimation', () => {
   })
 
   it('phaseEstimation API returns correct qubit count', () => {
-    const c = phaseEstimation(3, (circ, ctrl, pow, tgts) => circ, 1)
+    const c = phaseEstimation(3, (circ, _ctrl, _pow, _tgts) => circ, 1)
     expect(c.qubits).toBe(4)
-    const c2 = phaseEstimation(4, (circ, ctrl, pow, tgts) => circ, 2)
+    const c2 = phaseEstimation(4, (circ, _ctrl, _pow, _tgts) => circ, 2)
     expect(c2.qubits).toBe(6)
   })
 
@@ -4793,7 +4793,7 @@ describe('toSVG()', () => {
 
 describe('blochAngles()', () => {
   it('|0⟩: north pole θ=0', () => {
-    const { theta, phi } = new Circuit(1).blochAngles(0)
+    const { theta, _phi } = new Circuit(1).blochAngles(0)
     expect(theta).toBeCloseTo(0, 10)
   })
 
@@ -5085,7 +5085,7 @@ describe('dm() — pure state', () => {
   it('|0⟩ probabilities match statevector', () => {
     const c  = new Circuit(1)
     const dm = c.dm()
-    const sv = c.statevector()
+    const _sv = c.statevector()
     expect(dm.probabilities()['0']).toBeCloseTo(1, 10)
     expect(dm.probabilities()['1']).toBeUndefined()
   })
@@ -7722,8 +7722,8 @@ describe('custom Kraus channels', () => {
     // K0 = √(1-p)·I4, K1..K3 = √(p/3)·(I⊗X, X⊗I, X⊗X) — partial flip channel
     const p = 0.3
     const s0 = Math.sqrt(1 - p), s1 = Math.sqrt(p / 3)
-    const i = {re:1,im:0}, o = {re:0,im:0}
-    const mk = (a00:number,a11:number,a22:number,a33:number): Gate4x4 => [
+    const _i = {re:1,im:0}, o = {re:0,im:0}
+    const _mk = (a00:number,a11:number,a22:number,a33:number): Gate4x4 => [
       [{re:a00,im:0},o,o,o], [o,{re:a11,im:0},o,o], [o,o,{re:a22,im:0},o], [o,o,o,{re:a33,im:0}],
     ]
     // K0 = s0·I4
