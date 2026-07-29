@@ -111,7 +111,7 @@ Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at i
 dense statevector kernels are differentially tested against each other gate by gate,
 over every qubit ordering, so promotion can never change a result.
 
-**Zero dependencies.** 147 KB minified, total. Nothing to audit but ket.
+**Zero dependencies.** 150 KB minified, total. Nothing to audit but ket.
 
 ## Performance
 
