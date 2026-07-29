@@ -17,5 +17,8 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run lint
+      # benchmark/run.ts imports the package through its own exports map, so the
+      # declarations in dist/ have to exist before typecheck can resolve them.
+      - run: npm run build
       - run: npm run typecheck
       - run: npm test

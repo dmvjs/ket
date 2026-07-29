@@ -24,6 +24,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # benchmark/run.ts imports the package through its own exports map, so the
+      # declarations in dist/ have to exist before typecheck can resolve them.
+      - name: Build
+        run: npm run build
+
       - name: Typecheck
         run: npm run typecheck
 
