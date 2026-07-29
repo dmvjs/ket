@@ -24,7 +24,8 @@ import {
   denseClone, denseCNOT, denseCollapse, denseControlled, denseCsrSwap, denseCSwap,
   denseDecay, denseNnz, denseNorm2, denseProbabilities, denseProbOne, denseSample,
   denseScale, denseScaleBranch, denseSingle, denseSWAP, denseToffoli, denseTwo,
-  denseUnitary, denseZero, fromSparse, MAX_DENSE_QUBITS, toSparse, type DenseState,
+  denseUnitary, denseZero, fromSparse, MAX_DENSE_QUBITS, resolvePolicy, toSparse,
+  type DenseOptions, type DensePolicy, type DenseState,
 } from './dense.js'
 import {
   applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP,
@@ -33,41 +34,48 @@ import {
 } from './statevector.js'
 
 /**
- * Promote when the state is at least 1/PROMOTE_FILL full.
+ * Default promotion point: at least 1/8 full.
  *
  * The dense kernel measured ~100x cheaper per amplitude than the sparse one, so
  * break-even sits near 2ⁿ/100. Promoting at 2ⁿ/8 is deliberately late: it keeps
  * genuinely sparse circuits on the path that suits them and only switches when
- * the state is unambiguously dense.
+ * the state is unambiguously dense. Override per call via `RunOptions.dense`.
  */
-const PROMOTE_FILL = 8
+export const DEFAULT_SV_POLICY: DensePolicy = { fill: 8, maxQubits: MAX_DENSE_QUBITS }
 
-/** A statevector in whichever representation currently suits it. */
+/** Resolve caller-supplied statevector dense options against the defaults. */
+export const svPolicy = (opts?: DenseOptions): DensePolicy => resolvePolicy(opts, DEFAULT_SV_POLICY)
+
+/**
+ * A statevector in whichever representation currently suits it.
+ *
+ * The sparse variant carries the promotion policy so it travels with the state
+ * rather than living in module scope — the library is otherwise free of mutable
+ * globals, and two concurrent runs may legitimately want different thresholds.
+ * The dense variant does not need it: promotion is one-way.
+ */
 export type SimState =
-  | { readonly kind: 'sparse'; readonly sv: StateVector; readonly n: number }
+  | { readonly kind: 'sparse'; readonly sv: StateVector; readonly n: number; readonly policy: DensePolicy }
   | { readonly kind: 'dense';  readonly d: DenseState }
 
 /** |0…0⟩ over n qubits, sparse. */
-export const simZero = (n: number): SimState =>
-  ({ kind: 'sparse', sv: new Map([[0n, { re: 1, im: 0 }]]), n })
+export const simZero = (n: number, policy: DensePolicy = DEFAULT_SV_POLICY): SimState =>
+  ({ kind: 'sparse', sv: new Map([[0n, { re: 1, im: 0 }]]), n, policy })
 
 /** Wrap an existing sparse state. */
-export const simFromSparse = (sv: StateVector, n: number): SimState =>
-  ({ kind: 'sparse', sv, n })
-
-/** Qubit count, whichever representation is live. */
-export const simQubits = (s: SimState): number => s.kind === 'sparse' ? s.n : s.d.n
+export const simFromSparse = (sv: StateVector, n: number, policy: DensePolicy = DEFAULT_SV_POLICY): SimState =>
+  ({ kind: 'sparse', sv, n, policy })
 
 /** True once the state has densified enough to be worth moving. */
-function shouldPromote(sv: StateVector, n: number): boolean {
-  return n <= MAX_DENSE_QUBITS && sv.size * PROMOTE_FILL > 2 ** n
+function shouldPromote(sv: StateVector, n: number, policy: DensePolicy): boolean {
+  return n <= policy.maxQubits && sv.size * policy.fill > 2 ** n
 }
 
 /** Apply the fill test to a freshly-computed sparse state, promoting if warranted. */
-function settle(sv: StateVector, n: number): SimState {
-  return shouldPromote(sv, n)
+function settle(sv: StateVector, n: number, policy: DensePolicy): SimState {
+  return shouldPromote(sv, n, policy)
     ? { kind: 'dense', d: fromSparse(sv, n) }
-    : { kind: 'sparse', sv, n }
+    : { kind: 'sparse', sv, n, policy }
 }
 
 /** Force the dense representation regardless of fill. Exposed for testing. */
@@ -103,48 +111,48 @@ export const simProbabilities = (s: SimState): Map<bigint, number> =>
 
 export function simSingle(s: SimState, q: number, gate: Gate2x2): SimState {
   if (s.kind === 'dense') { denseSingle(s.d, q, gate); return s }
-  return settle(applySingle(s.sv, q, gate), s.n)
+  return settle(applySingle(s.sv, q, gate), s.n, s.policy)
 }
 
 export function simCNOT(s: SimState, control: number, target: number): SimState {
   if (s.kind === 'dense') { denseCNOT(s.d, control, target); return s }
   // A permutation cannot change the support size, so no promotion test is needed.
-  return { kind: 'sparse', sv: applyCNOT(s.sv, control, target), n: s.n }
+  return { kind: 'sparse', sv: applyCNOT(s.sv, control, target), n: s.n, policy: s.policy }
 }
 
 export function simSWAP(s: SimState, a: number, b: number): SimState {
   if (s.kind === 'dense') { denseSWAP(s.d, a, b); return s }
-  return { kind: 'sparse', sv: applySWAP(s.sv, a, b), n: s.n }
+  return { kind: 'sparse', sv: applySWAP(s.sv, a, b), n: s.n, policy: s.policy }
 }
 
 export function simToffoli(s: SimState, c1: number, c2: number, target: number): SimState {
   if (s.kind === 'dense') { denseToffoli(s.d, c1, c2, target); return s }
-  return { kind: 'sparse', sv: applyToffoli(s.sv, c1, c2, target), n: s.n }
+  return { kind: 'sparse', sv: applyToffoli(s.sv, c1, c2, target), n: s.n, policy: s.policy }
 }
 
 export function simCSwap(s: SimState, control: number, a: number, b: number): SimState {
   if (s.kind === 'dense') { denseCSwap(s.d, control, a, b); return s }
-  return { kind: 'sparse', sv: applyCSwap(s.sv, control, a, b), n: s.n }
+  return { kind: 'sparse', sv: applyCSwap(s.sv, control, a, b), n: s.n, policy: s.policy }
 }
 
 export function simControlled(s: SimState, control: number, target: number, gate: Gate2x2): SimState {
   if (s.kind === 'dense') { denseControlled(s.d, control, target, gate); return s }
-  return settle(applyControlled(s.sv, control, target, gate), s.n)
+  return settle(applyControlled(s.sv, control, target, gate), s.n, s.policy)
 }
 
 export function simTwo(s: SimState, a: number, b: number, gate: Gate4x4): SimState {
   if (s.kind === 'dense') { denseTwo(s.d, a, b, gate); return s }
-  return settle(applyTwo(s.sv, a, b, gate), s.n)
+  return settle(applyTwo(s.sv, a, b, gate), s.n, s.policy)
 }
 
 export function simCsrSwap(s: SimState, control: number, a: number, b: number): SimState {
   if (s.kind === 'dense') { denseCsrSwap(s.d, control, a, b); return s }
-  return settle(applyCsrSwap(s.sv, control, a, b), s.n)
+  return settle(applyCsrSwap(s.sv, control, a, b), s.n, s.policy)
 }
 
 export function simUnitary(s: SimState, qs: readonly number[], matrix: readonly (readonly Complex[])[]): SimState {
   if (s.kind === 'dense') { denseUnitary(s.d, qs, matrix); return s }
-  return settle(applyUnitary(s.sv, qs, matrix), s.n)
+  return settle(applyUnitary(s.sv, qs, matrix), s.n, s.policy)
 }
 
 // ── Measurement and channel primitives ────────────────────────────────────────
@@ -154,7 +162,7 @@ export function simUnitary(s: SimState, qs: readonly number[], matrix: readonly 
 
 /** Independent copy. Kraus channels trial every operator, so they need one per branch. */
 export const simClone = (s: SimState): SimState =>
-  s.kind === 'sparse' ? { kind: 'sparse', sv: new Map(s.sv), n: s.n } : { kind: 'dense', d: denseClone(s.d) }
+  s.kind === 'sparse' ? { kind: 'sparse', sv: new Map(s.sv), n: s.n, policy: s.policy } : { kind: 'dense', d: denseClone(s.d) }
 
 /** Total ⟨ψ|ψ⟩ — not 1 after an unnormalised Kraus operator. */
 export function simNorm2(s: SimState): number {
@@ -169,7 +177,7 @@ export function simScale(s: SimState, f: number): SimState {
   if (s.kind === 'dense') { denseScale(s.d, f); return s }
   const next: StateVector = new Map()
   for (const [i, a] of s.sv) next.set(i, { re: a.re * f, im: a.im * f })
-  return { kind: 'sparse', sv: next, n: s.n }
+  return { kind: 'sparse', sv: next, n: s.n, policy: s.policy }
 }
 
 /** Probability that qubit q reads 1. */
@@ -189,7 +197,7 @@ export function simCollapse(s: SimState, q: number, outcome: 0 | 1, inv: number)
   for (const [i, a] of s.sv) {
     if (((i & mask) !== 0n) === (outcome === 1)) next.set(i, { re: a.re * inv, im: a.im * inv })
   }
-  return { kind: 'sparse', sv: next, n: s.n }
+  return { kind: 'sparse', sv: next, n: s.n, policy: s.policy }
 }
 
 /** Scale the |1⟩ branch of qubit q by `sOne`, the |0⟩ branch by `sZero`. */
@@ -201,7 +209,7 @@ export function simScaleBranch(s: SimState, q: number, sOne: number, sZero: numb
     const f = (i & mask) !== 0n ? sOne : sZero
     next.set(i, { re: a.re * f, im: a.im * f })
   }
-  return { kind: 'sparse', sv: next, n: s.n }
+  return { kind: 'sparse', sv: next, n: s.n, policy: s.policy }
 }
 
 /** Amplitude-damping jump: |1⟩ amplitudes move to their |0⟩ partner, scaled by `inv`. */
@@ -212,7 +220,7 @@ export function simDecay(s: SimState, q: number, inv: number): SimState {
   for (const [i, a] of s.sv) {
     if ((i & mask) !== 0n) next.set(i ^ mask, { re: a.re * inv, im: a.im * inv })
   }
-  return { kind: 'sparse', sv: next, n: s.n }
+  return { kind: 'sparse', sv: next, n: s.n, policy: s.policy }
 }
 
 /** Sample one basis index. Both representations walk indices ascending, so a
@@ -230,3 +238,4 @@ export function simSample(s: SimState, rand: number): bigint {
 
 /** Re-export so callers can build a dense zero state without importing dense.js. */
 export { denseZero, MAX_DENSE_QUBITS }
+export type { DenseOptions, DensePolicy }

@@ -25,8 +25,9 @@ export interface DenseDM {
 }
 
 /**
- * Largest n this backend will allocate: 4¹² entries × 16 bytes = 256 MiB.
- * n=13 would need 1 GiB, which is not a reasonable default.
+ * Largest n this backend will allocate by default: 4¹² entries × 16 bytes =
+ * 256 MiB. n=13 would need 1 GiB, which is not a reasonable default. Override
+ * per call with `DenseOptions`.
  */
 export const MAX_DENSE_DM_QUBITS = 12
 

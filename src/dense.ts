@@ -34,11 +34,51 @@ export interface DenseState {
 }
 
 /**
- * Largest n this backend will allocate: 2^24 amplitudes × 16 bytes = 256 MiB.
- * Above this the sparse backend stays in charge regardless of fill — a dense
- * buffer would be a worse problem than a slow one.
+ * Largest n this backend will allocate by default: 2^24 amplitudes × 16 bytes =
+ * 256 MiB. Above this the sparse backend stays in charge regardless of fill — a
+ * dense buffer would be a worse problem than a slow one. Override per call with
+ * {@link DenseOptions}.
  */
 export const MAX_DENSE_QUBITS = 24
+
+/**
+ * Per-call override for when a state is moved to the dense representation.
+ *
+ * Both fields are advisory bounds on memory versus speed, so the useful reasons
+ * to set them are concrete: a constrained environment that cannot afford the
+ * default ceiling, or a large machine where paying more memory to go faster is
+ * the right trade.
+ */
+export interface DenseOptions {
+  /**
+   * Promote once the state exceeds `1 / fill` of full occupancy. Lower values
+   * promote sooner. Default 8 for statevectors, 32 for density matrices.
+   */
+  fill?: number
+  /**
+   * Largest qubit count for which a dense buffer will be allocated at all.
+   * Beyond it the sparse representation is used however full the state gets.
+   * Default 24 for statevectors (256 MiB), 12 for density matrices (256 MiB).
+   */
+  maxQubits?: number
+}
+
+/** {@link DenseOptions} with defaults filled in. */
+export interface DensePolicy {
+  readonly fill: number
+  readonly maxQubits: number
+}
+
+/** Resolve caller options against a backend's defaults, rejecting nonsense. */
+export function resolvePolicy(opts: DenseOptions | undefined, fallback: DensePolicy): DensePolicy {
+  const fill = opts?.fill ?? fallback.fill
+  const maxQubits = opts?.maxQubits ?? fallback.maxQubits
+  if (!(fill > 0)) throw new RangeError(`dense.fill must be > 0 (got ${fill})`)
+  if (!Number.isInteger(maxQubits) || maxQubits < 0) {
+    throw new RangeError(`dense.maxQubits must be a non-negative integer (got ${maxQubits})`)
+  }
+  return { fill, maxQubits }
+}
 
 /** |0…0⟩ over n qubits. */
 export function denseZero(n: number): DenseState {

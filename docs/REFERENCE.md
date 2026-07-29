@@ -43,7 +43,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle ships in two flavours — `ket.js` (311kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (142kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
+The ESM bundle ships in two flavours — `ket.js` (323kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (147kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -154,7 +154,7 @@ circuit.simulate({ statevectorLimit: 30 })  // use statevector up to n=30
 |---|---|---|---|
 | Statevector | `circuit.run()` / `circuit.statevector()` | sparse → dense, automatic | Exact simulation, practical up to ~20 qubits |
 | MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²), adaptive χ | Low-entanglement circuits, 50+ qubits |
-| Exact density matrix | `circuit.dm({ noise? })` | O(4ⁿ), sparse | Mixed-state and noisy simulation |
+| Exact density matrix | `circuit.dm({ noise? })` | sparse → dense, automatic | Mixed-state and noisy simulation |
 | Clifford stabilizer | `circuit.runClifford({ shots, noise? })` | O(n²) | Clifford-only circuits, QEC threshold curves |
 
 All four backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
@@ -164,7 +164,7 @@ const d = myCircuit.runMps({ shots: 1024 })
 console.log(`peak χ = ${d.peakChi}`)  // 2 for GHZ, larger for entangled circuits
 ```
 
-The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend uses a Jacobi eigenvalue solver for von Neumann entropy and is practical up to n=12. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
+The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend runs to n=12 for probabilities, purity and Bloch angles. Its `entropy()` diagonalises the full 2ⁿ × 2ⁿ matrix by Householder tridiagonalisation plus implicitly-shifted QL — O(dim³) once, not per sweep. That is interactive to about n=9 (0.5s), 4.9s at n=10 and 56s at n=11; memory becomes the constraint past that, since the solver works on a real 2·dim × 2·dim embedding. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
 
 All backends accept an `initialState` option to start from an arbitrary computational basis state instead of |0...0⟩:
 

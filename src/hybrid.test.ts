@@ -14,7 +14,7 @@ import {
 import {
   simClone, simCollapse, simDecay, simFromSparse, simKind, simNnz, simNorm2,
   simProbOne, simPromote, simSample, simScale, simScaleBranch, simSingle,
-  simToSparse, simZero, type SimState,
+  simToSparse, simZero, svPolicy, DEFAULT_SV_POLICY, type SimState,
 } from './hybrid.js'
 
 /** A deterministic, fully-dense n-qubit state — every amplitude non-zero and distinct. */
@@ -408,5 +408,74 @@ describe('hybrid — end-to-end agreement across the public API', () => {
     // X then H on q0 equals H applied to |1⟩ — same distribution either way.
     expect(Object.keys(fromZero)).toHaveLength(32)
     expect(Object.keys(fromOne)).toHaveLength(32)
+  })
+})
+
+describe('hybrid — configurable promotion thresholds', () => {
+  /**
+   * The defaults (promote at 1/8 fill, never allocate past 24 qubits) are a
+   * memory-versus-speed guess that cannot suit every machine. `dense` overrides
+   * both per call. Results must not depend on the choice — only cost does.
+   */
+
+  it('maxQubits: 0 keeps everything sparse and still gives exact results', () => {
+    let uni = new Circuit(6)
+    for (let q = 0; q < 6; q++) uni = uni.h(q)
+    const forced = uni.exactProbs({ dense: { maxQubits: 0 } })
+    expect(Object.keys(forced)).toHaveLength(64)
+    for (const p of Object.values(forced)) expect(Math.abs(p - 1 / 64)).toBeLessThan(1e-15)
+    // Identical to the default path, which does promote at this size.
+    expect(forced).toEqual(uni.exactProbs())
+  })
+
+  it('an eager fill promotes sooner without changing the answer', () => {
+    let k = new Circuit(5)
+    for (let q = 0; q < 5; q++) k = k.h(q).t(q)
+    k = k.cnot(0, 1).cz(2, 3)
+    const eager  = k.exactProbs({ dense: { fill: 1e6 } })   // promote almost immediately
+    const lazy   = k.exactProbs({ dense: { maxQubits: 0 } }) // never promote
+    for (const [bits, p] of Object.entries(lazy)) {
+      expect(Math.abs(eager[bits]! - p), `outcome ${bits}`).toBeLessThan(1e-14)
+    }
+  })
+
+  it('the option reaches run(), including the per-shot noise path', () => {
+    let k = new Circuit(5)
+    for (let q = 0; q < 5; q++) k = k.h(q).t(q)
+    const a = k.run({ shots: 4000, seed: 3, dense: { maxQubits: 0 } })
+    const b = k.run({ shots: 4000, seed: 3, dense: { fill: 1e6 } })
+    // Same seed, same sampling order in both representations.
+    expect(b.probs).toEqual(a.probs)
+
+    const na = k.run({ shots: 400, seed: 4, noise: { p1: 0.01 }, dense: { maxQubits: 0 } })
+    const nb = k.run({ shots: 400, seed: 4, noise: { p1: 0.01 }, dense: { fill: 1e6 } })
+    expect(Object.values(nb.probs).reduce((x, y) => x + y, 0)).toBeCloseTo(1, 10)
+    expect(Object.keys(nb.probs).length).toBeGreaterThan(0)
+    expect(Object.keys(na.probs).length).toBeGreaterThan(0)
+  })
+
+  it('the option reaches dm()', () => {
+    let k = new Circuit(4)
+    for (let q = 0; q < 4; q++) k = k.h(q)
+    const sparse = k.dm({ dense: { maxQubits: 0 } }).probabilities()
+    const dense  = k.dm({ dense: { fill: 1e6 } }).probabilities()
+    expect(Object.keys(dense)).toHaveLength(16)
+    for (const [bits, p] of Object.entries(sparse)) {
+      expect(Math.abs(dense[bits]! - p), `outcome ${bits}`).toBeLessThan(1e-14)
+    }
+  })
+
+  it('rejects thresholds that cannot mean anything', () => {
+    const k = new Circuit(2).h(0)
+    expect(() => k.exactProbs({ dense: { fill: 0 } })).toThrow(RangeError)
+    expect(() => k.exactProbs({ dense: { fill: -1 } })).toThrow(RangeError)
+    expect(() => k.exactProbs({ dense: { maxQubits: -1 } })).toThrow(RangeError)
+    expect(() => k.exactProbs({ dense: { maxQubits: 2.5 } })).toThrow(RangeError)
+  })
+
+  it('omitting the option leaves the documented defaults in place', () => {
+    expect(DEFAULT_SV_POLICY).toEqual({ fill: 8, maxQubits: MAX_DENSE_QUBITS })
+    expect(svPolicy()).toEqual(DEFAULT_SV_POLICY)
+    expect(svPolicy({ fill: 4 })).toEqual({ fill: 4, maxQubits: MAX_DENSE_QUBITS })
   })
 })

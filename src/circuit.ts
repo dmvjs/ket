@@ -11,8 +11,9 @@ import {
   simClone, simCNOT, simCollapse, simControlled, simCsrSwap, simCSwap, simDecay,
   simFromSparse, simNorm2, simProbabilities, simProbOne, simSample, simScale,
   simScaleBranch, simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary,
-  simZero, type SimState,
+  simZero, svPolicy, type SimState,
 } from './hybrid.js'
+import type { DenseOptions, DensePolicy } from './dense.js'
 import { Complex, ZERO } from './complex.js'
 import { controlledGate, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
 import { wt } from './worker-shim.js'
@@ -131,8 +132,8 @@ function svFromBitstring(s: string, qubits: number): StateVector {
  * dense state directly instead of paying to materialise a `Map` of 2ⁿ entries.
  * Callers wanting the public sparse form should use {@link simulatePure}.
  */
-function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVector): SimState {
-  let s: SimState = init ? simFromSparse(init, qubits) : simZero(qubits)
+function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVector, policy?: DensePolicy): SimState {
+  let s: SimState = init ? simFromSparse(init, qubits, policy) : simZero(qubits, policy)
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
       case 'single':     s = simSingle(s, op.q, op.gate); break
@@ -152,8 +153,8 @@ function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVecto
 }
 
 /** Simulate a pure circuit and return the statevector in its public sparse form. */
-function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector): StateVector {
-  return simToSparse(simulatePureState(ops, qubits, init))
+function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector, policy?: DensePolicy): StateVector {
+  return simToSparse(simulatePureState(ops, qubits, init, policy))
 }
 
 /** Read a classical register as a little-endian integer (bit 0 = LSB). */
@@ -1065,6 +1066,13 @@ export interface RunOptions {
   noise?: string | NoiseParams
   /** Starting computational basis state as a bitstring (q0 leftmost). E.g. `'110'` = q0=1, q1=1, q2=0. */
   initialState?: string
+  /**
+   * Tune when the statevector switches from its sparse map to a dense
+   * `Float64Array`. Defaults promote at 1/8 fill and refuse to allocate beyond
+   * 24 qubits (256 MiB). Lower `maxQubits` on a constrained machine; raise it to
+   * trade memory for speed on a large one.
+   */
+  dense?: DenseOptions
 }
 
 export interface SimulateOptions {
@@ -1079,6 +1087,13 @@ export interface SimulateOptions {
    * Raise this to force MPS on smaller circuits; lower it to use MPS sooner.
    */
   statevectorLimit?: number
+  /**
+   * Tune when the statevector switches from its sparse map to a dense
+   * `Float64Array`. Defaults promote at 1/8 fill and refuse to allocate beyond
+   * 24 qubits (256 MiB). Lower `maxQubits` on a constrained machine; raise it to
+   * trade memory for speed on a large one.
+   */
+  dense?: DenseOptions
 }
 
 export interface MpsRunOptions {
@@ -1758,7 +1773,7 @@ export class Circuit {
    *
    * @param initialState Optional starting computational basis state as a bitstring (q0 leftmost).
    */
-  statevector({ initialState }: { initialState?: string } = {}): Map<bigint, Complex> {
+  statevector({ initialState, dense }: { initialState?: string; dense?: DenseOptions } = {}): Map<bigint, Complex> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
     }
@@ -1767,7 +1782,7 @@ export class Circuit {
       throw new TypeError(`statevector() requires bound parameters. Call bind({ ${[...unbound].map(p => `${p}: value`).join(', ')} }) first.`)
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
-    return simulatePure(this.#ops, this.qubits, init)
+    return simulatePure(this.#ops, this.qubits, init, svPolicy(dense))
   }
 
   /**
@@ -3729,7 +3744,8 @@ export class Circuit {
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
-  run({ shots = 1024, seed, noise, initialState }: RunOptions = {}): Distribution {
+  run({ shots = 1024, seed, noise, initialState, dense }: RunOptions = {}): Distribution {
+    const policy = svPolicy(dense)
     const rng  = makePrng(seed)
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
 
@@ -3753,7 +3769,7 @@ export class Circuit {
     const terminal = noiseParams ? null : terminalMeasurements(flattenOps(this.#ops))
     if (terminal) {
       // Sampling only needs probabilities, so skip materialising the sparse map.
-      const probs  = simProbabilities(simulatePureState(this.#ops, this.qubits, init))
+      const probs  = simProbabilities(simulatePureState(this.#ops, this.qubits, init, policy))
       const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
 
       const cdf: { idx: bigint; cumP: number }[] = []
@@ -3803,7 +3819,7 @@ export class Circuit {
 
       const state = applyOps(
         this.#ops,
-        init ? simFromSparse(init, this.qubits) : simZero(this.qubits),
+        init ? simFromSparse(init, this.qubits, policy) : simZero(this.qubits, policy),
         shotCregs, rng, noiseParams,
       )
 
@@ -4064,13 +4080,13 @@ export class Circuit {
    * Keys are standard bitstrings (q0 leftmost). Only non-negligible amplitudes are included.
    * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
    */
-  exactProbs({ initialState }: { initialState?: string } = {}): Readonly<Record<string, number>> {
+  exactProbs({ initialState, dense }: { initialState?: string; dense?: DenseOptions } = {}): Readonly<Record<string, number>> {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('exactProbs() requires a pure circuit — no measure, reset, or if ops')
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
     // Read probabilities off the raw state — a dense result never materialises a Map.
-    const state = simulatePureState(this.#ops, this.qubits, init)
+    const state = simulatePureState(this.#ops, this.qubits, init, svPolicy(dense))
     const out: Record<string, number> = {}
     for (const [idx, p] of simProbabilities(state)) {
       out[idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = p
@@ -4813,7 +4829,7 @@ export class Circuit {
    * d.peakChi   // 2
    * ```
    */
-  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20 }: SimulateOptions = {}): Distribution {
+  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense }: SimulateOptions = {}): Distribution {
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
 
@@ -4847,6 +4863,7 @@ export class Circuit {
         ...(seed         !== undefined && { seed }),
         ...(noise        !== undefined && { noise }),
         ...(initialState !== undefined && { initialState }),
+        ...(dense        !== undefined && { dense }),
       })
     }
 
@@ -4997,12 +5014,12 @@ export class Circuit {
    * @param options.noise  Device name (any key of `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or
    *                       `{ p1?, p2? }` noise parameters.
    */
-  dm(options?: { noise?: DmNoiseParams | string }): DensityMatrix {
+  dm(options?: { noise?: DmNoiseParams | string; dense?: DenseOptions }): DensityMatrix {
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('dm() requires a pure circuit — remove measure/reset/if ops')
     }
 
-    const { noise } = options ?? {}
+    const { noise, dense } = options ?? {}
     const noiseParams: DmNoiseParams | undefined =
       noise == null           ? undefined :
       typeof noise === 'string' ? (() => {
@@ -5013,6 +5030,6 @@ export class Circuit {
 
     // DmOp is a structural subset of Op; safety guaranteed by the classical-op guard above.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return runDM(flattenOps(this.#ops) as any, this.qubits, noiseParams)
+    return runDM(flattenOps(this.#ops) as any, this.qubits, noiseParams, dense)
   }
 }

@@ -221,9 +221,10 @@ describe('DensityMatrix.get', () => {
   })
 })
 
-// ─── DensityMatrix.entropy — jacobiEigenvalues convergence ───────────────────
+// ─── DensityMatrix.entropy — eigensolver convergence ─────────────────────────
 //
-// entropy() diagonalises the full 2ⁿ×2ⁿ DM via cyclic Jacobi sweeps (≤ 30n).
+// entropy() diagonalises the full 2ⁿ×2ⁿ DM by Householder tridiagonalisation
+// plus implicitly-shifted QL.
 // Tests verify convergence for pure states, known 1-bit mixtures, degenerate
 // spectra (all-equal eigenvalues), and monotonicity under noise.
 

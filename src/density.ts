@@ -1,10 +1,14 @@
 /**
  * Exact density matrix simulation for mixed-state and noise research.
  *
- * Representation: sparse Map<bigint, Complex> where key = (row << n) | col,
- * with n = qubits.  Only entries with |ρ[r][c]|² > 1e-14 are stored.
+ * Two representations, switched automatically. ρ starts as a sparse
+ * `Map<bigint, Complex>` keyed `(row << n) | col`, holding only entries with
+ * |ρ[r][c]|² > 1e-14 — the right shape for a near-pure state under light noise.
+ * Once it passes 1/32 fill it is promoted to the dense `Float64Array` backend in
+ * `density-dense.ts`, which is flat 16·4ⁿ bytes and makes every channel a tight
+ * loop. See the `DmState` dispatch section below.
  *
- * Complexity: O(4ⁿ) in the worst case — practical up to ~12 qubits.
+ * Complexity: O(4ⁿ) in the worst case; practical to n=12 (256 MiB dense).
  */
 
 import { add, Complex, conj, isNegligible, mul, ZERO } from './complex.js'
@@ -14,6 +18,7 @@ import {
   ddPhaseDamping1, ddSingle, ddTwo, ddUnitaryN, denseDmGet, dmFromSparse,
   MAX_DENSE_DM_QUBITS, type DenseDM,
 } from './density-dense.js'
+import { resolvePolicy, type DenseOptions, type DensePolicy } from './dense.js'
 import { controlledGate } from './mps.js'
 
 // ─── Sparse DM type ────────────────────────────────────────────────────────
@@ -444,9 +449,13 @@ function spKraus2(dm: DM, n: number, a: number, b: number, kraus: readonly Gate4
 // where at n=12 it needs 4¹² boxed entries and exhausts the heap. Dense costs a
 // flat 16·4ⁿ bytes — 256 MiB at n=12 — and every channel becomes a tight loop.
 
-/** ρ in whichever representation currently suits it. */
+/**
+ * ρ in whichever representation currently suits it. The sparse variant carries
+ * the promotion policy so it travels with the state instead of sitting in module
+ * scope; the dense variant does not need it, since promotion is one-way.
+ */
 type DmState =
-  | { readonly kind: 'sparse'; readonly dm: DM }
+  | { readonly kind: 'sparse'; readonly dm: DM; readonly policy: DensePolicy }
   | { readonly kind: 'dense';  readonly d: DenseDM }
 
 /**
@@ -458,16 +467,20 @@ type DmState =
  * the map becomes the larger of the two, and late enough to leave genuinely
  * sparse states alone.
  */
-const DM_PROMOTE_FILL = 32
+export const DEFAULT_DM_POLICY: DensePolicy = { fill: 32, maxQubits: MAX_DENSE_DM_QUBITS }
 
-function dmSettle(dm: DM, n: number): DmState {
-  if (n <= MAX_DENSE_DM_QUBITS && dm.size * DM_PROMOTE_FILL > 4 ** n) {
+/** Resolve caller-supplied density-matrix dense options against the defaults. */
+export const dmPolicy = (opts?: DenseOptions): DensePolicy => resolvePolicy(opts, DEFAULT_DM_POLICY)
+
+function dmSettle(dm: DM, n: number, policy: DensePolicy): DmState {
+  if (n <= policy.maxQubits && dm.size * policy.fill > 4 ** n) {
     return { kind: 'dense', d: dmFromSparse(dm, n) }
   }
-  return { kind: 'sparse', dm }
+  return { kind: 'sparse', dm, policy }
 }
 
-const dmZeroState = (): DmState => ({ kind: 'sparse', dm: new Map([[0n, { re: 1, im: 0 }]]) })
+const dmZeroState = (policy: DensePolicy): DmState =>
+  ({ kind: 'sparse', dm: new Map([[0n, { re: 1, im: 0 }]]), policy })
 
 /**
  * Force the dense representation regardless of fill.
@@ -482,12 +495,12 @@ export function dmPromote(s: DmState, n: number): DmState {
 
 function applySingle(s: DmState, n: number, q: number, g: Gate2x2): DmState {
   if (s.kind === 'dense') { ddSingle(s.d, q, g); return s }
-  return dmSettle(spSingle(s.dm, n, q, g), n)
+  return dmSettle(spSingle(s.dm, n, q, g), n, s.policy)
 }
 
 function applyTwo(s: DmState, n: number, a: number, b: number, g: Gate4x4): DmState {
   if (s.kind === 'dense') { ddTwo(s.d, a, b, g); return s }
-  return dmSettle(spTwo(s.dm, n, a, b, g), n)
+  return dmSettle(spTwo(s.dm, n, a, b, g), n, s.policy)
 }
 
 function applyPerm(s: DmState, n: number, f: (i: bigint) => bigint): DmState {
@@ -495,42 +508,42 @@ function applyPerm(s: DmState, n: number, f: (i: bigint) => bigint): DmState {
   // test is needed. The dense path converts the index map once per call, not per
   // entry — ddPerm evaluates f exactly `dim` times.
   if (s.kind === 'dense') { ddPerm(s.d, i => Number(f(BigInt(i)))); return s }
-  return { kind: 'sparse', dm: spPerm(s.dm, n, f) }
+  return { kind: 'sparse', dm: spPerm(s.dm, n, f), policy: s.policy }
 }
 
 function applyUnitaryN(s: DmState, n: number, qs: readonly number[], m: readonly (readonly Complex[])[]): DmState {
   if (s.kind === 'dense') { ddUnitaryN(s.d, qs, m); return s }
-  return dmSettle(spUnitaryN(s.dm, n, qs, m), n)
+  return dmSettle(spUnitaryN(s.dm, n, qs, m), n, s.policy)
 }
 
 function depolarize1(s: DmState, n: number, q: number, p: number): DmState {
   if (s.kind === 'dense') { ddDepolarize1(s.d, q, p); return s }
-  return dmSettle(spDepolarize1(s.dm, n, q, p), n)
+  return dmSettle(spDepolarize1(s.dm, n, q, p), n, s.policy)
 }
 
 function depolarize2(s: DmState, n: number, a: number, b: number, p: number): DmState {
   if (s.kind === 'dense') { ddDepolarize2(s.d, a, b, p, PAULI15); return s }
-  return dmSettle(spDepolarize2(s.dm, n, a, b, p), n)
+  return dmSettle(spDepolarize2(s.dm, n, a, b, p), n, s.policy)
 }
 
 function amplitudeDamping1(s: DmState, n: number, q: number, gamma: number): DmState {
   if (s.kind === 'dense') { ddAmplitudeDamping1(s.d, q, gamma); return s }
-  return dmSettle(spAmplitudeDamping1(s.dm, n, q, gamma), n)
+  return dmSettle(spAmplitudeDamping1(s.dm, n, q, gamma), n, s.policy)
 }
 
 function phaseDamping1(s: DmState, n: number, q: number, lambda: number): DmState {
   if (s.kind === 'dense') { ddPhaseDamping1(s.d, q, lambda); return s }
-  return dmSettle(spPhaseDamping1(s.dm, n, q, lambda), n)
+  return dmSettle(spPhaseDamping1(s.dm, n, q, lambda), n, s.policy)
 }
 
 function applyKraus1DM(s: DmState, n: number, q: number, kraus: readonly Gate2x2[]): DmState {
   if (s.kind === 'dense') { ddKraus1(s.d, q, kraus); return s }
-  return dmSettle(spKraus1(s.dm, n, q, kraus), n)
+  return dmSettle(spKraus1(s.dm, n, q, kraus), n, s.policy)
 }
 
 function applyKraus2DM(s: DmState, n: number, a: number, b: number, kraus: readonly Gate4x4[]): DmState {
   if (s.kind === 'dense') { ddKraus2(s.d, a, b, kraus); return s }
-  return dmSettle(spKraus2(s.dm, n, a, b, kraus), n)
+  return dmSettle(spKraus2(s.dm, n, a, b, kraus), n, s.policy)
 }
 
 // ─── DensityMatrix class ────────────────────────────────────────────────────
@@ -613,10 +626,19 @@ export class DensityMatrix {
   /**
    * Von Neumann entropy S = −Tr(ρ log₂ ρ) in bits.
    *
-   * Computed by diagonalising the full 2ⁿ × 2ⁿ density matrix via Jacobi
-   * iteration.  Practical for n ≤ 8 (matrix size ≤ 256 × 256).
+   * Diagonalises the full 2ⁿ × 2ⁿ density matrix by Householder tridiagonalisation
+   * followed by implicitly-shifted QL — O(dim³) once, rather than the O(dim³) *per
+   * sweep* that cyclic Jacobi needed. Measured on an M-series laptop:
    *
-   * @throws RangeError for n > 12 (4096 × 4096 matrix — too expensive).
+   *   n=7  0.01s │ n=8  0.07s │ n=9  0.5s │ n=10  4.9s │ n=11  56s
+   *
+   * Interactive to about n=9, tolerable at n=10. Memory is the binding constraint
+   * past that: the solver works on a real 2·dim × 2·dim embedding, so n=12 needs
+   * roughly 540 MB. Everything else on `DensityMatrix` — `probabilities`,
+   * `purity`, `blochAngles` — is linear in the number of stored entries and stays
+   * fast across the whole range.
+   *
+   * @throws RangeError for n > 12 (4096 × 4096 matrix).
    */
   entropy(): number {
     const dim = 1 << this.qubits
@@ -631,7 +653,7 @@ export class DensityMatrix {
       im[r * dim + c] = v.im
     }
 
-    const λ = jacobiEigenvalues(re, im, dim)
+    const λ = hermitianEigenvalues(re, im, dim)
     let S = 0
     for (const lam of λ) { if (lam > 1e-14) S -= lam * Math.log2(lam) }
     return S
@@ -665,76 +687,166 @@ export class DensityMatrix {
   }
 }
 
-// ─── Jacobi eigenvalue solver (Hermitian matrix) ──────────────────────────
+// ─── Hermitian eigenvalue solver ────────────────────────────────────────────
 
 /**
- * Compute real eigenvalues of an n×n Hermitian matrix stored as flat row-major
- * Float64Arrays `re` and `im`.  Uses cyclic Jacobi sweeps until convergence.
+ * Eigenvalues of an n×n Hermitian matrix given as flat row-major `re` / `im`.
+ *
+ * Householder tridiagonalisation followed by implicitly-shifted QL. The previous
+ * implementation used cyclic Jacobi, which costs O(n³) *per sweep* and needs
+ * roughly ten of them; this costs O(n³) once, then O(n²) to extract the spectrum.
+ *
+ * A complex Hermitian H = A + iB is handled by the standard real embedding
+ *
+ *     S = [  A  −B ]
+ *         [  B   A ]
+ *
+ * which is real symmetric exactly when H is Hermitian (A symmetric, B
+ * antisymmetric), and whose spectrum is that of H with every eigenvalue repeated
+ * twice. Taking every second value of the sorted 2n results recovers the n
+ * eigenvalues of H, and repeated eigenvalues of H stay correct because each
+ * still contributes exactly two copies.
+ *
+ * The embedding doubles the working matrix rather than using a complex
+ * Householder reduction directly. That costs about 2× the arithmetic of the
+ * complex form and is still far cheaper than Jacobi, and it keeps the numerics
+ * to two well-understood real routines instead of a phase-tracking complex one.
  */
-function jacobiEigenvalues(re: Float64Array, im: Float64Array, n: number): number[] {
-  // Work on copies; accumulate unitary transform in R (re), I (im)
-  const R = new Float64Array(re), Im = new Float64Array(im)
-
-  for (let sweep = 0; sweep < 30 * n; sweep++) {
-    let maxOff = 0
-    for (let p = 0; p < n - 1; p++) {
-      for (let q = p + 1; q < n; q++) {
-        const oRe = R[p * n + q]!, oIm = Im[p * n + q]!
-        const off2 = oRe * oRe + oIm * oIm
-        if (off2 > maxOff) maxOff = off2
-      }
-    }
-    if (maxOff < 1e-28) break
-
-    for (let p = 0; p < n - 1; p++) {
-      for (let q = p + 1; q < n; q++) {
-        const oRe = R[p * n + q]!, oIm = Im[p * n + q]!
-        const off2 = oRe * oRe + oIm * oIm
-        if (off2 < 1e-28) continue
-
-        // Annihilate the (p,q) entry with a complex Givens rotation
-        //   G = [[cg, w], [-conj(w), cg]],  w = sg·e^{iφ},  φ = arg(ρ[p,q])
-        // applied as A ← G A G†. G is unitary because its lower-left entry is
-        // −conj(w), not −w; getting that wrong leaves G non-unitary, which is
-        // invisible for a single rotation but compounds badly over a sweep.
-        const phi = Math.atan2(oIm, oRe)  // angle of R[p,q]
-        const mag = Math.sqrt(off2)
-
-        // A'[p][q] ∝ cg·sg·(b − a) + (cg² − sg²)·mag, so annihilation needs
-        // (cg² − sg²)/(cg·sg) = (a − b)/mag with a = A[p][p], b = A[q][q].
-        // Taking tau = (a − b)/2 and the smaller root keeps |t| ≤ 1.
-        const tau = (R[p * n + p]! - R[q * n + q]!) / 2
-        const t   = mag / (Math.abs(tau) + Math.sqrt(tau * tau + mag * mag)) * (tau < 0 ? -1 : 1)
-        const cg  = 1 / Math.sqrt(1 + t * t)
-        const sg  = t * cg
-
-        const sre = sg * Math.cos(phi), sim = sg * Math.sin(phi)   // w = sre + i·sim
-
-        for (let k = 0; k < n; k++) {
-          const xRe = R[p * n + k]!, xIm = Im[p * n + k]!
-          const yRe = R[q * n + k]!, yIm = Im[q * n + k]!
-          // Row p: cg·x + w·y
-          R[p * n + k]  =  cg * xRe + sre * yRe - sim * yIm
-          Im[p * n + k] =  cg * xIm + sre * yIm + sim * yRe
-          // Row q: −conj(w)·x + cg·y = (−sre + i·sim)·x + cg·y
-          R[q * n + k]  = -sre * xRe - sim * xIm + cg * yRe
-          Im[q * n + k] = -sre * xIm + sim * xRe + cg * yIm
-        }
-        for (let k = 0; k < n; k++) {
-          const xRe = R[k * n + p]!, xIm = Im[k * n + p]!
-          const yRe = R[k * n + q]!, yIm = Im[k * n + q]!
-          // Col p: right-multiply by G[:,p] = (cg, sre−i·sim)ᵀ
-          R[k * n + p]  =  cg * xRe + sre * yRe + sim * yIm
-          Im[k * n + p] =  cg * xIm + sre * yIm - sim * yRe
-          // Col q: right-multiply by G[:,q] = (−sre−i·sim, cg)ᵀ
-          R[k * n + q]  = -sre * xRe + sim * xIm + cg * yRe
-          Im[k * n + q] = -sre * xIm - sim * xRe + cg * yIm
-        }
-      }
+function hermitianEigenvalues(re: Float64Array, im: Float64Array, n: number): number[] {
+  const N = 2 * n
+  const S = new Float64Array(N * N)
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const a = re[r * n + c]!, b = im[r * n + c]!
+      S[r * N + c]                 = a    //  A
+      S[r * N + (c + n)]           = -b   // −B
+      S[(r + n) * N + c]           = b    //  B
+      S[(r + n) * N + (c + n)]     = a    //  A
     }
   }
 
-  return Array.from({ length: n }, (_, i) => R[i * n + i]!)
+  const d = new Float64Array(N)   // diagonal
+  const e = new Float64Array(N)   // subdiagonal
+  tridiagonalize(S, N, d, e)
+  qlEigenvalues(d, e, N)
+
+  const all = Array.from(d).sort((x, y) => x - y)
+  // Every eigenvalue of H appears twice in S; take one from each pair.
+  return Array.from({ length: n }, (_, i) => all[2 * i]!)
+}
+
+/**
+ * Householder reduction of a real symmetric matrix to tridiagonal form.
+ *
+ * `a` is overwritten. Produces the diagonal in `d` and the subdiagonal in `e`
+ * with `e[0] = 0`. Transformations are not accumulated — only eigenvalues are
+ * wanted, so the O(n³) back-substitution for eigenvectors is skipped.
+ */
+function tridiagonalize(a: Float64Array, n: number, d: Float64Array, e: Float64Array): void {
+  for (let i = n - 1; i >= 1; i--) {
+    const l = i - 1
+    let h = 0, scale = 0
+
+    if (l > 0) {
+      for (let k = 0; k <= l; k++) scale += Math.abs(a[i * n + k]!)
+      if (scale === 0) {
+        e[i] = a[i * n + l]!
+      } else {
+        for (let k = 0; k <= l; k++) {
+          a[i * n + k]! /= scale
+          h += a[i * n + k]! * a[i * n + k]!
+        }
+        let f = a[i * n + l]!
+        let g = f >= 0 ? -Math.sqrt(h) : Math.sqrt(h)
+        e[i] = scale * g
+        h -= f * g
+        a[i * n + l] = f - g
+
+        f = 0
+        for (let j = 0; j <= l; j++) {
+          let gg = 0
+          for (let k = 0; k <= j; k++)     gg += a[j * n + k]! * a[i * n + k]!
+          for (let k = j + 1; k <= l; k++) gg += a[k * n + j]! * a[i * n + k]!
+          e[j] = gg / h
+          f += e[j]! * a[i * n + j]!
+        }
+
+        const hh = f / (h + h)
+        for (let j = 0; j <= l; j++) {
+          const fj = a[i * n + j]!
+          const gj = e[j]! - hh * fj
+          e[j] = gj
+          for (let k = 0; k <= j; k++) {
+            a[j * n + k]! -= fj * e[k]! + gj * a[i * n + k]!
+          }
+        }
+      }
+    } else {
+      e[i] = a[i * n + l]!
+    }
+    d[i] = h
+  }
+
+  e[0] = 0
+  for (let i = 0; i < n; i++) d[i] = a[i * n + i]!
+}
+
+/**
+ * Eigenvalues of a real symmetric tridiagonal matrix by implicitly-shifted QL.
+ *
+ * `d` holds the diagonal on entry and the eigenvalues (unordered) on exit;
+ * `e` holds the subdiagonal and is destroyed.
+ */
+function qlEigenvalues(d: Float64Array, e: Float64Array, n: number): void {
+  for (let i = 1; i < n; i++) e[i - 1] = e[i]!
+  e[n - 1] = 0
+
+  for (let l = 0; l < n; l++) {
+    let iter = 0
+    let m = l
+    do {
+      // Find a small subdiagonal element to split the matrix at.
+      for (m = l; m < n - 1; m++) {
+        const dd = Math.abs(d[m]!) + Math.abs(d[m + 1]!)
+        if (Math.abs(e[m]!) <= Number.EPSILON * dd) break
+      }
+      if (m === l) break
+
+      // 50 iterations per eigenvalue is the conventional ceiling; QL with
+      // implicit shifts converges in a handful, so exceeding it means the input
+      // was not symmetric tridiagonal. Bail rather than spin.
+      if (iter++ === 50) break
+
+      let g = (d[l + 1]! - d[l]!) / (2 * e[l]!)
+      let r = Math.hypot(g, 1)
+      g = d[m]! - d[l]! + e[l]! / (g + (g >= 0 ? Math.abs(r) : -Math.abs(r)))
+      let s = 1, c = 1, p = 0
+
+      for (let i = m - 1; i >= l; i--) {
+        let f = s * e[i]!
+        const b = c * e[i]!
+        r = Math.hypot(f, g)
+        e[i + 1] = r
+        if (r === 0) {          // recover from underflow
+          d[i + 1]! -= p
+          e[m] = 0
+          break
+        }
+        s = f / r
+        c = g / r
+        g = d[i + 1]! - p
+        r = (d[i]! - g) * s + 2 * c * b
+        p = s * r
+        d[i + 1] = g + p
+        g = c * r - b
+      }
+
+      if (r === 0 && m - 1 >= l) continue
+      d[l]! -= p
+      e[l] = g
+      e[m] = 0
+    } while (m !== l)
+  }
 }
 
 // ─── Exported types ────────────────────────────────────────────────────────
@@ -792,14 +904,14 @@ export type DmOp =
  * Simulate `ops` on the |0…0⟩⟨0…0| initial state and return the exact
  * density matrix, optionally with per-gate depolarizing noise.
  */
-export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParams): DensityMatrix {
+export function runDM(ops: readonly DmOp[], qubits: number, noise?: DmNoiseParams, dense?: DenseOptions): DensityMatrix {
   const p1     = noise?.p1     ?? 0
   const p2     = noise?.p2     ?? 0
   const gamma  = noise?.gamma  ?? 0
   const lambda = noise?.lambda ?? 0
   const kraus1 = noise?.kraus1
   const kraus2 = noise?.kraus2
-  let dm: DmState = dmZeroState()
+  let dm: DmState = dmZeroState(dmPolicy(dense))
   const n = qubits
 
   const sq2 = 1 / Math.sqrt(2)

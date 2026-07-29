@@ -297,3 +297,40 @@ describe('von Neumann entropy — Jacobi eigensolver', () => {
     }
   })
 })
+
+describe('von Neumann entropy — larger systems', () => {
+  // Householder + QL replaced cyclic Jacobi here. Jacobi cost O(dim³) per sweep
+  // and needed roughly ten of them, which put n=9 at 9.4s and n=10 out of reach;
+  // these sizes are only testable because the reduction now runs once.
+
+  it('stays additive out to n=8', () => {
+    const single = new Circuit(1).h(0).dm({ noise: { p1: 0.2 } }).entropy()
+    for (const n of [6, 7, 8]) {
+      let k = new Circuit(n)
+      for (let q = 0; q < n; q++) k = k.h(q)
+      expect(k.dm({ noise: { p1: 0.2 } }).entropy(), `n=${n}`).toBeCloseTo(n * single, 8)
+    }
+  }, 60_000)
+
+  it('eigenvalue-derived quantities stay consistent with purity at n=7', () => {
+    // Sum of eigenvalues is Tr(rho) = 1 and sum of squares is Tr(rho^2) = purity.
+    // Entropy is bounded below by the Renyi-2 entropy -log2(purity), and above by
+    // log2(dim); both are independent of the eigensolver's internals.
+    for (const p1 of [0.05, 0.25]) {
+      let k = new Circuit(7)
+      for (let q = 0; q < 7; q++) k = k.h(q).t(q)
+      for (let q = 0; q < 6; q++) k = k.cnot(q, q + 1)
+      const d = k.dm({ noise: { p1 } })
+      const S = d.entropy()
+      const renyi2 = -Math.log2(d.purity())
+      expect(S, `p1=${p1} vs Renyi-2`).toBeGreaterThanOrEqual(renyi2 - 1e-9)
+      expect(S, `p1=${p1} vs log2(dim)`).toBeLessThanOrEqual(7 + 1e-9)
+    }
+  }, 60_000)
+
+  it('a pure entangled state at n=8 still reads 0', () => {
+    let ghz = new Circuit(8).h(0)
+    for (let i = 0; i < 7; i++) ghz = ghz.cnot(i, i + 1)
+    expect(ghz.dm().entropy()).toBeCloseTo(0, 8)
+  }, 60_000)
+})

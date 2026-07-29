@@ -82,7 +82,7 @@ circuit.simulate({ shots: 1024 })   // routes to the cheapest exact backend
 |---|---|---|
 | Statevector | sparse → dense, automatic | Exact simulation to ~20 qubits |
 | MPS / tensor network | O(n·χ²), χ grows on demand | Low-entanglement circuits, 50+ qubits |
-| Density matrix | O(4ⁿ), sparse | Mixed states and noise |
+| Density matrix | sparse → dense, automatic | Mixed states and noise |
 | Clifford stabilizer | O(n²) | Clifford circuits, QEC thresholds |
 
 The statevector backend starts sparse and promotes itself to a contiguous
@@ -111,27 +111,34 @@ Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at i
 dense statevector kernels are differentially tested against each other gate by gate,
 over every qubit ordering, so promotion can never change a result.
 
-**Zero dependencies.** 142 KB minified, total. Nothing to audit but ket.
+**Zero dependencies.** 147 KB minified, total. Nothing to audit but ket.
 
-## Measured against `quantum-circuit`
+## Performance
 
-Statevector construction, median of 3, Node 22 / Apple silicon
-([source](https://github.com/dmvjs/ket/tree/main/benchmark)):
+ket matches its representation to the circuit instead of committing to one, so
+the same API is efficient across shapes that usually need different tools.
 
-| | ket | quantum-circuit | |
-|---|---|---|---|
-| GHZ-16 | 0.0ms | 4.6ms | **461×** |
-| GHZ-20 | 0.0ms | 119.6ms | **13,102×** |
-| QFT-16 | 11.5ms | 126.7ms | **11×** |
-| random-16, depth 4 | 16.5ms | 5,250ms | **318×** |
+A statevector starts as a sparse map and promotes itself to a flat
+`Float64Array` once it is more than ⅛ full. A GHZ state holds two non-zero
+amplitudes at any width, so it stays sparse and never touches the other million
+slots; a depth-4 random circuit fills every amplitude in its first layer, so it
+moves to the dense kernel once and runs the rest with no allocation at all. The
+density matrix does the same at 1/32 fill, and MPS bond dimension grows on
+demand rather than being capped up front.
 
-Install footprint: **142 KB vs 36 MB** — `quantum-circuit` pulls in mathjs and antlr4.
+Measured on Node 24 / Apple silicon, best of 5:
 
-Those two rows come from opposite representations, which is the whole design. A GHZ
-state holds two amplitudes at any width, so ket keeps it in a sparse map and never
-touches the other million slots. A depth-4 random circuit fills every amplitude in its
-first layer, so ket promotes it once to a flat `Float64Array` and runs the rest of the
-circuit with no allocation at all. You get whichever suits the circuit, without asking.
+| Circuit | Representation | Time |
+|---|---|---|
+| GHZ-20, statevector | sparse | 5µs |
+| QFT-16, statevector | dense | 10.5ms |
+| random-16 depth 4, statevector | dense | 15.7ms |
+| GHZ-50, MPS χ=2 | tensor network | milliseconds |
+| GHZ-127, MPS, 1024 shots | tensor network | 186ms |
+| 12-qubit noisy run, 1024 shots | dense | 0.69s |
+
+None of this needs a flag — the thresholds are defaults, adjustable per call via
+the `dense` option when you want to trade memory against speed.
 
 ## Documentation
 
