@@ -479,3 +479,80 @@ describe('hybrid — configurable promotion thresholds', () => {
     expect(svPolicy({ fill: 4 })).toEqual({ fill: 4, maxQubits: MAX_DENSE_QUBITS })
   })
 })
+
+describe('simulate() — entanglement-adaptive routing', () => {
+  /**
+   * Above the statevector limit `simulate()` used to always pick MPS from the
+   * gate list alone. MPS is only right while entanglement stays bounded: a
+   * volume-law circuit at n=22 drives χ past 500 and takes 108s, where a dense
+   * statevector finishes the same circuit in 7.6s. The router now measures χ as
+   * it goes and abandons MPS once it passes the crossover at χ = 2^(n/3).
+   *
+   * `statevectorLimit` is lowered in these tests so the probe path engages at
+   * sizes where `exactProbs()` can check the answer.
+   */
+
+  /** Brickwork of generic (non-Clifford) two-qubit rotations — entanglement grows with depth. */
+  const volume = (n: number, layers: number): Circuit => {
+    let k = new Circuit(n)
+    let a = 0.3
+    for (let l = 0; l < layers; l++) {
+      for (let q = 0; q < n; q++) { a += 0.37; k = k.ry(a, q).rz(a * 1.7, q) }
+      for (let q = l % 2; q < n - 1; q += 2) { a += 0.23; k = k.crx(a, q, q + 1).cry(a * 0.9, q + 1, q) }
+    }
+    return k
+  }
+
+  it('keeps a low-entanglement circuit on MPS', () => {
+    const d = volume(10, 2).simulate({ shots: 500, seed: 1, statevectorLimit: 4 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi!).toBeLessThanOrEqual(2 ** (10 / 3))
+  })
+
+  it('abandons MPS for the statevector once entanglement passes the crossover', () => {
+    const d = volume(10, 10).simulate({ shots: 500, seed: 1, statevectorLimit: 4 })
+    expect(d.backend).toBe('statevector')
+  })
+
+  it('both routing outcomes agree with exactProbs', () => {
+    for (const [n, layers] of [[10, 2], [10, 10], [12, 12]] as const) {
+      const k = volume(n, layers)
+      const exact = k.exactProbs()
+      const d = k.simulate({ shots: 200_000, seed: 7, statevectorLimit: 4 })
+      for (const [bits, p] of Object.entries(exact)) {
+        if (p < 0.002) continue
+        expect(Math.abs((d.probs[bits] ?? 0) - p), `n=${n} layers=${layers} outcome ${bits}`).toBeLessThan(0.01)
+      }
+    }
+  }, 60_000)
+
+  it('a GHZ chain stays on MPS however wide it gets', () => {
+    // .t(0) keeps it off the Clifford path so the MPS branch is the one tested.
+    let ghz = new Circuit(40).h(0)
+    for (let i = 0; i < 39; i++) ghz = ghz.cnot(i, i + 1)
+    const d = ghz.t(0).simulate({ shots: 200, seed: 1 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi).toBe(2)
+  })
+
+  it('past the dense ceiling there is no fallback to consider', () => {
+    // n=40 exceeds maxQubits, so no statevector exists to fall back to and the
+    // probe is skipped entirely — MPS runs regardless of how entangled it gets.
+    const d = volume(30, 2).simulate({ shots: 100, seed: 1 })
+    expect(d.backend).toBe('mps')
+  }, 60_000)
+
+  it('routing is unchanged for Clifford circuits and small circuits', () => {
+    let ghz = new Circuit(30).h(0)
+    for (let i = 0; i < 29; i++) ghz = ghz.cnot(i, i + 1)
+    expect(ghz.simulate({ shots: 200, seed: 1 }).backend).toBe('clifford')
+    expect(new Circuit(5).h(0).t(1).simulate({ shots: 200, seed: 1 }).backend).toBe('statevector')
+  })
+
+  it('noisy and mid-circuit runs bypass the probe', () => {
+    // Both re-simulate per shot; the probe only covers the clean path.
+    let k = new Circuit(22).h(0)
+    for (let i = 0; i < 21; i++) k = k.cnot(i, i + 1)
+    expect(k.t(0).simulate({ shots: 50, seed: 1, noise: { p1: 0.01 } }).backend).toBe('mps')
+  }, 60_000)
+})

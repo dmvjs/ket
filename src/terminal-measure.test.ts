@@ -160,3 +160,170 @@ describe('terminal measurement — fast and per-shot paths agree', () => {
     }
   })
 })
+
+describe('terminal measurement — MPS backend', () => {
+  /**
+   * `runMps()` had the same defect `run()` did: any measure op forced a full
+   * re-simulation per shot, even when every measurement was terminal. On a
+   * 30-qubit depth-4 circuit that was 0.18s for 1024 shots against 0.012s once
+   * the state is built one time and sampled — and it scaled with shot count.
+   */
+
+  /** Brickwork of generic rotations; entanglement stays low enough for MPS. */
+  const chain = (n: number, layers: number): Circuit => {
+    let k = new Circuit(n)
+    let a = 0.3
+    for (let l = 0; l < layers; l++) {
+      for (let q = 0; q < n; q++) { a += 0.31; k = k.ry(a, q) }
+      for (let q = l % 2; q < n - 1; q += 2) { a += 0.17; k = k.crx(a, q, q + 1) }
+    }
+    return k
+  }
+
+  const measured = (k: Circuit, n: number): Circuit => {
+    let m = k.creg('o', n)
+    for (let q = 0; q < n; q++) m = m.measure(q, 'o', q)
+    return m
+  }
+
+  it('sampled outcomes match exactProbs', () => {
+    const base = chain(8, 3)
+    const exact = base.exactProbs()
+    const d = measured(base, 8).runMps({ shots: 200_000, seed: 5 })
+    for (const [bits, p] of Object.entries(exact)) {
+      if (p < 0.002) continue
+      expect(Math.abs((d.probs[bits] ?? 0) - p), `outcome ${bits}`).toBeLessThan(0.005)
+    }
+  }, 60_000)
+
+  it('creg bits match the exact single-qubit marginals', () => {
+    const base = chain(8, 3)
+    const exact = base.exactProbs()
+    const d = measured(base, 8).runMps({ shots: 200_000, seed: 5 })
+    for (let q = 0; q < 8; q++) {
+      let p1 = 0
+      for (const [bits, p] of Object.entries(exact)) if (bits[q] === '1') p1 += p
+      expect(Math.abs(d.cregs['o']![q]! - p1), `qubit ${q}`).toBeLessThan(0.005)
+    }
+  }, 60_000)
+
+  it('a deterministic circuit gives exact creg bits', () => {
+    let k = new Circuit(4).x(0).x(2)
+    k = k.creg('r', 4)
+    for (let q = 0; q < 4; q++) k = k.measure(q, 'r', q)
+    const d = k.runMps({ shots: 500, seed: 1 })
+    expect(d.probs).toEqual({ '1010': 1 })
+    expect(d.cregs['r']).toEqual([1, 0, 1, 0])
+  })
+
+  it('a wide GHZ with terminal measures stays cheap and correct', () => {
+    let ghz = new Circuit(30).h(0)
+    for (let i = 0; i < 29; i++) ghz = ghz.cnot(i, i + 1)
+    const d = measured(ghz.t(0), 30).runMps({ shots: 4000, seed: 2 })
+    expect(Object.keys(d.probs).toSorted()).toEqual(['0'.repeat(30), '1'.repeat(30)])
+    expect(Math.abs(d.probs['0'.repeat(30)]! - 0.5)).toBeLessThan(0.03)
+    expect(d.peakChi).toBe(2)
+  })
+
+  it('shot count no longer drives the cost', () => {
+    // The old path re-simulated per shot, so 20x the shots cost 20x the time.
+    const m = measured(chain(20, 3), 20)
+    const t1 = performance.now(); m.runMps({ shots: 1000, seed: 1 });  const small = performance.now() - t1
+    const t2 = performance.now(); m.runMps({ shots: 20000, seed: 1 }); const large = performance.now() - t2
+    // Sampling is not free, but 20x the shots must cost far less than 20x the time.
+    expect(large).toBeLessThan(small * 10 + 50)
+  }, 60_000)
+
+  it('non-terminal measurement still takes the per-shot path', () => {
+    // A gate after the measurement means the collapse matters.
+    const d = new Circuit(2).h(0).creg('c', 1).measure(0, 'c', 0).cnot(0, 1)
+      .runMps({ shots: 8000, seed: 4 })
+    expect(Object.keys(d.probs).toSorted()).toEqual(['00', '11'])
+  }, 60_000)
+
+  it('reset and classical feedback still route per-shot', () => {
+    const r = new Circuit(1).x(0).creg('c', 1).measure(0, 'c', 0).reset(0)
+      .runMps({ shots: 200, seed: 1 })
+    expect(r.cregs['c']![0]).toBe(1)
+    expect(r.probs).toEqual({ '0': 1 })
+
+    const f = new Circuit(2).x(0).creg('c', 1).measure(0, 'c', 0)
+      .if('c', 1, k => k.x(1))
+      .runMps({ shots: 200, seed: 1 })
+    expect(f.probs).toEqual({ '11': 1 })
+  })
+})
+
+describe('MPS mid-circuit measurement — canonical form', () => {
+  /**
+   * `MpsTrajectory.measure()` projected the local tensor and rescaled it, but
+   * left the neighbouring bond lambdas holding the Schmidt spectrum of the
+   * *pre-measurement* state. Both the measurement marginal and `sample()` weight
+   * by those lambdas, so the first qubit measured came out right and every one
+   * after it drifted: on an 8-qubit circuit the sampled distribution was off by
+   * 1.5e-2 against exact, forty times sampling noise. `measure()` now
+   * re-canonicalises.
+   *
+   * `noise: { p1: 0 }` forces the per-shot path without perturbing the physics,
+   * which is what isolates measurement handling from everything else.
+   */
+
+  const build = (): Circuit => {
+    let k = new Circuit(8)
+    let a = 0.3
+    for (let l = 0; l < 3; l++) {
+      for (let q = 0; q < 8; q++) { a += 0.31; k = k.ry(a, q) }
+      for (let q = l % 2; q < 7; q += 2) { a += 0.17; k = k.crx(a, q, q + 1) }
+    }
+    return k
+  }
+
+  it('accuracy does not degrade with the number of measured qubits', () => {
+    const exact = build().exactProbs()
+    for (const k of [0, 1, 2, 4, 8]) {
+      let m = build()
+      if (k > 0) {
+        m = m.creg('o', k)
+        for (let q = 0; q < k; q++) m = m.measure(q, 'o', q)
+      }
+      const d = m.runMps({ shots: 200_000, seed: 5, noise: { p1: 0 } })
+      for (const [bits, p] of Object.entries(exact)) {
+        if (p < 0.002) continue
+        expect(Math.abs((d.probs[bits] ?? 0) - p), `k=${k} outcome ${bits}`).toBeLessThan(0.004)
+      }
+    }
+  }, 120_000)
+
+  it('measuring the same qubit twice returns the same bit', () => {
+    // Projection is idempotent — a re-canonicalisation must not disturb that.
+    for (const seed of [1, 2, 3, 4]) {
+      const d = new Circuit(3).h(0).cnot(0, 1).cnot(1, 2)
+        .creg('a', 1).creg('b', 1)
+        .measure(0, 'a', 0).measure(0, 'b', 0)
+        .runMps({ shots: 2000, seed, noise: { p1: 0 } })
+      expect(d.cregs['a']![0], `seed ${seed}`).toBeCloseTo(d.cregs['b']![0]!, 10)
+    }
+  }, 60_000)
+
+  it('a GHZ measured qubit-by-qubit stays perfectly correlated', () => {
+    // Every shot must be all-zeros or all-ones; a broken canonical form leaks
+    // weight onto mixed strings.
+    let ghz = new Circuit(6).h(0)
+    for (let i = 0; i < 5; i++) ghz = ghz.cnot(i, i + 1)
+    let m = ghz.creg('o', 6)
+    for (let q = 0; q < 6; q++) m = m.measure(q, 'o', q)
+    const d = m.runMps({ shots: 4000, seed: 3, noise: { p1: 0 } })
+    expect(Object.keys(d.probs).toSorted()).toEqual(['000000', '111111'])
+    for (let q = 0; q < 6; q++) expect(Math.abs(d.cregs['o']![q]! - 0.5)).toBeLessThan(0.03)
+  }, 60_000)
+
+  it('norm is preserved through repeated measure-and-gate rounds', () => {
+    let k = new Circuit(10)
+    for (let q = 0; q < 10; q++) k = k.h(q)
+    k = k.creg('s', 5)
+    for (let i = 0; i < 5; i++) k = k.measure(i, 's', i).h(i).crx(0.4, i, i + 1)
+    const d = k.runMps({ shots: 3000, seed: 2, noise: { p1: 0 } })
+    const total = Object.values(d.probs).reduce((a, b) => a + b, 0)
+    expect(Math.abs(total - 1)).toBeLessThan(1e-9)
+  }, 60_000)
+})

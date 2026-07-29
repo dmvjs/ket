@@ -45,6 +45,14 @@ export const CNOT4: Gate4x4 = [
   [ZERO, ZERO, ONE, ZERO],
 ]
 
+/** 4×4 identity — used to re-split a bond without changing the state. */
+export const ID4: Gate4x4 = [
+  [{ re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }],
+]
+
 export const SWAP4: Gate4x4 = [
   [ONE, ZERO, ZERO, ZERO],
   [ZERO, ZERO, ONE, ZERO],
@@ -996,7 +1004,31 @@ export class MpsTrajectory {
         data[i1]! *= s1; data[i1 + 1]! *= s1
       }
     }
+
+    // Projecting site q leaves the MPS out of canonical form: the bond lambdas
+    // either side of it are the Schmidt spectrum of the *pre-measurement* state
+    // and no longer describe this one. Both the marginal used above and
+    // `sample()` weight by those lambdas, so leaving them stale silently biases
+    // every later measurement — the first qubit measured comes out right and the
+    // rest drift. Re-canonicalise before returning.
+    this.recanonicalize()
     return bit
+  }
+
+  /**
+   * Restore Vidal canonical form after an operation that invalidated it.
+   *
+   * A left-to-right then right-to-left sweep of two-site identity updates. Each
+   * one merges a neighbouring pair, re-splits it by QR + SVD, and writes back a
+   * correct Schmidt spectrum for that bond, so a full sweep repairs every bond.
+   *
+   * O(n·χ³), against O(χ²) for the measurement itself — measurements are rare
+   * next to gates, and correctness here is not optional.
+   */
+  private recanonicalize(): void {
+    if (this.n < 2) return
+    for (let q = 0; q < this.n - 1; q++) this.apply2Adjacent(q, ID4)
+    for (let q = this.n - 2; q >= 0; q--) this.apply2Adjacent(q, ID4)
   }
 
   /**

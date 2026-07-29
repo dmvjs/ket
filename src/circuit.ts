@@ -3880,10 +3880,16 @@ export class Circuit {
       Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
     )
 
-    const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
+    // Terminal measurements do not need re-simulating per shot: measuring in the
+    // computational basis is a dephasing channel, and dephasing a qubit nothing
+    // else will touch cannot change the joint outcome distribution. Build the MPS
+    // once and read each measurement's bit straight out of the sampled index.
+    // Anything else — noise, reset, classical feedback, a gate on an already
+    // measured qubit — genuinely depends on the collapse and falls through.
+    const terminal = noise ? null : terminalMeasurements(flat)
     const traj = new MpsTrajectory(this.qubits, maxBond, truncErr)
 
-    if (!noise && !hasMidCircuit) {
+    if (terminal) {
       // Clean path: build state once, sample shots times from the same MPS.
       if (initialState !== undefined) {
         svFromBitstring(initialState, this.qubits)
@@ -3891,13 +3897,26 @@ export class Circuit {
           if (initialState[q] === '1') traj.apply1(q, G.X)
         }
       }
-      applyTrajOps(traj, trajOps, 0, 0, rng)
+      // Terminal measures contribute nothing to the state, so drop them rather
+      // than let applyTrajOps collapse the one MPS every shot samples from.
+      applyTrajOps(traj, trajOps.filter(op => op.kind !== 'measure'), 0, 0, rng)
+
+      const readouts = terminal.map(m => ({
+        mask: 1n << BigInt(m.q),
+        acc:  cregCounts.get(m.creg),
+        bit:  m.bit,
+      })).filter((r): r is { mask: bigint; acc: number[]; bit: number } => r.acc !== undefined)
+
       for (let i = 0; i < shots; i++) {
         const idx = traj.sample(rng)
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
+        for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
       }
     } else {
       // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
+      // Distinguish the two: mid-circuit ops need per-shot classical state and
+      // cannot be parallelised, whereas a purely noisy circuit can.
+      const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
       const p1     = noise?.p1     ?? 0
       const p2     = noise?.p2     ?? 0
       const pMeas  = noise?.pMeas  ?? 0
@@ -4867,12 +4886,98 @@ export class Circuit {
       })
     }
 
+    // Above the statevector limit, MPS is usually right — but only for circuits
+    // whose entanglement stays bounded. A volume-law circuit at n=22 drives χ
+    // toward 2^11 and MPS crawls, while a dense statevector at that width is
+    // 67 MiB and finishes. Rather than guess from the gate list, measure: run the
+    // MPS forward and watch χ, abandoning it if the bond dimension passes the
+    // point where a statevector would be cheaper.
+    //
+    // Cost per gate is ~O(χ³) for the MPS bond update against O(2ⁿ) for a dense
+    // statevector sweep, so the crossover sits near χ = 2^(n/3).
+    const policy   = svPolicy(dense)
+    const terminal = noise ? null : terminalMeasurements(flattenOps(this.#ops))
+    // A statevector has to be affordable for a fallback to exist, and both
+    // backends must be on their simulate-once path — otherwise the probe would
+    // be measuring something neither of them actually runs.
+    const canFallBack = this.qubits <= policy.maxQubits && terminal !== null
+
+    if (canFallBack) {
+      const probe = this.#mpsWithinBudget(shots, seed, initialState, 2 ** (this.qubits / 3), terminal)
+      if (probe) return probe
+      // χ blew past the budget — the statevector is the cheaper exact route.
+      return this.run({
+        shots,
+        ...(seed         !== undefined && { seed }),
+        ...(initialState !== undefined && { initialState }),
+        ...(dense        !== undefined && { dense }),
+      })
+    }
+
     return this.runMps({
       shots,
       ...(seed         !== undefined && { seed }),
       ...(noise        !== undefined && { noise }),
       ...(initialState !== undefined && { initialState }),
     })
+  }
+
+  /**
+   * Run the clean MPS path, giving up if the bond dimension exceeds `maxChi`.
+   *
+   * Returns the distribution if the circuit stayed within budget, or `null` if it
+   * did not — in which case the caller should use a different backend. Work is
+   * bounded: χ never exceeds the budget before the check fires, so abandoning
+   * costs far less than either finishing a hopeless MPS run or the statevector
+   * pass that replaces it.
+   *
+   * Only the clean path (no noise, no mid-circuit ops) is handled; those cases
+   * re-simulate per shot and are routed before this is reached.
+   */
+  #mpsWithinBudget(
+    shots: number,
+    seed: number | undefined,
+    initialState: string | undefined,
+    maxChi: number,
+    terminal: readonly MeasureOp[],
+  ): Distribution | null {
+    const rng     = makePrng(seed)
+    // Terminal measures contribute nothing to the state; their bits are read off
+    // each sample below, exactly as runMps does on its clean path.
+    const trajOps = toTrajOps(flattenOps(this.#ops)).filter(op => op.kind !== 'measure')
+    const traj    = new MpsTrajectory(this.qubits, 64, 0)
+
+    if (initialState !== undefined) {
+      svFromBitstring(initialState, this.qubits)
+      for (let q = 0; q < this.qubits; q++) {
+        if (initialState[q] === '1') traj.apply1(q, G.X)
+      }
+    }
+
+    // Checking the bond profile is O(n), so amortise it over a chunk of gates
+    // rather than paying it per gate.
+    const CHECK_EVERY = 16
+    for (let i = 0; i < trajOps.length; i += CHECK_EVERY) {
+      applyTrajOps(traj, trajOps.slice(i, i + CHECK_EVERY), 0, 0, rng)
+      if (traj.maxBondUsed() > maxChi) return null
+    }
+
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
+    const readouts = terminal.map(m => ({
+      mask: 1n << BigInt(m.q),
+      acc:  cregCounts.get(m.creg),
+      bit:  m.bit,
+    })).filter((r): r is { mask: bigint; acc: number[]; bit: number } => r.acc !== undefined)
+
+    const counts = new Map<bigint, number>()
+    for (let i = 0; i < shots; i++) {
+      const idx = traj.sample(rng)
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
+    }
+    return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated, 'mps', traj.maxBondUsed())
   }
 
   // ── Hardware compilation ──────────────────────────────────────────────────

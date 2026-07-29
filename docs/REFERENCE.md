@@ -136,7 +136,28 @@ Routing logic (in priority order):
 |---|---|
 | All gates are Clifford (H, X, Y, Z, S, S†, CNOT, CX, CY, CZ, SWAP) | `clifford` |
 | n ≤ `statevectorLimit` (default 20) | `statevector` |
-| Otherwise (including circuits with mid-circuit measure/reset/if) | `mps` |
+| Larger, and entanglement stays bounded | `mps` |
+| Larger, but entanglement outgrows MPS | `statevector` |
+| Larger than the dense ceiling, or noisy / mid-circuit | `mps` |
+
+The last three rows are decided by measurement, not by inspecting the gate list.
+MPS is only the cheaper backend while bond dimension stays low, and whether it
+does is a property of the circuit's entanglement rather than of its gates. So
+`simulate()` runs the MPS forward and watches χ, abandoning it for a dense
+statevector once χ passes the crossover at 2^(n/3) — the point where the MPS
+bond update, ~O(χ³) per gate, costs more than an O(2ⁿ) statevector sweep.
+
+Abandoning is cheap: χ never exceeds the budget before the check fires, so the
+discarded work is a fraction of either alternative. On a 22-qubit brickwork of
+generic two-qubit rotations, `simulate()` returns in 7.6s where forcing
+`runMps()` takes 108s and reaches χ=500 — **14× faster for the same answer**. A
+GHZ chain at any width still stays on MPS at χ=2.
+
+The probe covers circuits both backends can build once and sample, which includes
+terminal measurements. Noisy circuits and genuine mid-circuit feedback re-simulate
+per shot and go straight to MPS, and circuits past the dense ceiling
+(`dense.maxQubits`, 24 by default) skip it too — there is no statevector to fall
+back to.
 
 ```typescript
 ghz(50).simulate({ shots: 512 }).backend   // 'clifford' — GHZ is Clifford-only
@@ -164,6 +185,8 @@ const d = myCircuit.runMps({ shots: 1024 })
 console.log(`peak χ = ${d.peakChi}`)  // 2 for GHZ, larger for entangled circuits
 ```
 
+MPS mid-circuit measurement projects the measured site and then restores Vidal canonical form. That second step is not optional: the bond lambdas either side of a projected site describe the pre-measurement Schmidt spectrum, and both the measurement marginal and sampling weight by them, so skipping it leaves the first measured qubit correct and biases every one after it. Re-canonicalisation is O(n·χ³) against O(χ²) for the projection, which is immaterial next to gate cost.
+
 The MPS backend runs GHZ-50 in milliseconds at bond dimension χ=2. The density matrix backend runs to n=12 for probabilities, purity and Bloch angles. Its `entropy()` diagonalises the full 2ⁿ × 2ⁿ matrix by Householder tridiagonalisation plus implicitly-shifted QL — O(dim³) once, not per sweep. That is interactive to about n=9 (0.5s), 4.9s at n=10 and 56s at n=11; memory becomes the constraint past that, since the solver works on a real 2·dim × 2·dim embedding. The Clifford backend accepts only gates in {H, S, S†, X, Y, Z, CNOT, CZ, CY, SWAP} and throws if the circuit contains non-Clifford gates (T, Rx, etc.).
 
 All backends accept an `initialState` option to start from an arbitrary computational basis state instead of |0...0⟩:
@@ -174,6 +197,36 @@ circuit.run({ initialState: '110' })
 circuit.runMps({ shots: 1000, initialState: '110' })
 circuit.statevector({ initialState: '110' })
 ```
+
+### Tuning sparse → dense promotion
+
+The statevector and density-matrix backends each begin sparse and switch to a
+contiguous `Float64Array` once the state fills in. Both thresholds are defaults,
+not fixed limits — pass `dense` to override them per call:
+
+```typescript
+import type { DenseOptions } from '@kirkelliott/ket'
+
+circuit.exactProbs({ dense: { maxQubits: 0 } })          // never promote
+circuit.run({ shots: 1024, dense: { maxQubits: 20 } })   // lower the memory ceiling
+circuit.dm({ noise: 'aria-1', dense: { fill: 8 } })      // promote sooner
+```
+
+| Field | Statevector default | Density matrix default | Meaning |
+|---|---|---|---|
+| `fill` | 8 | 32 | Promote once the state exceeds `1 / fill` of full occupancy. Lower values promote sooner. |
+| `maxQubits` | 24 | 12 | Largest qubit count for which a dense buffer is allocated at all. Beyond it the sparse path is used however full the state gets. Both defaults correspond to a 256 MiB buffer. |
+
+Accepted by `run()`, `simulate()`, `statevector()`, `exactProbs()` and `dm()`.
+`runMps()` and `runClifford()` do not take it — neither uses this representation.
+Invalid values (`fill ≤ 0`, negative or non-integer `maxQubits`) throw
+`RangeError` at the call site.
+
+**The choice never changes a result, only its cost.** A 14-qubit depth-4 circuit
+takes 254 ms forced sparse against 13 ms on the default promoting path, with
+bit-identical probabilities. The two reasons to reach for it are a constrained
+environment that cannot afford the default ceiling, and a large machine where
+paying more memory to go faster is the right trade.
 
 ## Gates
 
@@ -769,11 +822,13 @@ It starts sparse: a `Map<bigint, Complex>` holding only basis states with non-ze
 
 That representation stops paying once a state densifies — every gate then rebuilds a `Map`, allocates a `Set<bigint>` of visited keys, and boxes one `{re, im}` object per amplitude. So when the support exceeds 2ⁿ/8, the state is promoted once to a `DenseState`: a single contiguous `Float64Array` with real and imaginary parts interleaved, mutated in place. A gate becomes 2ⁿ unboxed f64 operations with no allocation, which V8 keeps in registers. Measured on a depth-4 random 16-qubit circuit, that is the difference between 1,254 ms and 16.5 ms.
 
-Promotion is one-way — a dense state is never demoted, since the fill test would cost a full scan per gate to avoid work the dense kernel is already fast at. It is also capped at `MAX_DENSE_QUBITS = 24` (2²⁴ amplitudes × 16 bytes = 256 MiB); above that the sparse path stays in charge regardless of fill, because a dense buffer would be a worse problem than a slow one. Permutation gates (CNOT, SWAP, Toffoli, CSWAP) skip the fill test entirely — they cannot change the size of the support.
+Promotion is one-way — a dense state is never demoted, since the fill test would cost a full scan per gate to avoid work the dense kernel is already fast at. It is also capped by default at 24 qubits (2²⁴ amplitudes × 16 bytes = 256 MiB); above that the sparse path stays in charge regardless of fill, because a dense buffer would be a worse problem than a slow one. Both the fill fraction and the ceiling are adjustable per call — see [Tuning sparse → dense promotion](#tuning-sparse--dense-promotion). Permutation gates (CNOT, SWAP, Toffoli, CSWAP) skip the fill test entirely — they cannot change the size of the support.
 
 The two kernels are differentially tested against each other in `src/hybrid.test.ts`, gate by gate across every qubit ordering, so which one runs is never observable in a result.
 
 `run()` adds a second decision on top. A circuit whose measurements are all *terminal* — no `reset`, no `if`, and no gate touching a qubit after it is measured — does not need re-simulating per shot: measuring in the computational basis is a dephasing channel, and dephasing a qubit nothing else will touch cannot change the joint outcome distribution. Such a circuit is built once and sampled, with each measurement reading a bit straight out of the sampled index. Anything else (noise, mid-circuit feedback, a gate on a measured qubit) still runs one full simulation per shot, because there the later gates genuinely depend on the collapse.
+
+`runMps()` applies the same rule, so an MPS circuit written that way is built once too — a 30-qubit depth-4 circuit went from 0.18s to 0.012s for 1024 shots, and 20,000 shots now costs 0.073s where the per-shot path scaled linearly.
 
 This matters more than it sounds, because "apply gates, then measure everything" is how most circuits are written. On a depth-4 random 12-qubit circuit with all twelve qubits measured, 200 shots went from 8,652 ms to 5 ms; 20,000 shots now costs 8.4 ms, where the per-shot path scaled linearly with shot count. `src/terminal-measure.test.ts` pins both halves: that ineligible circuits keep the per-shot path, and that both paths agree on the ones that could take either.
 
