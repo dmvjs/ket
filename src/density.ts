@@ -18,7 +18,7 @@ import {
   ddPhaseDamping1, ddSingle, ddTwo, ddUnitaryN, denseDmGet, dmFromSparse,
   MAX_DENSE_DM_QUBITS, type DenseDM,
 } from './density-dense.js'
-import { resolvePolicy, type DenseOptions, type DensePolicy } from './dense.js'
+import { guardSparseGrowth, resolvePolicy, type DenseOptions, type DensePolicy } from './dense.js'
 import { controlledGate } from './mps.js'
 
 // ─── Sparse DM type ────────────────────────────────────────────────────────
@@ -476,6 +476,7 @@ function dmSettle(dm: DM, n: number, policy: DensePolicy): DmState {
   if (n <= policy.maxQubits && dm.size * policy.fill > 4 ** n) {
     return { kind: 'dense', d: dmFromSparse(dm, n) }
   }
+  guardSparseGrowth(dm.size, n, policy, DEFAULT_DM_POLICY, 'density matrix')
   return { kind: 'sparse', dm, policy }
 }
 
@@ -562,12 +563,22 @@ export class DensityMatrix {
   readonly #shift: bigint
   readonly #dimMask: bigint
 
+  /**
+   * Which representation ρ ended on.
+   *
+   * The backend starts sparse and promotes to a dense `Float64Array` once ρ
+   * fills past `dense.fill`. Exposed so the effect of tuning `dense` is visible
+   * rather than inferred from timings.
+   */
+  readonly representation: 'sparse' | 'dense'
+
   /** @internal */
   constructor(qubits: number, state: DmState) {
     this.qubits   = qubits
     this.#state   = state
     this.#shift   = BigInt(qubits)
     this.#dimMask = (1n << this.#shift) - 1n
+    this.representation = state.kind
   }
 
   /**

@@ -405,6 +405,8 @@ export class MpsTrajectory {
    * Typical values: 1e-8 for chemistry/VQE circuits with rapidly decaying Schmidt spectra.
    */
   readonly truncErr: number
+  /** Hard ceiling on bond dimension; Infinity means unbounded (exact). */
+  readonly chiCap: number
 
   // Per-site tensor storage. data[q] holds up to maxChi × 2 × maxChi complex values.
   // Layout: data[q][((l*2+p)*chiR+r)*2] = re, +1 = im, where chiR = this.chiR[q].
@@ -464,13 +466,24 @@ export class MpsTrajectory {
   /** True if any SVD during this trajectory discarded a singular value above 1e-14 (due to truncErr threshold). */
   get wasTruncated(): boolean { return this.wasTruncated_ }
 
-  constructor(n: number, maxChi: number, truncErr = 0) {
+  /**
+   * @param maxChi   Initial bond allocation. Grows on demand — not a limit.
+   * @param truncErr Relative singular-value cutoff. 0 keeps the run exact.
+   * @param chiCap   Hard ceiling on bond dimension. Unlike `maxChi` this one
+   *                 binds: growth stops here and the SVD keeps only the largest
+   *                 `chiCap` singular values, flagging `wasTruncated`. Defaults
+   *                 to no ceiling, which preserves exact simulation.
+   */
+  constructor(n: number, maxChi: number, truncErr = 0, chiCap = Infinity) {
     this.n        = n
-    this._maxChi  = maxChi
+    // The initial allocation must respect the ceiling too, or the truncation
+    // guard reads a maxChi above the cap and never binds.
+    this._maxChi  = Math.max(1, Math.min(maxChi, chiCap))
     this.truncErr = truncErr
+    this.chiCap   = chiCap
 
-    const maxRows = maxChi * 2
-    const maxCols = maxChi * 2
+    const maxRows = this._maxChi * 2
+    const maxCols = this._maxChi * 2
 
     this.data       = Array.from({ length: n }, () => new Float64Array(maxRows * maxCols * 2))
     this.chiL       = new Int32Array(n)
@@ -615,9 +628,11 @@ export class MpsTrajectory {
     // Auto-grow BEFORE capturing any buffer references.
     // min(rows, cols) is the maximum possible Schmidt rank this SVD can produce.
     // If it exceeds the current maxChi, grow with a 1.5× factor for amortisation.
-    const needed = Math.min(rows, cols)
+    // Never allocate past chiCap: the `bond < maxChi` guard in the truncation
+    // loop below then does the capping, and flags the discarded weight.
+    const needed = Math.min(Math.min(rows, cols), this.chiCap)
     if (needed > this._maxChi) {
-      this.growTo(Math.max(needed, Math.ceil(this._maxChi * 1.5)))
+      this.growTo(Math.min(this.chiCap, Math.max(needed, Math.ceil(this._maxChi * 1.5))))
     }
 
     const chiM = this.chiR[a]!   // == this.chiL[b]
@@ -855,8 +870,8 @@ export class MpsTrajectory {
     }
 
     // Bond dimension: keep singular values above the cutoff.
-    // maxChi is no longer a hard cap here — growTo() already ensured it is ≥ min(rows,cols),
-    // so the bond < maxChi guard is only a safety net for edge cases (n=1, etc.).
+    // growTo() has already raised maxChi to min(rows, cols) unless chiCap stopped
+    // it, so the `bond < maxChi` guard binds exactly when a cap was requested.
     // cutoff = max(absolute floor, relative fraction of σ_max).
     const sigma0 = sigmaBuf[orderBuf[0]!]!
     const cutoff = sigma0 > 0

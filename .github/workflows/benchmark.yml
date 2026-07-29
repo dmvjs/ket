@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
 
       - name: Install dependencies
         run: npm install
@@ -27,7 +27,7 @@ jobs:
         run: npm run build
 
       - name: Run benchmarks
-        run: node benchmark/run.mjs | node benchmark/update-readme.mjs
+        run: node benchmark/run.ts | node benchmark/update-readme.ts
 
       - name: Commit charts
         run: |

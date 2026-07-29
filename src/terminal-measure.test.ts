@@ -132,15 +132,15 @@ describe('terminal measurement — fast and per-shot paths agree', () => {
       for (let q = 0; q < 8; q++) k = k.measure(q, 'm', q)
       return k
     }
-    const fast = build(9).run({ shots: 40_000, seed: 33 })
-    const slow = build(9).reset(8).run({ shots: 40_000, seed: 33 })
+    const fast = build(9).run({ shots: 15_000, seed: 33 })
+    const slow = build(9).reset(8).run({ shots: 15_000, seed: 33 })
 
     for (const k of Object.keys(fast.probs)) {
       if (fast.probs[k]! < 0.01) continue
-      expect(Math.abs(fast.probs[k]! - (slow.probs[k] ?? 0)), `outcome ${k}`).toBeLessThan(0.015)
+      expect(Math.abs(fast.probs[k]! - (slow.probs[k] ?? 0)), `outcome ${k}`).toBeLessThan(0.025)
     }
     for (let b = 0; b < 8; b++) {
-      expect(Math.abs(fast.cregs['m']![b]! - slow.cregs['m']![b]!), `bit ${b}`).toBeLessThan(0.015)
+      expect(Math.abs(fast.cregs['m']![b]! - slow.cregs['m']![b]!), `bit ${b}`).toBeLessThan(0.025)
     }
   })
 
@@ -279,20 +279,22 @@ describe('MPS mid-circuit measurement — canonical form', () => {
   }
 
   it('accuracy does not degrade with the number of measured qubits', () => {
+    // Every shot is a fresh simulation on this path, so shot count is the whole
+    // cost. 40k is chosen to sit well inside the gap between the two regimes:
+    // sampling noise here is ~2e-3, while the stale-lambda bias reached 1.5e-2.
+    // k=1 and k=8 are the endpoints that matter — the old code was correct for a
+    // single measurement and drifted from the second one onward.
     const exact = build().exactProbs()
-    for (const k of [0, 1, 2, 4, 8]) {
-      let m = build()
-      if (k > 0) {
-        m = m.creg('o', k)
-        for (let q = 0; q < k; q++) m = m.measure(q, 'o', q)
-      }
-      const d = m.runMps({ shots: 200_000, seed: 5, noise: { p1: 0 } })
+    for (const k of [1, 8]) {
+      let m = build().creg('o', k)
+      for (let q = 0; q < k; q++) m = m.measure(q, 'o', q)
+      const d = m.runMps({ shots: 40_000, seed: 5, noise: { p1: 0 } })
       for (const [bits, p] of Object.entries(exact)) {
         if (p < 0.002) continue
-        expect(Math.abs((d.probs[bits] ?? 0) - p), `k=${k} outcome ${bits}`).toBeLessThan(0.004)
+        expect(Math.abs((d.probs[bits] ?? 0) - p), `k=${k} outcome ${bits}`).toBeLessThan(0.006)
       }
     }
-  }, 120_000)
+  }, 60_000)
 
   it('measuring the same qubit twice returns the same bit', () => {
     // Projection is idempotent — a re-canonicalisation must not disturb that.

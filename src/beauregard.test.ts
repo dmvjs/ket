@@ -466,7 +466,8 @@ describe('beauregard — MPS bond dimension scaling', () => {
     expect(chi).toBeLessThanOrEqual(64)
   })
 
-  // N=77 peakChi=143 measured (~15 min); excluded from CI — run scripts/measure-chi.ts manually.
+  // N=77 gives peakChi=143 but takes ~15 min, so it is not run in CI. To reproduce,
+  // call measurePeakChi(77n, 2n) from a scratch test — the helper above is the whole tool.
 })
 
 // ── End-to-end: shorBeauregard / factor ───────────────────────────────────────

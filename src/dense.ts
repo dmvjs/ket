@@ -69,6 +69,46 @@ export interface DensePolicy {
   readonly maxQubits: number
 }
 
+/**
+ * Entry count past which a sparse state is treated as a memory hazard.
+ *
+ * A sparse entry costs roughly 100 bytes once the BigInt key, the boxed complex
+ * value and Map overhead are counted, so ~4M entries is already several hundred
+ * megabytes. Used only to catch the case where promotion was disabled by an
+ * override and the state filled up anyway — see `guardSparseGrowth`.
+ */
+export const SPARSE_ENTRY_LIMIT = 1 << 22
+
+/**
+ * Fail fast when an override has turned off promotion for a state that is
+ * filling up and small enough that dense would have handled it.
+ *
+ * `dense.maxQubits` exists to *bound* memory. Honouring a lowered ceiling all
+ * the way into a multi-gigabyte sparse map would invert that intent and end in a
+ * V8 heap abort with no indication of the cause, so this raises a diagnostic
+ * instead.
+ *
+ * Deliberately narrow. It fires only when all three hold:
+ *   - the state has grown past the hazard threshold,
+ *   - promotion is off because the caller lowered `maxQubits`,
+ *   - the default ceiling would have allowed dense at this width.
+ *
+ * So default runs are unaffected, and so are genuinely wide circuits where a
+ * dense buffer was never an option and sparse is the only way to proceed.
+ */
+export function guardSparseGrowth(
+  size: number, n: number, policy: DensePolicy, defaults: DensePolicy, what: string,
+): void {
+  if (size <= SPARSE_ENTRY_LIMIT) return
+  if (n <= policy.maxQubits) return          // promotion still available
+  if (n > defaults.maxQubits) return         // dense was never viable here
+  throw new RangeError(
+    `${what}: ${size.toLocaleString()} non-zero entries at ${n} qubits with dense promotion disabled ` +
+    `(dense.maxQubits = ${policy.maxQubits}). The sparse representation would need several gigabytes. ` +
+    `Raise dense.maxQubits to at least ${n} to use the dense backend, or reduce the circuit.`,
+  )
+}
+
 /** Resolve caller options against a backend's defaults, rejecting nonsense. */
 export function resolvePolicy(opts: DenseOptions | undefined, fallback: DensePolicy): DensePolicy {
   const fill = opts?.fill ?? fallback.fill

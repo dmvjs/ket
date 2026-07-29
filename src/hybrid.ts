@@ -24,7 +24,7 @@ import {
   denseClone, denseCNOT, denseCollapse, denseControlled, denseCsrSwap, denseCSwap,
   denseDecay, denseNnz, denseNorm2, denseProbabilities, denseProbOne, denseSample,
   denseScale, denseScaleBranch, denseSingle, denseSWAP, denseToffoli, denseTwo,
-  denseUnitary, denseZero, fromSparse, MAX_DENSE_QUBITS, resolvePolicy, toSparse,
+  denseUnitary, denseZero, fromSparse, guardSparseGrowth, MAX_DENSE_QUBITS, resolvePolicy, toSparse,
   type DenseOptions, type DensePolicy, type DenseState,
 } from './dense.js'
 import {
@@ -73,9 +73,9 @@ function shouldPromote(sv: StateVector, n: number, policy: DensePolicy): boolean
 
 /** Apply the fill test to a freshly-computed sparse state, promoting if warranted. */
 function settle(sv: StateVector, n: number, policy: DensePolicy): SimState {
-  return shouldPromote(sv, n, policy)
-    ? { kind: 'dense', d: fromSparse(sv, n) }
-    : { kind: 'sparse', sv, n, policy }
+  if (shouldPromote(sv, n, policy)) return { kind: 'dense', d: fromSparse(sv, n) }
+  guardSparseGrowth(sv.size, n, policy, DEFAULT_SV_POLICY, 'statevector')
+  return { kind: 'sparse', sv, n, policy }
 }
 
 /** Force the dense representation regardless of fill. Exposed for testing. */
@@ -90,6 +90,25 @@ export const simKind = (s: SimState): 'sparse' | 'dense' => s.kind
 /** Non-negligible amplitude count. */
 export const simNnz = (s: SimState): number =>
   s.kind === 'sparse' ? s.sv.size : denseNnz(s.d)
+
+/**
+ * Visit every non-negligible amplitude as (index, re, im).
+ *
+ * Lets callers that only want to read amplitudes skip `simToSparse`, which for a
+ * dense state builds a 2ⁿ-entry Map purely to be iterated and thrown away.
+ */
+export function simForEach(s: SimState, fn: (idx: number, re: number, im: number) => void): void {
+  if (s.kind === 'sparse') {
+    for (const [i, a] of s.sv) fn(Number(i), a.re, a.im)
+    return
+  }
+  const { data } = s.d
+  const total = 1 << s.d.n
+  for (let i = 0; i < total; i++) {
+    const re = data[i << 1]!, im = data[(i << 1) | 1]!
+    if (re * re + im * im >= 1e-14) fn(i, re, im)
+  }
+}
 
 /** Materialise as the sparse map the public API returns. */
 export const simToSparse = (s: SimState): StateVector =>

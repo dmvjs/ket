@@ -5,7 +5,7 @@ import { H, Rx, Ry, Rz, T, U3, X, Xy, Y, Z } from './gates.js'
 import {
   denseCNOT, denseControlled, denseCsrSwap, denseCSwap, denseNnz, denseProbabilities,
   denseSingle, denseSWAP, denseToffoli, denseTwo, denseUnitary, fromSparse,
-  MAX_DENSE_QUBITS, toSparse,
+  guardSparseGrowth, MAX_DENSE_QUBITS, SPARSE_ENTRY_LIMIT, toSparse,
 } from './dense.js'
 import {
   applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP,
@@ -554,5 +554,249 @@ describe('simulate() — entanglement-adaptive routing', () => {
     let k = new Circuit(22).h(0)
     for (let i = 0; i < 21; i++) k = k.cnot(i, i + 1)
     expect(k.t(0).simulate({ shots: 50, seed: 1, noise: { p1: 0.01 } }).backend).toBe('mps')
+  }, 60_000)
+})
+
+describe('representation is observable', () => {
+  /**
+   * `dense` is a documented option, so its effect has to be checkable. Without
+   * this, tuning `fill` or `maxQubits` could only be inferred from timings.
+   */
+
+  const uniform = (n: number): Circuit => {
+    let k = new Circuit(n)
+    for (let q = 0; q < n; q++) k = k.h(q).t(q)
+    return k
+  }
+
+  it('reports sparse for a state that never fills', () => {
+    let ghz = new Circuit(20).h(0)
+    for (let i = 0; i < 19; i++) ghz = ghz.cnot(i, i + 1)
+    expect(ghz.run({ shots: 100, seed: 1 }).representation).toBe('sparse')
+  })
+
+  it('reports dense for a state that does', () => {
+    expect(uniform(12).run({ shots: 100, seed: 1 }).representation).toBe('dense')
+  })
+
+  it('tracks the dense option in both directions', () => {
+    const k = uniform(10)
+    expect(k.run({ shots: 100, seed: 1, dense: { maxQubits: 0 } }).representation).toBe('sparse')
+    expect(k.run({ shots: 100, seed: 1, dense: { fill: 1e6 } }).representation).toBe('dense')
+  })
+
+  it('covers the per-shot noise path too', () => {
+    expect(uniform(10).run({ shots: 20, seed: 1, noise: { p1: 0.01 } }).representation).toBe('dense')
+    expect(uniform(10).run({ shots: 20, seed: 1, noise: { p1: 0.01 }, dense: { maxQubits: 0 } }).representation).toBe('sparse')
+  })
+
+  it('is undefined for backends the choice does not apply to', () => {
+    let ghz = new Circuit(20).h(0)
+    for (let i = 0; i < 19; i++) ghz = ghz.cnot(i, i + 1)
+    expect(ghz.runClifford({ shots: 100, seed: 1 }).representation).toBeUndefined()
+    expect(ghz.t(0).runMps({ shots: 100, seed: 1 }).representation).toBeUndefined()
+  })
+
+  it('DensityMatrix reports its own representation', () => {
+    let u = new Circuit(6)
+    for (let q = 0; q < 6; q++) u = u.h(q)
+    expect(u.dm().representation).toBe('dense')
+    expect(u.dm({ dense: { maxQubits: 0 } }).representation).toBe('sparse')
+    expect(new Circuit(6).x(0).x(3).dm().representation).toBe('sparse')
+  })
+})
+
+describe('simulate() — MPS tuning passes through', () => {
+  const volume = (n: number, layers: number): Circuit => {
+    let k = new Circuit(n)
+    let a = 0.3
+    for (let l = 0; l < layers; l++) {
+      for (let q = 0; q < n; q++) { a += 0.37; k = k.ry(a, q) }
+      for (let q = l % 2; q < n - 1; q += 2) { a += 0.23; k = k.crx(a, q, q + 1) }
+    }
+    return k
+  }
+
+  it('truncErr caps chi, so a circuit that would bail stays on MPS', () => {
+    const k = volume(10, 10)
+    // Exact: entanglement outgrows the budget and the router falls back.
+    expect(k.simulate({ shots: 200, seed: 1, statevectorLimit: 4 }).backend).toBe('statevector')
+    // Approximate: truncation holds chi down, so MPS remains the cheaper route.
+    const t = k.simulate({ shots: 200, seed: 1, statevectorLimit: 4, truncErr: 1e-3 })
+    expect(t.backend).toBe('mps')
+    expect(t.truncated).toBe(true)
+    expect(t.peakChi!).toBeLessThan(2 ** (10 / 3))
+  })
+
+  it('maxBond is an allocation hint, not a cap, so it does not change routing', () => {
+    // chi still grows past the budget however much was pre-allocated.
+    const k = volume(10, 10)
+    expect(k.simulate({ shots: 200, seed: 1, statevectorLimit: 4, maxBond: 256 }).backend).toBe('statevector')
+  })
+
+  it('tuning reaches the plain MPS route above the dense ceiling', () => {
+    const d = volume(30, 4).simulate({ shots: 100, seed: 1, truncErr: 1e-3 })
+    expect(d.backend).toBe('mps')
+    expect(d.truncated).toBe(true)
+  }, 60_000)
+})
+
+describe('dense promotion — disabling it fails loudly rather than exhausting the heap', () => {
+  /**
+   * `dense.maxQubits` exists to bound memory, so honouring a lowered ceiling all
+   * the way into a multi-gigabyte sparse map would invert its purpose. Forcing
+   * sparse on a 12-qubit density matrix asks for 4^12 boxed entries; that used to
+   * end in a V8 heap abort with nothing to indicate why.
+   *
+   * The guard is deliberately narrow — it must not disturb small forced-sparse
+   * runs, nor wide circuits where dense was never an option to begin with.
+   */
+
+  // The guard's own logic is checked directly below; these end-to-end cases only
+  // confirm the wiring, and each one has to build millions of sparse entries
+  // before the guard can fire. One throwing call, asserted three ways.
+  it('throws a diagnostic instead of running out of memory', () => {
+    let u = new Circuit(12)
+    for (let q = 0; q < 12; q++) u = u.h(q)
+    let err: unknown
+    try { u.dm({ dense: { maxQubits: 0 } }) } catch (e) { err = e }
+    expect(err).toBeInstanceOf(RangeError)
+    expect((err as Error).message).toMatch(/dense promotion disabled/)
+    // The message has to say how to proceed, not just that something went wrong.
+    expect((err as Error).message).toMatch(/Raise dense\.maxQubits to at least 12/)
+  }, 60_000)
+
+  it('guardSparseGrowth fires on exactly the hazard case and nothing else', () => {
+    const defaults = { fill: 32, maxQubits: 12 }
+    const off      = { fill: 32, maxQubits: 0 }   // caller disabled promotion
+    const big      = SPARSE_ENTRY_LIMIT + 1
+
+    // All three conditions hold: large, promotion off, dense would have fitted.
+    expect(() => guardSparseGrowth(big, 12, off, defaults, 'x')).toThrow(RangeError)
+
+    // Small enough not to matter.
+    expect(() => guardSparseGrowth(SPARSE_ENTRY_LIMIT, 12, off, defaults, 'x')).not.toThrow()
+    // Promotion still available — nothing was overridden away.
+    expect(() => guardSparseGrowth(big, 12, defaults, defaults, 'x')).not.toThrow()
+    // Too wide for a dense buffer under any policy: sparse is the only option.
+    expect(() => guardSparseGrowth(big, 30, off, defaults, 'x')).not.toThrow()
+  })
+
+  it('leaves small forced-sparse runs alone', () => {
+    let u6 = new Circuit(6)
+    for (let q = 0; q < 6; q++) u6 = u6.h(q)
+    expect(u6.dm({ dense: { maxQubits: 0 } }).representation).toBe('sparse')
+
+    let u10 = new Circuit(10)
+    for (let q = 0; q < 10; q++) u10 = u10.h(q).t(q)
+    expect(u10.run({ shots: 50, seed: 1, dense: { maxQubits: 0 } }).representation).toBe('sparse')
+  })
+
+  it('leaves wide circuits alone, where dense was never viable', () => {
+    // n=60 is far past any dense ceiling, so sparse is the only representation
+    // available and must not be second-guessed.
+    let ghz = new Circuit(60).h(0)
+    for (let i = 0; i < 59; i++) ghz = ghz.cnot(i, i + 1)
+    expect(ghz.statevector().size).toBe(2)
+  })
+
+  it('raising maxQubits is a working remedy, as the message claims', () => {
+    let u = new Circuit(12)
+    for (let q = 0; q < 12; q++) u = u.h(q)
+    const d = u.dm({ dense: { maxQubits: 12 } })
+    expect(d.representation).toBe('dense')
+    expect(Object.keys(d.probabilities())).toHaveLength(4096)
+  }, 60_000)
+})
+
+describe('MPS bond dimension — maxChi is a real ceiling', () => {
+  /**
+   * `maxBond` reads like a cap but is only an initial allocation — χ grows past
+   * it on demand, so `maxBond: 256` changes nothing about how large χ gets. That
+   * left no way to bound MPS *memory* deterministically: `truncErr` bounds the
+   * error, which is a different quantity. `maxChi` is the ceiling, and it binds.
+   */
+
+  const volume = (n: number, layers: number): Circuit => {
+    let k = new Circuit(n)
+    let a = 0.3
+    for (let l = 0; l < layers; l++) {
+      for (let q = 0; q < n; q++) { a += 0.37; k = k.ry(a, q) }
+      for (let q = l % 2; q < n - 1; q += 2) { a += 0.23; k = k.crx(a, q, q + 1) }
+    }
+    return k
+  }
+
+  it('caps chi and reports the truncation', () => {
+    const k = volume(14, 10)
+    const free = k.runMps({ shots: 500, seed: 1 })
+    expect(free.peakChi!).toBeGreaterThan(16)
+    expect(free.truncated).toBe(false)
+
+    for (const cap of [16, 4]) {
+      const d = k.runMps({ shots: 500, seed: 1, maxChi: cap })
+      expect(d.peakChi, `maxChi=${cap}`).toBe(cap)
+      expect(d.truncated, `maxChi=${cap}`).toBe(true)
+    }
+  }, 60_000)
+
+  it('a ceiling above the circuit’s own chi changes nothing', () => {
+    const k = volume(14, 10)
+    const free = k.runMps({ shots: 500, seed: 1 })
+    const high = k.runMps({ shots: 500, seed: 1, maxChi: 1024 })
+    expect(high.peakChi).toBe(free.peakChi)
+    expect(high.truncated).toBe(false)
+  }, 60_000)
+
+  it('stays accurate at a generous cap and degrades gracefully at a tight one', () => {
+    const k = volume(14, 10)
+    const exact = k.exactProbs()
+    // 30k shots puts sampling noise near 3e-3, well inside both bounds below.
+    const err = (cap: number): number => {
+      const d = k.runMps({ shots: 30_000, seed: 1, maxChi: cap })
+      let e = 0
+      for (const [bits, p] of Object.entries(exact)) if (p > 0.002) e = Math.max(e, Math.abs((d.probs[bits] ?? 0) - p))
+      return e
+    }
+    expect(err(16)).toBeLessThan(0.008)   // generous cap: still essentially exact
+    expect(err(4)).toBeLessThan(0.02)     // tight cap: approximate but not wild
+  }, 60_000)
+
+  it('reaches the backend through simulate() too', () => {
+    const d = volume(30, 4).simulate({ shots: 100, seed: 1, maxChi: 8 })
+    expect(d.backend).toBe('mps')
+    expect(d.peakChi!).toBeLessThanOrEqual(8)
+  }, 60_000)
+
+  it('is exact by default — no ceiling unless asked for', () => {
+    let ghz = new Circuit(20).h(0)
+    for (let i = 0; i < 19; i++) ghz = ghz.cnot(i, i + 1)
+    const d = ghz.t(0).runMps({ shots: 200, seed: 1 })
+    expect(d.truncated).toBe(false)
+    expect(d.peakChi).toBe(2)
+  })
+})
+
+describe('maxChi and the entanglement router interact predictably', () => {
+  const volume = (n: number, layers: number): Circuit => {
+    let k = new Circuit(n)
+    let a = 0.3
+    for (let l = 0; l < layers; l++) {
+      for (let q = 0; q < n; q++) { a += 0.37; k = k.ry(a, q).rz(a * 1.7, q) }
+      for (let q = l % 2; q < n - 1; q += 2) { a += 0.23; k = k.crx(a, q, q + 1).cry(a * 0.9, q + 1, q) }
+    }
+    return k
+  }
+
+  it('a ceiling keeps the run on MPS instead of falling back', () => {
+    const k = volume(14, 12)
+    // Unbounded: entanglement outgrows the routing budget, so it bails.
+    expect(k.simulate({ shots: 100, seed: 1, statevectorLimit: 4 }).backend).toBe('statevector')
+    // Bounded: chi cannot reach the budget, so MPS stays — which is the point of
+    // asking for bounded memory in the first place.
+    const m = k.simulate({ shots: 100, seed: 1, statevectorLimit: 4, maxChi: 8 })
+    expect(m.backend).toBe('mps')
+    expect(m.peakChi).toBe(8)
+    expect(m.truncated).toBe(true)
   }, 60_000)
 })

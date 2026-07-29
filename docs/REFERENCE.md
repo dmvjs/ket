@@ -43,7 +43,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle ships in two flavours — `ket.js` (329kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (150kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
+The ESM bundle ships in two flavours — `ket.js` (332kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (150kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -126,8 +126,57 @@ console.log(dm.probabilities()) // { '00': ..., '01': ..., ... }
 
 ```typescript
 const d = circuit.simulate({ shots: 1024, seed: 42 })
-d.backend   // 'clifford' | 'statevector' | 'mps'
-d.peakChi   // peak bond dimension χ used (MPS only)
+d.backend         // 'clifford' | 'statevector' | 'mps'
+d.peakChi         // peak bond dimension χ used (MPS only)
+d.representation  // 'sparse' | 'dense' — statevector only, undefined elsewhere
+```
+
+`simulate()` also forwards backend tuning: `dense` to the statevector path (see
+[Tuning sparse → dense promotion](#tuning-sparse--dense-promotion)), and
+`maxBond` / `truncErr` / `maxChi` to MPS. Either `truncErr` or `maxChi` will hold
+χ down, which can keep a circuit on MPS that would otherwise fall back — at the
+cost of making the simulation approximate.
+
+### Bounding MPS bond dimension
+
+Three MPS options sound similar and are not:
+
+| Option | Default | Effect |
+|---|---|---|
+| `maxBond` | 64 | **Initial allocation only.** χ grows past it on demand, so this never changes how large χ becomes — raising it only avoids reallocation on circuits known to be highly entangled. |
+| `truncErr` | 0 | Relative singular-value cutoff. Bounds the *error*; the resulting χ is whatever that implies. |
+| `maxChi` | unbounded | **Hard ceiling on χ.** Bounds the *memory*, deterministically. The SVD keeps at most this many Schmidt values per bond and sets `Distribution.truncated`. |
+
+`maxBond: 256` is a common mistake — it reads like a cap but is not one. Use
+`maxChi` when the requirement is "do not exceed this much memory", and `truncErr`
+when it is "do not exceed this much error". On a 14-qubit brickwork whose natural
+χ is 46:
+
+```typescript
+k.runMps({ shots: 500 })                 // peakChi 46, truncated false — exact
+k.runMps({ shots: 500, maxBond: 256 })   // peakChi 46, truncated false — unchanged
+k.runMps({ shots: 500, maxChi: 16 })     // peakChi 16, truncated true
+k.runMps({ shots: 500, maxChi: 4 })      // peakChi  4, truncated true
+```
+
+Both remain exact by default: without `truncErr` or `maxChi`, χ grows to whatever
+the circuit needs.
+
+Setting `maxChi` also switches off the entanglement fallback in `simulate()`. The
+router abandons MPS when χ outgrows a budget, but a ceiling holds χ under that
+budget by construction, so the check never fires — a bounded-memory MPS run is
+what was asked for, and quietly swapping in a dense statevector would contradict
+it. Leave `maxChi` unset if you want the router to choose.
+
+`Distribution.representation` reports which statevector representation the run
+finished on, and `DensityMatrix.representation` does the same for ρ. Both exist
+so the effect of tuning `dense` is observable rather than inferred from timings:
+
+```typescript
+uniform12.run({ shots: 100 }).representation                        // 'dense'
+uniform12.run({ shots: 100, dense: { maxQubits: 0 } }).representation // 'sparse'
+ghz20.run({ shots: 100 }).representation                            // 'sparse' — never fills
+ghz20.runClifford({ shots: 100 }).representation                    // undefined — n/a
 ```
 
 Routing logic (in priority order):
@@ -220,7 +269,13 @@ circuit.dm({ noise: 'aria-1', dense: { fill: 8 } })      // promote sooner
 Accepted by `run()`, `simulate()`, `statevector()`, `exactProbs()` and `dm()`.
 `runMps()` and `runClifford()` do not take it — neither uses this representation.
 Invalid values (`fill ≤ 0`, negative or non-integer `maxQubits`) throw
-`RangeError` at the call site.
+`RangeError` at the call site. Disabling promotion for a state that then
+fills up is caught rather than allowed to run the heap dry: `dense: { maxQubits:
+0 }` on a 12-qubit density matrix would need 4¹² boxed map entries, so it throws a
+`RangeError` naming the entry count and the ceiling to raise. The guard is narrow
+— it needs the state past ~4M entries *and* a width the default ceiling would have
+allowed, so small forced-sparse runs and circuits too wide for any dense buffer
+are untouched.
 
 **The choice never changes a result, only its cost.** A 14-qubit depth-4 circuit
 takes 254 ms forced sparse against 13 ms on the default promoting path, with
@@ -810,7 +865,7 @@ All operation types are preserved: gates, measure, reset, if, and named sub-circ
 
 <!-- benchmark:start -->
 
-Populated by CI on every push to main — run `node benchmark/run.mjs | node benchmark/update-readme.mjs` to regenerate locally.
+Populated by CI on every push to main — run `node benchmark/run.ts | node benchmark/update-readme.ts` to regenerate locally.
 
 <!-- benchmark:end -->
 

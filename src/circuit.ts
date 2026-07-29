@@ -11,7 +11,7 @@ import {
   simClone, simCNOT, simCollapse, simControlled, simCsrSwap, simCSwap, simDecay,
   simFromSparse, simNorm2, simProbabilities, simProbOne, simSample, simScale,
   simScaleBranch, simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary,
-  simZero, svPolicy, type SimState,
+  simForEach, simKind, simZero, svPolicy, type SimState,
 } from './hybrid.js'
 import type { DenseOptions, DensePolicy } from './dense.js'
 import { Complex, ZERO } from './complex.js'
@@ -1088,6 +1088,27 @@ export interface SimulateOptions {
    */
   statevectorLimit?: number
   /**
+   * Initial MPS bond dimension when this routes to the tensor-network backend
+   * (default 64). Not a cap — χ grows on demand; raising it only avoids
+   * reallocation on circuits known to be highly entangled.
+   */
+  maxBond?: number
+  /**
+   * Relative singular-value cutoff for the MPS backend (default 0, meaning
+   * exact). Above zero the simulation becomes approximate.
+   */
+  truncErr?: number
+  /**
+   * Hard ceiling on bond dimension χ.
+   *
+   * Unlike `maxBond`, which is only an initial allocation and grows on demand,
+   * this one binds: the simulation keeps at most `maxChi` Schmidt values per
+   * bond and sets `Distribution.truncated`. Use it to put a deterministic bound
+   * on memory — `truncErr` bounds the error instead, which is not the same
+   * thing. Unset means unbounded, and therefore exact.
+   */
+  maxChi?: number
+  /**
    * Tune when the statevector switches from its sparse map to a dense
    * `Float64Array`. Defaults promote at 1/8 fill and refuse to allocate beyond
    * 24 qubits (256 MiB). Lower `maxQubits` on a constrained machine; raise it to
@@ -1097,6 +1118,17 @@ export interface SimulateOptions {
 }
 
 export interface MpsRunOptions {
+  /**
+   * Hard ceiling on bond dimension χ.
+   *
+   * Unlike `maxBond`, which is only an initial allocation and grows on demand,
+   * this one binds: the simulation keeps at most `maxChi` Schmidt values per
+   * bond and sets `Distribution.truncated`. Use it to put a deterministic bound
+   * on memory — `truncErr` bounds the error instead, which is not the same
+   * thing. Unset means unbounded, and therefore exact.
+   */
+  maxChi?: number
+
   shots?: number
   seed?: number
   /**
@@ -1177,6 +1209,16 @@ export class Distribution {
    * Only defined when `backend === 'mps'`.
    */
   readonly peakChi: number | undefined
+  /**
+   * Which statevector representation the run finished on.
+   *
+   * The statevector backend starts sparse and promotes itself to a dense
+   * `Float64Array` once the state fills past `dense.fill`. This reports which
+   * side of that it ended on, so the effect of tuning `dense` is visible rather
+   * than guessed at. Undefined for backends the choice does not apply to — MPS
+   * and Clifford have their own representations.
+   */
+  readonly representation: 'sparse' | 'dense' | undefined
 
   constructor(
     qubits: number,
@@ -1186,12 +1228,14 @@ export class Distribution {
     truncated = false,
     backend?: 'clifford' | 'statevector' | 'mps',
     peakChi?: number,
+    representation?: 'sparse' | 'dense',
   ) {
     this.qubits    = qubits
     this.shots     = shots
     this.truncated = truncated
     this.backend   = backend
     this.peakChi   = peakChi
+    this.representation = representation
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -1822,9 +1866,17 @@ export class Circuit {
       return r
     }
     const matrix: Complex[][] = Array.from({ length: dim }, () => new Array<Complex>(dim).fill(ZERO))
+    // One column per basis state. Read amplitudes straight off the simulated
+    // state rather than through `simulatePure`, whose sparse-Map return would
+    // cost dim² insertions across the whole matrix just to be iterated once.
+    // Promote immediately too: every column of a non-trivial circuit densifies,
+    // so the sparse warm-up is pure overhead here.
+    const eager: DensePolicy = { fill: Number.MAX_SAFE_INTEGER, maxQubits: n }
     for (let col = 0; col < dim; col++) {
-      const sv = simulatePure(this.#ops, this.qubits, new Map([[BigInt(flip(col)), { re: 1, im: 0 }]]))
-      for (const [idx, amp] of sv) matrix[flip(Number(idx))]![col] = amp
+      const state = simulatePureState(
+        this.#ops, this.qubits, new Map([[BigInt(flip(col)), { re: 1, im: 0 }]]), eager,
+      )
+      simForEach(state, (idx, re, im) => { matrix[flip(idx)]![col] = { re, im } })
     }
     return matrix
   }
@@ -3769,7 +3821,8 @@ export class Circuit {
     const terminal = noiseParams ? null : terminalMeasurements(flattenOps(this.#ops))
     if (terminal) {
       // Sampling only needs probabilities, so skip materialising the sparse map.
-      const probs  = simProbabilities(simulatePureState(this.#ops, this.qubits, init, policy))
+      const state  = simulatePureState(this.#ops, this.qubits, init, policy)
+      const probs  = simProbabilities(state)
       const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
 
       const cdf: { idx: bigint; cumP: number }[] = []
@@ -3805,12 +3858,15 @@ export class Circuit {
         for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
       }
 
-      return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
+      return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector', undefined, simKind(state))
     }
 
     // ── Per-shot path: noise or mid-circuit ops — one full simulation per shot ──
     const counts = new Map<bigint, number>()
     const pMeas  = noiseParams?.pMeas ?? 0
+    // Shots are independent but structurally identical, so they all promote at
+    // the same point; the last one's representation describes the whole run.
+    let lastKind: 'sparse' | 'dense' | undefined
 
     for (let i = 0; i < shots; i++) {
       const shotCregs = new Map<string, boolean[]>(
@@ -3822,6 +3878,7 @@ export class Circuit {
         init ? simFromSparse(init, this.qubits, policy) : simZero(this.qubits, policy),
         shotCregs, rng, noiseParams,
       )
+      lastKind = simKind(state)
 
       // Final readout: sample then apply SPAM noise per qubit
       let finalIdx = simSample(state, rng())
@@ -3838,7 +3895,7 @@ export class Circuit {
       }
     }
 
-    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector')
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector', undefined, lastKind)
   }
 
   /**
@@ -3862,7 +3919,7 @@ export class Circuit {
    * state to start from; `noise` a device name or explicit rates; and `workers` a
    * trajectory worker count for the noisy path.
    */
-  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
+  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, maxChi = Infinity, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
     // Resolve noise: named device profile → NoiseParams, or use as-is
     const noise: NoiseParams | undefined =
       noiseRaw == null          ? undefined :
@@ -3887,118 +3944,97 @@ export class Circuit {
     // Anything else — noise, reset, classical feedback, a gate on an already
     // measured qubit — genuinely depends on the collapse and falls through.
     const terminal = noise ? null : terminalMeasurements(flat)
-    const traj = new MpsTrajectory(this.qubits, maxBond, truncErr)
 
     if (terminal) {
-      // Clean path: build state once, sample shots times from the same MPS.
-      if (initialState !== undefined) {
-        svFromBitstring(initialState, this.qubits)
-        for (let q = 0; q < this.qubits; q++) {
-          if (initialState[q] === '1') traj.apply1(q, G.X)
+      // Build the state once and sample it — see #buildAndSampleMps. Without a χ
+      // budget it cannot decline, so the result is always present.
+      return this.#buildAndSampleMps({ shots, rng, trajOps, terminal, initialState, maxBond, truncErr, chiCap: maxChi })!
+    }
+    // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
+    // Distinguish the two: mid-circuit ops need per-shot classical state and
+    // cannot be parallelised, whereas a purely noisy circuit can.
+    const traj = new MpsTrajectory(this.qubits, maxBond, truncErr, maxChi)
+    const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
+    const p1     = noise?.p1     ?? 0
+    const p2     = noise?.p2     ?? 0
+    const pMeas  = noise?.pMeas  ?? 0
+    const gamma  = noise?.gamma  ?? 0
+    const lambda = noise?.lambda ?? 0
+    if (noise?.kraus1 || noise?.kraus2) {
+      throw new Error('kraus1/kraus2 custom channels are not supported in the MPS trajectory backend — use run() (statevector) or runDM() (density matrix) instead')
+    }
+    if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
+
+    // Parallel path: workers handle the noisy+clean-mid-circuit case.
+    // Mid-circuit circuits require per-shot creg state and can't be parallelised yet.
+    const wtLocal = wt
+    const isBuilt = !import.meta.url.endsWith('.ts')
+    if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
+      console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
+    }
+    if (numWorkers > 1 && isBuilt && wtLocal !== null && !hasMidCircuit) {
+      const workerUrl = new URL('./mps.worker.js', import.meta.url)
+      const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
+      const slices    = distributeShots(shots, numWorkers)
+      const flags     = slices.map(() => new Int32Array(new SharedArrayBuffer(4)))
+
+      // Persistent pool: workers stay alive between calls — no spawn overhead.
+      // Each job gets a fresh MessageChannel so receiveMessageOnPort(port1)
+      // can synchronously dequeue this call's result after Atomics.wait wakes.
+      const ws       = acquirePool(numWorkers, workerUrl, wtLocal.Worker)
+      const channels = slices.map(() => new MessageChannel())
+
+      slices.forEach((sliceShots, i) => {
+        const job: WorkerJob = {
+          ops: trajOps, n: this.qubits, maxBond, truncErr, p1, p2, pMeas,
+          shots: sliceShots,
+          seed:  ((baseSeed * 0x9e3779b9 + i * 0x6c62272e) >>> 0) || 1,
+          initialState,
+          flag:  flags[i]!,
+          port:  channels[i]!.port2,
         }
-      }
-      // Terminal measures contribute nothing to the state, so drop them rather
-      // than let applyTrajOps collapse the one MPS every shot samples from.
-      applyTrajOps(traj, trajOps.filter(op => op.kind !== 'measure'), 0, 0, rng)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(ws[i] as any).postMessage(job, [channels[i]!.port2])
+      })
 
-      const readouts = terminal.map(m => ({
-        mask: 1n << BigInt(m.q),
-        acc:  cregCounts.get(m.creg),
-        bit:  m.bit,
-      })).filter((r): r is { mask: bigint; acc: number[]; bit: number } => r.acc !== undefined)
-
-      for (let i = 0; i < shots; i++) {
-        const idx = traj.sample(rng)
-        counts.set(idx, (counts.get(idx) ?? 0) + 1)
-        for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
+      for (let i = 0; i < ws.length; i++) {
+        const waitResult = Atomics.wait(flags[i]!, 0, 0, 300_000)
+        if (waitResult === 'timed-out') throw new Error(`[ket] runMps worker ${i} timed out after 5 minutes`)
+        const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
+        for (const [k, v] of message.counts as [bigint, number][]) {
+          counts.set(k, (counts.get(k) ?? 0) + v)
+        }
       }
     } else {
-      // Per-shot path: noise, mid-circuit ops, or both — one fresh execution per shot.
-      // Distinguish the two: mid-circuit ops need per-shot classical state and
-      // cannot be parallelised, whereas a purely noisy circuit can.
-      const hasMidCircuit = flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
-      const p1     = noise?.p1     ?? 0
-      const p2     = noise?.p2     ?? 0
-      const pMeas  = noise?.pMeas  ?? 0
-      const gamma  = noise?.gamma  ?? 0
-      const lambda = noise?.lambda ?? 0
-      if (noise?.kraus1 || noise?.kraus2) {
-        throw new Error('kraus1/kraus2 custom channels are not supported in the MPS trajectory backend — use run() (statevector) or runDM() (density matrix) instead')
-      }
-      if (initialState !== undefined) svFromBitstring(initialState, this.qubits)
-
-      // Parallel path: workers handle the noisy+clean-mid-circuit case.
-      // Mid-circuit circuits require per-shot creg state and can't be parallelised yet.
-      const wtLocal = wt
-      const isBuilt = !import.meta.url.endsWith('.ts')
-      if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
-        console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
-      }
-      if (numWorkers > 1 && isBuilt && wtLocal !== null && !hasMidCircuit) {
-        const workerUrl = new URL('./mps.worker.js', import.meta.url)
-        const baseSeed  = seed !== undefined ? (seed >>> 0) : (Date.now() >>> 0)
-        const slices    = distributeShots(shots, numWorkers)
-        const flags     = slices.map(() => new Int32Array(new SharedArrayBuffer(4)))
-
-        // Persistent pool: workers stay alive between calls — no spawn overhead.
-        // Each job gets a fresh MessageChannel so receiveMessageOnPort(port1)
-        // can synchronously dequeue this call's result after Atomics.wait wakes.
-        const ws       = acquirePool(numWorkers, workerUrl, wtLocal.Worker)
-        const channels = slices.map(() => new MessageChannel())
-
-        slices.forEach((sliceShots, i) => {
-          const job: WorkerJob = {
-            ops: trajOps, n: this.qubits, maxBond, truncErr, p1, p2, pMeas,
-            shots: sliceShots,
-            seed:  ((baseSeed * 0x9e3779b9 + i * 0x6c62272e) >>> 0) || 1,
-            initialState,
-            flag:  flags[i]!,
-            port:  channels[i]!.port2,
-          }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ;(ws[i] as any).postMessage(job, [channels[i]!.port2])
-        })
-
-        for (let i = 0; i < ws.length; i++) {
-          const waitResult = Atomics.wait(flags[i]!, 0, 0, 300_000)
-          if (waitResult === 'timed-out') throw new Error(`[ket] runMps worker ${i} timed out after 5 minutes`)
-          const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
-          for (const [k, v] of message.counts as [bigint, number][]) {
-            counts.set(k, (counts.get(k) ?? 0) + v)
+      // Single-threaded trajectory loop.
+      for (let i = 0; i < shots; i++) {
+        traj.reset()
+        if (initialState !== undefined) {
+          for (let q = 0; q < this.qubits; q++) {
+            if (initialState[q] === '1') traj.apply1(q, G.X)
           }
         }
-      } else {
-        // Single-threaded trajectory loop.
-        for (let i = 0; i < shots; i++) {
-          traj.reset()
-          if (initialState !== undefined) {
-            for (let q = 0; q < this.qubits; q++) {
-              if (initialState[q] === '1') traj.apply1(q, G.X)
-            }
+        const shotCregs = hasMidCircuit
+          ? new Map<string, boolean[]>(
+              Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
+            )
+          : undefined
+        applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
+        let idx = traj.sample(rng)
+        if (pMeas) {
+          for (let q = 0; q < this.qubits; q++) {
+            if (rng() < pMeas) idx ^= (1n << BigInt(q))
           }
-          const shotCregs = hasMidCircuit
-            ? new Map<string, boolean[]>(
-                Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
-              )
-            : undefined
-          applyTrajOps(traj, trajOps, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
-          let idx = traj.sample(rng)
-          if (pMeas) {
-            for (let q = 0; q < this.qubits; q++) {
-              if (rng() < pMeas) idx ^= (1n << BigInt(q))
-            }
-          }
-          counts.set(idx, (counts.get(idx) ?? 0) + 1)
-          if (shotCregs) {
-            for (const [name, bits] of shotCregs) {
-              const acc = cregCounts.get(name)!
-              for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
-            }
+        }
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+        if (shotCregs) {
+          for (const [name, bits] of shotCregs) {
+            const acc = cregCounts.get(name)!
+            for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
           }
         }
       }
     }
-
     return new Distribution(this.qubits, shots, counts, cregCounts, traj.wasTruncated, 'mps', traj.maxBondUsed())
   }
 
@@ -4848,7 +4884,7 @@ export class Circuit {
    * d.peakChi   // 2
    * ```
    */
-  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense }: SimulateOptions = {}): Distribution {
+  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense, maxBond = 64, truncErr = 0, maxChi = Infinity }: SimulateOptions = {}): Distribution {
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
 
@@ -4903,7 +4939,14 @@ export class Circuit {
     const canFallBack = this.qubits <= policy.maxQubits && terminal !== null
 
     if (canFallBack) {
-      const probe = this.#mpsWithinBudget(shots, seed, initialState, 2 ** (this.qubits / 3), terminal)
+      const probe = this.#buildAndSampleMps({
+        shots, rng: makePrng(seed), trajOps: toTrajOps(flattenOps(this.#ops)),
+        terminal, initialState, maxBond, truncErr, chiCap: maxChi,
+        // A caller-set maxChi holds χ under the budget by construction, so the
+        // probe simply never fires — bounded-memory MPS is what they asked for,
+        // and falling back to a dense statevector would contradict it.
+        bailAboveChi: 2 ** (this.qubits / 3),
+      })
       if (probe) return probe
       // χ blew past the budget — the statevector is the cheaper exact route.
       return this.run({
@@ -4915,7 +4958,7 @@ export class Circuit {
     }
 
     return this.runMps({
-      shots,
+      shots, maxBond, truncErr, maxChi,
       ...(seed         !== undefined && { seed }),
       ...(noise        !== undefined && { noise }),
       ...(initialState !== undefined && { initialState }),
@@ -4934,18 +4977,42 @@ export class Circuit {
    * Only the clean path (no noise, no mid-circuit ops) is handled; those cases
    * re-simulate per shot and are routed before this is reached.
    */
-  #mpsWithinBudget(
-    shots: number,
-    seed: number | undefined,
-    initialState: string | undefined,
-    maxChi: number,
-    terminal: readonly MeasureOp[],
-  ): Distribution | null {
-    const rng     = makePrng(seed)
-    // Terminal measures contribute nothing to the state; their bits are read off
-    // each sample below, exactly as runMps does on its clean path.
-    const trajOps = toTrajOps(flattenOps(this.#ops)).filter(op => op.kind !== 'measure')
-    const traj    = new MpsTrajectory(this.qubits, 64, 0)
+  /**
+   * Build the MPS once and sample it — the path shared by `runMps()`'s clean
+   * branch and `simulate()`'s entanglement probe.
+   *
+   * Terminal measures are dropped before evolution: they contribute nothing to
+   * the state, and letting `applyTrajOps` collapse the single MPS that every
+   * shot samples from would pin all shots to one outcome. Their bits are read
+   * out of each sample instead.
+   *
+   * With `maxChi` set the evolution is checked as it goes and abandoned —
+   * returning `null` — once bond dimension passes the budget. Without it the
+   * circuit always runs to completion and a Distribution is always returned.
+   */
+  #buildAndSampleMps({ shots, rng, trajOps, terminal, initialState, maxBond, truncErr, chiCap, bailAboveChi }: {
+    shots: number
+    rng: () => number
+    trajOps: readonly TrajOp[]
+    terminal: readonly MeasureOp[]
+    initialState: string | undefined
+    maxBond: number
+    truncErr: number
+    /**
+     * Hard ceiling on χ: the SVD truncates to stay under it and the run
+     * continues, approximately. This is the caller's `maxChi` option.
+     */
+    chiCap?: number
+    /**
+     * Routing budget: if χ passes this the run is abandoned entirely, returning
+     * null so the caller can pick a different backend. Distinct from `chiCap` —
+     * one keeps going with less accuracy, the other gives up. Naming them apart
+     * matters because both are "a number χ is compared against".
+     */
+    bailAboveChi?: number
+  }): Distribution | null {
+    const traj  = new MpsTrajectory(this.qubits, maxBond, truncErr, chiCap ?? Infinity)
+    const gates = trajOps.filter(op => op.kind !== 'measure')
 
     if (initialState !== undefined) {
       svFromBitstring(initialState, this.qubits)
@@ -4954,12 +5021,16 @@ export class Circuit {
       }
     }
 
-    // Checking the bond profile is O(n), so amortise it over a chunk of gates
-    // rather than paying it per gate.
-    const CHECK_EVERY = 16
-    for (let i = 0; i < trajOps.length; i += CHECK_EVERY) {
-      applyTrajOps(traj, trajOps.slice(i, i + CHECK_EVERY), 0, 0, rng)
-      if (traj.maxBondUsed() > maxChi) return null
+    if (bailAboveChi === undefined) {
+      applyTrajOps(traj, gates, 0, 0, rng)
+    } else {
+      // Reading the bond profile is O(n), so amortise it over a chunk of gates
+      // rather than paying it per gate.
+      const CHECK_EVERY = 16
+      for (let i = 0; i < gates.length; i += CHECK_EVERY) {
+        applyTrajOps(traj, gates.slice(i, i + CHECK_EVERY), 0, 0, rng)
+        if (traj.maxBondUsed() > bailAboveChi) return null
+      }
     }
 
     const cregCounts = new Map<string, number[]>(
