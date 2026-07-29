@@ -1,0 +1,162 @@
+# Multiple Qubits {#sec-multi-qubit}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+One qubit has two basis states: $|0\rangle$ and $|1\rangle$.
+
+Two qubits have four: $|00\rangle$, $|01\rangle$, $|10\rangle$, $|11\rangle$.
+
+$n$ qubits have $2^n$ basis states — and a quantum state is a superposition over *all of them simultaneously*. This exponential state space is where quantum computing gets its leverage.
+
+## Two-qubit states
+
+A two-qubit state is written:
+
+$$|\psi\rangle = \alpha_{00}|00\rangle + \alpha_{01}|01\rangle + \alpha_{10}|10\rangle + \alpha_{11}|11\rangle$$
+
+Four amplitudes, each complex, summing to 1 in squared magnitude. Putting both qubits in equal superposition with H gives all four outcomes equally likely:
+
+```{ojs}
+c_2h = new ket.Circuit(2).h(0).h(1)
+svg(c_2h.toSVG())
+```
+
+```{ojs}
+pre(c_2h.draw())
+```
+
+```{ojs}
+svg(c_2h.simulate({ shots: 2000 }).toSVG())
+```
+
+Each of the four basis states gets amplitude $\frac{1}{2}$, probability $\frac{1}{4}$. The histogram shows them equally distributed. With 3 qubits it would be 8 outcomes. With 10, 1024.
+
+## Individual qubits are still independent here
+
+When there's no two-qubit gate connecting them, each qubit evolves on its own. We can see this on the Bloch sphere — each qubit lives at its own point, independently:
+
+```{ojs}
+c_ind = new ket.Circuit(2).h(0).x(1)
+svg(c_ind.toSVG())
+```
+
+Qubit 0 is at the equator (superposition). Qubit 1 is at the south pole ($|1\rangle$).
+
+```{ojs}
+svg(c_ind.blochSphere(0))
+```
+
+```{ojs}
+svg(c_ind.blochSphere(1))
+```
+
+Two different poles. The state is a product state — it factors as $|{+}\rangle \otimes |1\rangle$. The qubits are completely independent.
+
+## The CNOT gate
+
+Single-qubit gates act on one qubit at a time. To create correlations between qubits, you need a two-qubit gate.
+
+The **CNOT** (controlled-NOT) is the workhorse:
+
+- If the control is $|0\rangle$, do nothing to the target
+- If the control is $|1\rangle$, flip the target
+
+```{ojs}
+svg(new ket.Circuit(2).cx(0, 1).toSVG())
+```
+
+```{ojs}
+pre(new ket.Circuit(2).cx(0, 1).draw())
+```
+
+The filled dot is the control; the ⊕ is the target. On classical inputs it's just XOR. We can verify each row of the truth table by preparing each input state and measuring:
+
+```{ojs}
+cnot_00 = new ket.Circuit(2).cx(0, 1)
+svg(cnot_00.simulate({ shots: 500 }).toSVG())
+```
+
+```{ojs}
+cnot_10 = new ket.Circuit(2).x(0).cx(0, 1)
+svg(cnot_10.simulate({ shots: 500 }).toSVG())
+```
+
+```{ojs}
+cnot_01 = new ket.Circuit(2).x(1).cx(0, 1)
+svg(cnot_01.simulate({ shots: 500 }).toSVG())
+```
+
+```{ojs}
+cnot_11 = new ket.Circuit(2).x(0).x(1).cx(0, 1)
+svg(cnot_11.simulate({ shots: 500 }).toSVG())
+```
+
+Each histogram has a single bar — the classical inputs map deterministically to classical outputs. On superpositions, the CNOT does something more interesting, which is the subject of Chapter 4.
+
+## Building up circuits
+
+Gates chain left to right. Each is a matrix acting on the joint state vector. Here is a three-qubit circuit that puts each qubit through a different single-qubit gate:
+
+```{ojs}
+c_3 = new ket.Circuit(3).h(0).x(1).rx(Math.PI / 3, 2)
+svg(c_3.toSVG())
+```
+
+```{ojs}
+pre(c_3.draw())
+```
+
+```{ojs}
+svg(c_3.simulate({ shots: 2000 }).toSVG())
+```
+
+Qubit 0 is in superposition (H), qubit 1 is always $|1\rangle$ (X), qubit 2 has a partial rotation. The joint measurement reflects all three: the second bit is always 1, the other two vary.
+
+## Product states have zero entanglement
+
+When there are no two-qubit gates, the state is a product state and has no entanglement across any bond. `bondEntropies()` gives the log₂ entanglement entropy across each consecutive pair of qubits:
+
+```{ojs}
+c_product = new ket.Circuit(4).h(0).x(1).h(2).rx(Math.PI/4, 3)
+svg(c_product.toSVG())
+```
+
+```{ojs}
+c_product.bondEntropies()
+```
+
+All zeros. No gate has connected any qubit to any other. Each qubit is an island. Chapter 4 shows what happens when CNOT introduces correlations — and how the entropy changes.
+
+## Circuit depth and width
+
+Two dimensions describe the cost of a quantum circuit:
+
+- **Width** — number of qubits (space)
+- **Depth** — longest path from input to output (time; determines exposure to noise)
+
+Gates on separate qubits can run in parallel, reducing depth:
+
+```{ojs}
+// depth 1: all three H gates run simultaneously
+c_parallel = new ket.Circuit(3).h(0).h(1).h(2)
+svg(c_parallel.toSVG())
+```
+
+```{ojs}
+// depth 3: same H gates but forced to run on one qubit serially
+c_serial = new ket.Circuit(1).h(0).h(0).h(0)
+svg(c_serial.toSVG())
+```
+
+The three-qubit version has depth 1 — all three H gates execute simultaneously. The single-qubit version has depth 3. Both apply three H gates total, but the three-qubit circuit finishes three times faster on hardware.
+
+Real hardware runs gates in parallel where qubits don't interact. Minimising depth is one of the key tasks in quantum compilation.
+
+## What's next
+
+CNOT acting on a superposition creates something classical circuits can't: **entanglement**. Chapter 4 explores what that means, how to measure it, and why it's the engine behind every quantum speedup.

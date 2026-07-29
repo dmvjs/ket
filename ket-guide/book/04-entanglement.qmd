@@ -1,0 +1,202 @@
+# Entanglement {#sec-entanglement}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+Apply H to qubit 0, then CNOT with qubit 0 as control and qubit 1 as target:
+
+```{ojs}
+bell = new ket.Circuit(2).h(0).cx(0, 1)
+svg(bell.toSVG())
+```
+
+```{ojs}
+pre(bell.draw())
+```
+
+```{ojs}
+svg(bell.simulate({ shots: 2000 }).toSVG())
+```
+
+Only $|00\rangle$ and $|11\rangle$. Never $|01\rangle$ or $|10\rangle$.
+
+The two qubits are **entangled**. Measure one and you instantly know the other — perfectly correlated, no matter how far apart they are.
+
+## What entanglement is
+
+Before measurement, neither qubit has a definite value. The joint state is:
+
+$$|\Phi^+\rangle = \frac{1}{\sqrt{2}}|00\rangle + \frac{1}{\sqrt{2}}|11\rangle$$
+
+This is a **Bell state** — the simplest maximally entangled state. It cannot be written as a product of two independent qubit states. There is no $|\psi_0\rangle \otimes |\psi_1\rangle$ that equals it.
+
+That factorability is the test: if you can write the state as a product, the qubits are independent. If you can't, they're entangled.
+
+## Entanglement entropy
+
+There's a quantitative measure. `bondEntropies()` returns the log₂ von Neumann entropy across each consecutive bond. A product state scores 0. Maximal entanglement scores 1.
+
+```{ojs}
+// Product state: no entanglement
+product = new ket.Circuit(2).h(0).x(1)
+product.bondEntropies()
+```
+
+```{ojs}
+// Bell state: maximum entanglement
+bell.bondEntropies()
+```
+
+The product state scores exactly 0. The Bell state scores exactly 1 — one full bit of entanglement entropy across the bond between qubit 0 and qubit 1. This is the physics. The histogram alone can't tell you this; the entropy can.
+
+## Looking at the Bloch sphere
+
+In a product state, each qubit has a well-defined Bloch vector:
+
+```{ojs}
+svg(product.blochSphere(0))
+```
+
+```{ojs}
+svg(product.blochSphere(1))
+```
+
+Qubit 0 sits on the equator (superposition). Qubit 1 sits at the south pole ($|1\rangle$). Each qubit has a pure state of its own.
+
+Now look at the same qubits in the Bell state:
+
+```{ojs}
+svg(bell.blochSphere(0))
+```
+
+```{ojs}
+svg(bell.blochSphere(1))
+```
+
+Both qubits sit at the *origin* of the Bloch sphere — not on the surface, but at the centre. A point on the surface is a pure state. The centre is a maximally mixed state. Each qubit, viewed alone, is completely undetermined. The information lives only in the correlation between them.
+
+This is the geometric signature of entanglement: entangled qubits have no individual Bloch vectors. The description of the pair cannot be reduced to descriptions of two individuals.
+
+## The four Bell states
+
+There are four maximally entangled two-qubit states, one for each combination of relative phase and parity:
+
+$$|\Phi^+\rangle = \tfrac{1}{\sqrt{2}}(|00\rangle + |11\rangle) \qquad |\Phi^-\rangle = \tfrac{1}{\sqrt{2}}(|00\rangle - |11\rangle)$$
+$$|\Psi^+\rangle = \tfrac{1}{\sqrt{2}}(|01\rangle + |10\rangle) \qquad |\Psi^-\rangle = \tfrac{1}{\sqrt{2}}(|01\rangle - |10\rangle)$$
+
+```{ojs}
+phi_plus  = new ket.Circuit(2).h(0).cx(0,1)
+phi_minus = new ket.Circuit(2).h(0).cx(0,1).z(0)
+psi_plus  = new ket.Circuit(2).h(0).cx(0,1).x(1)
+psi_minus = new ket.Circuit(2).h(0).cx(0,1).x(1).z(0)
+```
+
+```{ojs}
+svg(phi_plus.toSVG())
+```
+
+```{ojs}
+svg(phi_plus.simulate({ shots: 2000 }).toSVG())
+```
+
+```{ojs}
+svg(phi_minus.toSVG())
+```
+
+```{ojs}
+svg(phi_minus.simulate({ shots: 2000 }).toSVG())
+```
+
+```{ojs}
+svg(psi_plus.toSVG())
+```
+
+```{ojs}
+svg(psi_plus.simulate({ shots: 2000 }).toSVG())
+```
+
+```{ojs}
+svg(psi_minus.toSVG())
+```
+
+```{ojs}
+svg(psi_minus.simulate({ shots: 2000 }).toSVG())
+```
+
+$\Phi^+$ and $\Phi^-$ show only $|00\rangle$/$|11\rangle$. $\Psi^+$ and $\Psi^-$ show only $|01\rangle$/$|10\rangle$. The $\pm$ phase difference is invisible in the histograms — it matters when these states enter further gates. All four score entropy = 1:
+
+```{ojs}
+[phi_plus, phi_minus, psi_plus, psi_minus].map(c => c.bondEntropies())
+```
+
+## Why it's strange
+
+The correlations are stronger than anything classical physics allows.
+
+Imagine two coins that always land the same way — both heads or both tails — no matter how far apart they are. Classically, you'd explain this by assuming they were preset: heads-heads or tails-tails, decided before they separated. Hidden information.
+
+Quantum mechanics rules this out. The Bell inequalities are a mathematical test: correlations from hidden preset values can only be so strong. Entangled particles violate them. The correlations are not pre-agreed — they're genuinely created at the moment of measurement.
+
+This is what Einstein called "spooky action at a distance." He thought it meant quantum mechanics was incomplete. Experiments since the 1980s have confirmed it isn't: entanglement is real, and the hidden-variable explanation doesn't work.
+
+## Three-qubit entanglement — GHZ
+
+The pattern extends. The **GHZ state** entangles three qubits:
+
+$$|GHZ\rangle = \frac{1}{\sqrt{2}}|000\rangle + \frac{1}{\sqrt{2}}|111\rangle$$
+
+```{ojs}
+ghz = new ket.Circuit(3).h(0).cx(0,1).cx(0,2)
+svg(ghz.toSVG())
+```
+
+```{ojs}
+pre(ghz.draw())
+```
+
+```{ojs}
+svg(ghz.simulate({ shots: 2000 }).toSVG())
+```
+
+Only $|000\rangle$ and $|111\rangle$. Measure any one qubit and the other two are determined. The bond entropies tell the full story:
+
+```{ojs}
+ghz.bondEntropies()
+```
+
+Both bonds carry entanglement. The three qubits are collectively correlated across the whole register.
+
+Now look at what the individual Bloch spheres show:
+
+```{ojs}
+svg(ghz.blochSphere(0))
+```
+
+```{ojs}
+svg(ghz.blochSphere(1))
+```
+
+```{ojs}
+svg(ghz.blochSphere(2))
+```
+
+All three qubits are at the origin — maximally mixed individually, even though the joint state is pure. The information is entirely non-local: it exists only in the three-way correlation.
+
+## Entanglement as a resource
+
+Entanglement isn't just philosophically interesting — it's a computational resource:
+
+- **Quantum teleportation** — transmit a qubit's full state using only classical bits, via a shared Bell pair
+- **Superdense coding** — send two classical bits by physically transmitting one qubit
+- **Quantum error correction** — detect and fix errors without measuring the data directly
+- **Every quantum speedup** — Grover's, Shor's, and everything beyond — depends on building and exploiting entanglement across many qubits
+
+The exponential state space from Chapter 3 is only useful *because* entanglement lets you act on all of it coherently. Without entanglement, a quantum computer is just a slow classical one.
+
+## What's next
+
+Chapter 5 combines interference and entanglement into the first real algorithm: Deutsch–Jozsa, a problem where a quantum computer beats any classical computer in a single query.

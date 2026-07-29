@@ -1,0 +1,32 @@
+# Preface {.unnumbered}
+
+This book teaches quantum computing by doing it.
+
+Every concept is introduced alongside runnable code using [`ket`](https://github.com/dmvjs/ket) — a TypeScript quantum circuit simulator. You don't need a physics degree. You need curiosity and a willingness to play with the examples.
+
+## How to read this book
+
+The book is structured in three parts:
+
+**The Foundations** (Chapters 1–4) covers the vocabulary of quantum computing: qubits, gates, superposition, and entanglement. These chapters assume no physics background — only familiarity with the idea of a computer program.
+
+**Algorithms** (Chapters 5–8) shows why quantum computers are interesting: they can solve certain problems faster than any classical computer. We'll build up to Shor's algorithm, which can factor large numbers and is the reason quantum computers make cryptographers nervous.
+
+**Reality** (Chapters 9–10) grounds everything in how quantum hardware actually behaves. Real qubits are noisy. We'll see what that means and how to work with it.
+
+## The interactive examples
+
+In the HTML version of this book, code blocks run live in your browser. Every visualization is produced by `ket` — no screenshots, no mock data. You can modify the code and re-run it.
+
+In the PDF version, code is shown with its pre-rendered output.
+
+## A note on math
+
+Quantum computing has precise mathematical foundations. This book uses that math when it clarifies rather than obscures. Key equations are introduced slowly, with plain-English translations. If you've seen a matrix before, you have enough math to read this book.
+
+---
+
+*"If you think you understand quantum mechanics, you don't understand quantum mechanics."*
+— Richard Feynman
+
+(Feynman also said quantum computers might be the only way to simulate nature efficiently. That idea still drives the field.)

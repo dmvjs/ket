@@ -7,9 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit, DEVICES, IONQ_DEVICES } from './circuit.js'
 import { CliffordSim } from './clifford.js'
-import { trotter, iqft, qft, grover, vqe } from './algorithms.js'
+import { trotter, vqe } from './algorithms.js'
 import type { PauliTerm } from './algorithms.js'
-import { c, add, mul, conj, norm2, ZERO, ONE, I } from './complex.js'
 
 // ─── pauliEvolution — Y-term sign ────────────────────────────────────────────
 //
@@ -222,9 +221,10 @@ describe('DensityMatrix.get', () => {
   })
 })
 
-// ─── DensityMatrix.entropy — jacobiEigenvalues convergence ───────────────────
+// ─── DensityMatrix.entropy — eigensolver convergence ─────────────────────────
 //
-// entropy() diagonalises the full 2ⁿ×2ⁿ DM via cyclic Jacobi sweeps (≤ 30n).
+// entropy() diagonalises the full 2ⁿ×2ⁿ DM by Householder tridiagonalisation
+// plus implicitly-shifted QL.
 // Tests verify convergence for pure states, known 1-bit mixtures, degenerate
 // spectra (all-equal eigenvalues), and monotonicity under noise.
 
@@ -286,13 +286,12 @@ describe('runMps — unsupported ops throw', () => {
     expect(() => new Circuit(3).csrswap(0, 1, 2).runMps()).toThrow(TypeError)
   })
 
-  it('cswap throws TypeError', () => {
-    expect(() => new Circuit(3).cswap(0, 1, 2).runMps()).toThrow(TypeError)
+  it('cswap runs via Toffoli decomposition in MPS mode', () => {
+    // cswap no longer throws — it decomposes into CX+T gates automatically
+    const d = new Circuit(3).x(0).cswap(0, 1, 2).runMps({ shots: 64, seed: 1 })
+    expect(d.backend).toBe('mps')
   })
 
-  it('reset throws TypeError', () => {
-    expect(() => new Circuit(1).reset(0).runMps()).toThrow(TypeError)
-  })
 })
 
 // ─── DEVICES — structural contract ───────────────────────────────────────────

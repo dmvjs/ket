@@ -1,21 +1,36 @@
 /**
  * ket benchmark — outputs a JSON object with median times (ms) per scenario.
- * Run with: node benchmark/run.mjs
+ * Run with: node benchmark/run.ts   (Node >= 23 strips types natively)
  * Used by .github/workflows/benchmark.yml to update the README.
  */
 
-import { Circuit, qft, DEVICES } from '../dist/ket.js'
+// Self-reference the package rather than reaching into dist/ directly: this
+// resolves through the `exports` map, so the benchmark measures exactly what a
+// consumer imports and picks up dist/index.d.ts for types.
+import { Circuit, qft } from '@kirkelliott/ket'
+
+/** One point on a per-qubit scaling chart. */
+interface ChartPoint { n: number; ms: number; memMB: number }
+
+/**
+ * Benchmark output. Scalar timings are keyed by scenario name; `charts` holds
+ * the per-qubit series consumed by `update-readme.ts`.
+ */
+interface Results {
+  [scenario: string]: number | Record<string, ChartPoint[]> | undefined
+  charts?: Record<string, ChartPoint[]>
+}
 
 const RUNS = 5  // take median of N runs
 
-function median(arr) {
+function median(arr: readonly number[]): number {
   const s = [...arr].sort((a, b) => a - b)
-  return s[Math.floor(s.length / 2)]
+  return s[Math.floor(s.length / 2)]!
 }
 
-function bench(fn) {
+function bench(fn: () => unknown): number {
   fn() // warmup
-  const times = []
+  const times: number[] = []
   for (let i = 0; i < RUNS; i++) {
     const t = performance.now()
     fn()
@@ -25,7 +40,7 @@ function bench(fn) {
 }
 
 /** Single timed run — used for chart data after JIT is warm from bench() above. */
-function point(fn) {
+function point(fn: () => unknown): { ms: number; memMB: number } {
   const t = performance.now()
   const out = fn()
   const ms = performance.now() - t
@@ -34,7 +49,7 @@ function point(fn) {
   return { ms, memMB }
 }
 
-function randomCircuit(n, depth) {
+function randomCircuit(n: number, depth: number): Circuit {
   let c = new Circuit(n)
   for (let d = 0; d < depth; d++) {
     for (let q = 0; q < n; q++) c = c.h(q)
@@ -43,13 +58,13 @@ function randomCircuit(n, depth) {
   return c
 }
 
-function ghz(n) {
+function ghz(n: number): Circuit {
   let c = new Circuit(n).h(0)
   for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
   return c
 }
 
-const results = {}
+const results: Results = {}
 
 // Statevector: random depth-4 circuits (caps out ~20q; beyond that takes minutes on CI)
 for (const n of [8, 12, 16, 20]) {
@@ -91,7 +106,7 @@ for (const n of [20, 30, 50]) {
   // 10-parameter ansatz — realistic for VQE
   let ansatz = new Circuit(5)
   const names = ['t0','t1','t2','t3','t4','t5','t6','t7','t8','t9']
-  for (let i = 0; i < 5; i++) ansatz = ansatz.ry(names[i*2], i).rz(names[i*2+1], i)
+  for (let i = 0; i < 5; i++) ansatz = ansatz.ry(names[i * 2]!, i).rz(names[i * 2 + 1]!, i)
   for (let i = 0; i < 4; i++) ansatz = ansatz.cnot(i, i + 1)
   const vals = Object.fromEntries(names.map((n, i) => [n, i * 0.1]))
   results['bind_10param_5q']    = bench(() => ansatz.bind(vals))
@@ -119,28 +134,29 @@ for (const n of [20, 30, 50]) {
 }
 
 // Chart data: per-qubit time + memory for n=2..20 (JIT is warm from above runs)
-results.charts = {}
+const charts: Record<string, ChartPoint[]> = {}
+results.charts = charts
 
 // Bell state: H(0) + CNOT(0, n-1) — only 2 amplitudes regardless of n (sparse)
-results.charts.bell = []
+charts.bell = []
 for (let n = 2; n <= 20; n++) {
   const c = new Circuit(n).h(0).cnot(0, n - 1)
-  results.charts.bell.push({ n, ...point(() => c.statevector()) })
+  charts.bell!.push({ n, ...point(() => c.statevector()) })
 }
 
 // Uniform superposition: H on all qubits — all 2^n amplitudes (dense)
-results.charts.uniform = []
+charts.uniform = []
 for (let n = 2; n <= 20; n++) {
   let c = new Circuit(n)
   for (let q = 0; q < n; q++) c = c.h(q)
-  results.charts.uniform.push({ n, ...point(() => c.statevector()) })
+  charts.uniform!.push({ n, ...point(() => c.statevector()) })
 }
 
 // QFT: all 2^n amplitudes with quadratic gate depth
-results.charts.qft = []
+charts.qft = []
 for (let n = 2; n <= 20; n++) {
   const c = qft(n)
-  results.charts.qft.push({ n, ...point(() => c.statevector()) })
+  charts.qft!.push({ n, ...point(() => c.statevector()) })
 }
 
 console.log(JSON.stringify(results, null, 2))

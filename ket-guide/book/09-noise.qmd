@@ -1,0 +1,210 @@
+# Noise and Real Hardware {#sec-noise}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+Every circuit in the previous chapters ran perfectly. Real quantum hardware doesn't.
+
+Qubits are physical objects — superconducting circuits, trapped ions, photons. They interact with their environment, and that interaction corrupts the quantum state. Understanding noise is the difference between a textbook circuit and one that works in practice.
+
+## Decoherence
+
+A qubit's coherence is its ability to maintain superposition. Two timescales govern how quickly it's lost:
+
+**$T_1$ — relaxation time**: the qubit spontaneously decays from $|1\rangle$ to $|0\rangle$, like an excited atom emitting a photon. Energy leaks to the environment.
+
+**$T_2$ — dephasing time**: the phase relationship between $|0\rangle$ and $|1\rangle$ randomises, collapsing superposition without flipping the bit. Always $T_2 \leq 2T_1$.
+
+A circuit's total runtime must be well below both timescales or errors accumulate faster than computation.
+
+## Simulating noise
+
+Pass a noise profile to `run()` to apply $T_1$/$T_2$ decay. The same Bell state, clean vs noisy:
+
+```{ojs}
+bell = new ket.Circuit(2).h(0).cx(0, 1)
+svg(bell.simulate({ shots: 2000 }).toSVG())
+```
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: { t1: 50, t2: 30 } }).toSVG())
+```
+
+The clean Bell state shows only $|00\rangle$ and $|11\rangle$. The noisy run leaks into $|01\rangle$ and $|10\rangle$ — decoherence partially collapses the entanglement during the circuit.
+
+Stronger decoherence ($T_1$ and $T_2$ measured in microseconds; shorter means noisier):
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: { t1: 10, t2: 5 } }).toSVG())
+```
+
+At $T_1 = 10\,\mu\text{s}$, the correlation is almost entirely destroyed. The histogram looks nearly uniform — noise has randomised the result.
+
+## Circuit depth matters
+
+A shallower circuit has less time to decohere. The same identity operation at different depths:
+
+```{ojs}
+shallow = new ket.Circuit(1).h(0).h(0)   // H·H = I, depth 2
+svg(shallow.run({ shots: 2000, noise: { t1: 100, t2: 50 } }).toSVG())
+```
+
+```{ojs}
+deep = (() => { let c = new ket.Circuit(1); for (let i = 0; i < 10; i++) c = c.h(0); return c })()
+svg(deep.run({ shots: 2000, noise: { t1: 100, t2: 50 } }).toSVG())
+```
+
+Both are mathematically identity — they should always return $|0\rangle$. The deep circuit leaks into $|1\rangle$ substantially more. More time in the circuit means more exposure to noise.
+
+## Real device profiles
+
+`ket` ships with noise models calibrated from real hardware:
+
+```{ojs}
+pre(Object.keys(ket.DEVICES).join('\n'))
+```
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: "harmony" }).toSVG())
+```
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: "ibm_sherbrooke" }).toSVG())
+```
+
+Different hardware, different error profiles. IonQ's trapped-ion systems tend to have higher gate fidelity but slower gate times. IBM's superconducting systems are faster but noisier per gate. The device string selects the full calibrated noise model including $T_1$, $T_2$, gate error rates, and readout error.
+
+## Readout error mitigation
+
+Not all noise happens during the circuit. Measurement itself is imperfect: a qubit in $|0\rangle$ occasionally registers as 1, and vice versa. This is **readout error** — it's separate from decoherence and can be corrected after the fact.
+
+`run()` accepts `readoutMitigation: true` to apply a simple matrix inversion correction:
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: "harmony" }).toSVG())
+```
+
+```{ojs}
+svg(bell.run({ shots: 2000, noise: "harmony", readoutMitigation: true }).toSVG())
+```
+
+The mitigated histogram is closer to the ideal $|00\rangle$/$|11\rangle$ split. The correction is linear: the simulator estimates the readout error matrix from the device profile and inverts it. It doesn't fix decoherence — only the measurement step — but on current hardware, readout error is often the dominant source of error for short circuits.
+
+## Error correction (the idea)
+
+The solution to decoherence is **quantum error correction** (QEC): encode one logical qubit across several physical qubits so that any single error can be detected and corrected without measuring — and thus collapsing — the data.
+
+The simplest example: the three-qubit bit-flip code encodes $|0\rangle \to |000\rangle$ and $|1\rangle \to |111\rangle$. A single bit-flip is detectable by comparing pairs — majority vote restores the original.
+
+Full QEC requires 50–1000 physical qubits per logical qubit depending on the code and target error rate. The algorithms in Chapters 6–8 assume perfect logical qubits. Getting there is the work of the next decade.
+
+## Simulating at scale with MPS
+
+The chapters so far have used a statevector simulator: it stores all $2^n$ amplitudes in memory and applies gates as matrix multiplications. For 30 qubits, that's $2^{30} \approx 10^9$ complex numbers — a few gigabytes. For 50 qubits it's a petabyte. For 100 qubits, more memory than exists on Earth.
+
+But many circuits of practical interest don't actually need all of that. If a circuit has low entanglement, it has structure that can be exploited. The **Matrix Product State** (MPS) representation stores a chain of small tensors instead of one giant vector. The cost is controlled by a single number: $\chi$, the **bond dimension**, which equals the maximum Schmidt rank across any bipartition of the qubits.
+
+For a circuit with no entanglement, $\chi = 1$. For a moderately entangled circuit, $\chi$ might be 10 or 100. Only for highly entangled states does $\chi$ grow to $2^{n/2}$ — and only then does MPS hit the same wall as statevector.
+
+### A 1024-qubit circuit
+
+A classical statevector simulator would need $2^{1024}$ amplitudes to represent the following circuit. That number has about 300 digits — it dwarfs the number of atoms in the observable universe. No computer will ever store it.
+
+Yet `runMps` returns in milliseconds:
+
+```{ojs}
+result_1024 = {
+  let c = new ket.Circuit(1024).h(0)
+  for (let i = 0; i < 1023; i++) c = c.cx(i, i+1)
+  return c.runMps({ shots: 200 })
+}
+```
+
+```{ojs}
+pre(`backend: ${result_1024.backend}   peakChi: ${result_1024.peakChi}   qubits: ${result_1024.qubits}`)
+```
+
+`peakChi = 2`. That's why it's fast. The GHZ circuit — H followed by a chain of CNOTs — produces a state with exactly two Schmidt values across every bipartition. Despite spanning 1024 qubits, the entanglement is as simple as a Bell state. MPS captures it in a chain of 2×2 tensors.
+
+The outcome is only ever $|00\ldots0\rangle$ or $|11\ldots1\rangle$. Here's what the histogram looks like on a smaller GHZ (8 qubits) where the bitstrings fit on screen:
+
+```{ojs}
+ghz8_circ = {
+  let c = new ket.Circuit(8).h(0)
+  for (let i = 0; i < 7; i++) c = c.cx(i, i+1)
+  return c
+}
+svg(ghz8_circ.simulate({ shots: 500 }).toSVG())
+```
+
+### Entanglement entropy at scale
+
+The bond entropies make this precise:
+
+```{ojs}
+ghz8_circ.bondEntropies()
+```
+
+Every bond carries exactly 1 bit of entanglement entropy — the maximum for a two-outcome superposition. But $\chi = 2$ is the minimum non-trivial bond dimension. The entanglement is wide (spread across every bond) but shallow (only two branches). MPS handles this efficiently because the tensor dimensions stay small.
+
+Compare a product state:
+
+```{ojs}
+{
+  let prod = new ket.Circuit(8).h(0).h(1).h(2).h(3).h(4).h(5).h(6).h(7)
+  return prod.bondEntropies()
+}
+```
+
+All zeros. No gate connects any qubit to any other, so no entanglement crosses any bond. $\chi = 1$ throughout.
+
+### When MPS is fast — and when it isn't
+
+The cost of MPS scales as $O(n \chi^3)$ per gate layer. For low-entanglement circuits, $\chi$ stays small regardless of $n$, and the simulation is efficient. For high-entanglement circuits, $\chi$ grows and eventually the simulation becomes as hard as statevector.
+
+```{ojs}
+// Low entanglement: GHZ on 50 qubits — chi stays at 2
+mps_ghz50 = {
+  let c = new ket.Circuit(50).h(0)
+  for (let i = 0; i < 49; i++) c = c.cx(i, i+1)
+  return c.runMps({ shots: 100 })
+}
+```
+
+```{ojs}
+pre(`GHZ-50 — backend: ${mps_ghz50.backend}   peakChi: ${mps_ghz50.peakChi}`)
+```
+
+```{ojs}
+// Higher entanglement: brickwork circuit on 20 qubits — chi grows
+mps_brick20 = {
+  let c = new ket.Circuit(20)
+  for (let layer = 0; layer < 6; layer++) {
+    for (let i = 0; i < 19; i += 2) c = c.h(i).cx(i, i+1)
+    for (let i = 1; i < 18; i += 2) c = c.h(i).cx(i, i+1)
+  }
+  return c.runMps({ shots: 100, maxBond: 64 })
+}
+```
+
+```{ojs}
+pre(`Brickwork-20 — backend: ${mps_brick20.backend}   peakChi: ${mps_brick20.peakChi}`)
+```
+
+The GHZ chain on 50 qubits has `peakChi = 2` and runs instantly. The brickwork circuit — alternating layers of H and CX — builds up genuine entanglement and `peakChi` climbs. The `maxBond` parameter caps the bond dimension and introduces an approximation; without the cap, the simulation would be exact but exponentially slow.
+
+### MPS is not an approximation (for low-entanglement circuits)
+
+This is the key point: when `maxBond` is not set, `runMps` is **exact**. For any circuit where $\chi$ stays below a manageable threshold — GHZ states, many chemistry ansätze, QAOA at low depth, any circuit with a brickwork structure that doesn't fully scramble — the MPS simulation gives the same result as a perfect statevector simulation.
+
+The exponential difficulty of simulating quantum systems is not universal. It depends on the entanglement structure of the state. Circuits with low entanglement are efficiently simulable classically — and that's not a bug, it's a feature: it tells you exactly how much quantum advantage a given circuit has.
+
+When $\chi$ grows exponentially, you've found a circuit that is genuinely hard to simulate classically. That's the regime where quantum hardware offers real advantage — and where MPS, too, runs out of room.
+
+## What's next
+
+The final chapter applies quantum circuits to their original motivation: simulating physics. Hamiltonians, Trotterisation, and the Variational Quantum Eigensolver.

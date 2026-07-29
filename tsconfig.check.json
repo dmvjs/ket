@@ -1,0 +1,16 @@
+{
+  // Typecheck-only config covering the benchmark scripts as well as src. Kept separate from tsconfig.json because that one
+  // drives `tsc --emitDeclarationOnly` during the build — widening its `include`
+  // would emit .d.ts files for these into dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // rootDir disambiguates the package self-reference in benchmark/run.ts,
+    // which resolves '@kirkelliott/ket' through this package's own exports map.
+    "rootDir": ".",
+    // benchmark/update-readme.ts imports './chart.ts' by its real name, because
+    // Node strips types without rewriting module specifiers.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "benchmark"]
+}

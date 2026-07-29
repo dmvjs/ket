@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+
+# JetBrains per-user state. Lint rules live in .oxlintrc.json, not the IDE.
+.idea/

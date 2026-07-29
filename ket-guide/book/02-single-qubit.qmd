@@ -1,0 +1,112 @@
+# Single-Qubit Gates {#sec-single-qubit}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+```
+
+A qubit's state is a point on a sphere.
+
+Every single-qubit gate is a rotation of that sphere. This isn't an analogy — it's the geometry. Understanding it makes every gate intuitive.
+
+## The Bloch sphere
+
+The state $|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$ has two real degrees of freedom (after accounting for normalisation and global phase). Two angles — $\theta$ and $\phi$ — are enough to pin down any single-qubit state:
+
+$$|\psi\rangle = \cos\frac{\theta}{2}|0\rangle + e^{i\phi}\sin\frac{\theta}{2}|1\rangle$$
+
+$\theta$ runs from 0 (north pole, $|0\rangle$) to $\pi$ (south pole, $|1\rangle$). $\phi$ is the angle around the equator. Together they define a point on a unit sphere — the **Bloch sphere**.
+
+```{ojs}
+svg(new ket.Circuit(1).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).x(0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).h(0).blochSphere(0))
+```
+
+From left to right: $|0\rangle$ (north pole), $|1\rangle$ (south pole), $H|0\rangle = |{+}\rangle$ (equator). The equator is equal superposition. Every point in between is a valid qubit state.
+
+## The Pauli gates — axis flips
+
+The three **Pauli gates** are 180° rotations around the three axes.
+
+**X** rotates 180° around the X axis — the quantum NOT gate, swapping $|0\rangle \leftrightarrow |1\rangle$:
+
+```{ojs}
+svg(new ket.Circuit(1).x(0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).x(0).simulate({ shots: 1000 }).toSVG())
+```
+
+**Z** rotates 180° around the Z axis. It leaves $|0\rangle$ unchanged but flips the sign of $|1\rangle$: $Z|1\rangle = -|1\rangle$. This is a **phase flip** — invisible to single-qubit measurement, but it changes how the state interferes in a larger circuit.
+
+**Y** is X followed by Z (up to a global phase). Less common in introductory circuits, but completes the Pauli set.
+
+## H revisited — a diagonal rotation
+
+H is a 180° rotation around the axis halfway between X and Z. That's why it maps poles to equator and back:
+
+- $H|0\rangle = |{+}\rangle$ → equator
+- $H|{+}\rangle = |0\rangle$ → back to north pole
+- $HH = I$ — two 180° rotations around the same axis cancel
+
+The last point explains Chapter 1's interference result. H is its own inverse.
+
+## Phase gates — spinning around Z
+
+**S** and **T** are partial rotations around the Z axis: 90° and 45° respectively. They don't change measurement probabilities — the state stays on the equator — but they shift the phase $\phi$, which changes how the qubit interferes with others.
+
+```{ojs}
+svg(new ket.Circuit(1).h(0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).h(0).t(0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).h(0).s(0).blochSphere(0))
+```
+
+Left to right: `H|0⟩`, `T·H|0⟩` (+45°), `S·H|0⟩` (+90°). Same latitude — same measurement probabilities — different phase.
+
+## Rotation gates — arbitrary angles
+
+`rx`, `ry`, `rz` rotate by any angle around each axis. The argument order is `(angle, qubit)`.
+
+```{ojs}
+svg(new ket.Circuit(1).rx(Math.PI / 4, 0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).rx(Math.PI / 2, 0).blochSphere(0))
+```
+
+```{ojs}
+svg(new ket.Circuit(1).rx(Math.PI, 0).blochSphere(0))
+```
+
+`rx(π)` is exactly X. `rx(π/2)` is halfway — a common building block on real hardware, where every gate is ultimately expressed as a combination of `rz` and `ry` rotations.
+
+## Gate summary
+
+| Gate | Rotation | Effect on $|0\rangle$ | Effect on $|1\rangle$ |
+|---|---|---|---|
+| X | 180° around X | → $|1\rangle$ | → $|0\rangle$ |
+| Y | 180° around Y | → $i|1\rangle$ | → $-i|0\rangle$ |
+| Z | 180° around Z | unchanged | → $-|1\rangle$ |
+| H | 180° around X+Z | → $|{+}\rangle$ | → $|{-}\rangle$ |
+| S | 90° around Z | unchanged | → $i|1\rangle$ |
+| T | 45° around Z | unchanged | → $e^{i\pi/4}|1\rangle$ |
+
+## What's next
+
+Chapter 3 adds a second qubit and introduces **entanglement** — the phenomenon that makes quantum computing qualitatively more powerful than anything classical.

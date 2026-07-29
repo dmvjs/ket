@@ -33,6 +33,9 @@ export type Tensor = {
 /** Matrix Product State: one rank-3 tensor per qubit site. */
 export type MPS = Tensor[]
 
+/** Minimum jump probability below which a noise channel is skipped (avoids 0/0 in normalisation). */
+const JUMP_THRESHOLD = 1e-15
+
 // ── Constant gate matrices ────────────────────────────────────────────────────
 
 export const CNOT4: Gate4x4 = [
@@ -40,6 +43,14 @@ export const CNOT4: Gate4x4 = [
   [ZERO, ONE, ZERO, ZERO],
   [ZERO, ZERO, ZERO, ONE],
   [ZERO, ZERO, ONE, ZERO],
+]
+
+/** 4×4 identity — used to re-split a bond without changing the state. */
+export const ID4: Gate4x4 = [
+  [{ re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 1, im: 0 }],
 ]
 
 export const SWAP4: Gate4x4 = [
@@ -365,25 +376,37 @@ export function mpsSample(mps: MPS, rand: () => number): bigint {
 // ── Mutable trajectory runner ─────────────────────────────────────────────────
 
 /**
- * Mutable, pre-allocated MPS for quantum trajectory simulation.
+ * Mutable MPS for quantum trajectory simulation with adaptive bond dimension.
  *
- * Allocates all workspace at construction time. apply1, apply2, reset,
- * and sample are zero-allocation in the hot path — no Float64Array is
- * created after the constructor returns.
+ * Workspace is pre-allocated at construction time for the initial `maxChi`.
+ * apply1, apply2, reset, and sample are zero-allocation when the bond dimension
+ * stays within the current `maxChi`. When a two-qubit gate would require a
+ * larger bond, `growTo()` is called automatically: all buffers and tensor arrays
+ * are reallocated (O(n·χ²)), but this is rare — only when entanglement genuinely
+ * grows past the previous peak χ. After growth, subsequent gates at the same
+ * bond dimension remain zero-allocation.
  *
  * Usage: construct once, then call reset() + circuit ops + sample() per shot.
  */
 export class MpsTrajectory {
   readonly n:        number
-  readonly maxChi:   number
+  /**
+   * Current bond dimension cap. Starts at the value passed to the constructor and
+   * grows automatically (via `growTo`) whenever a gate would require a larger bond.
+   * Read this after simulation to see the peak χ actually used.
+   */
+  private _maxChi: number
+  get maxChi(): number { return this._maxChi }
   /**
    * Relative Schmidt truncation threshold. Singular values σ_k < truncErr · σ_max
-   * are discarded in addition to the hard `maxChi` cap.
+   * are discarded during SVD.
    *
    * 0 (default) means truncate by absolute tolerance only (1e-14).
    * Typical values: 1e-8 for chemistry/VQE circuits with rapidly decaying Schmidt spectra.
    */
   readonly truncErr: number
+  /** Hard ceiling on bond dimension; Infinity means unbounded (exact). */
+  readonly chiCap: number
 
   // Per-site tensor storage. data[q] holds up to maxChi × 2 × maxChi complex values.
   // Layout: data[q][((l*2+p)*chiR+r)*2] = re, +1 = im, where chiR = this.chiR[q].
@@ -406,49 +429,61 @@ export class MpsTrajectory {
   readonly bondLambda: Float64Array[]  // n-1 entries; bondLambda[b][k] = σ_k at bond b
 
   // Workspace for apply2Adjacent — sized for worst-case maxChi bonds.
-  private readonly mBuf: Float64Array  // contracted θ matrix, rows × cols
-  private readonly aBuf: Float64Array  // column-major working copy for Jacobi
-  private readonly qBuf: Float64Array  // U·Σ output, row-major: rows × bond
-  private readonly rBuf: Float64Array  // V†   output, row-major: bond × cols
+  // Not readonly: reallocated by growTo() when maxChi increases.
+  private mBuf: Float64Array  // contracted θ matrix, rows × cols
+  private aBuf: Float64Array  // column-major working copy for Jacobi
+  private qBuf: Float64Array  // U·Σ output, row-major: rows × bond
+  private rBuf: Float64Array  // V†   output, row-major: bond × cols
 
   // Workspace for SVD (one-sided complex Jacobi).
   // vBuf: V matrix (cols × cols, column-major), cols = maxChi * 2.
   // sigmaBuf: singular values per column, length maxChi * 2.
   // orderBuf: column index permutation sorted by descending sigma, length maxChi * 2.
-  private readonly vBuf:     Float64Array
-  private readonly sigmaBuf: Float64Array
-  private readonly orderBuf: Int32Array
+  private vBuf:     Float64Array
+  private sigmaBuf: Float64Array
+  private orderBuf: Int32Array
 
   // Workspace for sample — one allocation per maxChi, reused across all qubits.
-  private readonly sv0re: Float64Array
-  private readonly sv0im: Float64Array
-  private readonly sv1re: Float64Array
-  private readonly sv1im: Float64Array
-  private readonly stRe:  Float64Array
-  private readonly stIm:  Float64Array
+  private sv0re: Float64Array
+  private sv0im: Float64Array
+  private sv1re: Float64Array
+  private sv1im: Float64Array
+  private stRe:  Float64Array
+  private stIm:  Float64Array
 
   // Workspace for expectation() — reused across all terms in a Hamiltonian loop.
   // ogBuf/fBuf: OΓ and F intermediates [l/p'][p'/r][r/l'], sized maxChi*2 × maxChi*2.
   // exCur/exNxt: current and next E matrix, sized maxChi × maxChi.
   // exDiag: diagonal of E when it is known to be diagonal (leading identity fast path).
-  private readonly exOgBuf:  Float64Array
-  private readonly exFBuf:   Float64Array
-  private readonly exCurBuf: Float64Array
-  private readonly exNxtBuf: Float64Array
-  private readonly exDiag:   Float64Array
+  private exOgBuf:  Float64Array
+  private exFBuf:   Float64Array
+  private exCurBuf: Float64Array
+  private exNxtBuf: Float64Array
+  private exDiag:   Float64Array
 
-  /** Set to true by svdDecompose whenever the hard maxBond cap truncates a significant singular value. */
+  /** Set to true by svdDecompose whenever a physically significant singular value is discarded. */
   private wasTruncated_ = false
-  /** True if any SVD during this trajectory discarded a singular value above the truncation threshold due to the maxBond cap. */
+  /** True if any SVD during this trajectory discarded a singular value above 1e-14 (due to truncErr threshold). */
   get wasTruncated(): boolean { return this.wasTruncated_ }
 
-  constructor(n: number, maxChi: number, truncErr = 0) {
+  /**
+   * @param maxChi   Initial bond allocation. Grows on demand — not a limit.
+   * @param truncErr Relative singular-value cutoff. 0 keeps the run exact.
+   * @param chiCap   Hard ceiling on bond dimension. Unlike `maxChi` this one
+   *                 binds: growth stops here and the SVD keeps only the largest
+   *                 `chiCap` singular values, flagging `wasTruncated`. Defaults
+   *                 to no ceiling, which preserves exact simulation.
+   */
+  constructor(n: number, maxChi: number, truncErr = 0, chiCap = Infinity) {
     this.n        = n
-    this.maxChi   = maxChi
+    // The initial allocation must respect the ceiling too, or the truncation
+    // guard reads a maxChi above the cap and never binds.
+    this._maxChi  = Math.max(1, Math.min(maxChi, chiCap))
     this.truncErr = truncErr
+    this.chiCap   = chiCap
 
-    const maxRows = maxChi * 2
-    const maxCols = maxChi * 2
+    const maxRows = this._maxChi * 2
+    const maxCols = this._maxChi * 2
 
     this.data       = Array.from({ length: n }, () => new Float64Array(maxRows * maxCols * 2))
     this.chiL       = new Int32Array(n)
@@ -478,6 +513,56 @@ export class MpsTrajectory {
     this.exDiag   = new Float64Array(maxChi)
 
     this.reset()
+  }
+
+  /**
+   * Grow all buffers to support a larger bond dimension.
+   *
+   * Tensor data is preserved: each site tensor uses its actual chiR[q] as the row stride,
+   * so elements sit at the same offsets in the new (larger) Float64Array — a plain set()
+   * copy is sufficient with no layout remapping.
+   *
+   * Called automatically by apply2Adjacent when min(rows, cols) > maxChi.
+   */
+  private growTo(newMaxChi: number): void {
+    const maxRows = newMaxChi * 2
+    const maxCols = newMaxChi * 2
+
+    // Reallocate per-site data arrays, preserving tensor content.
+    for (let q = 0; q < this.n; q++) {
+      const grown = new Float64Array(maxRows * maxCols * 2)
+      grown.set(this.data[q]!)
+      this.data[q] = grown
+    }
+
+    // Reallocate bondLambda arrays, preserving Schmidt values.
+    for (let b = 0; b < this.n - 1; b++) {
+      const grown = new Float64Array(newMaxChi)
+      grown.set(this.bondLambda[b]!)
+      this.bondLambda[b] = grown
+    }
+
+    // Reallocate all workspace buffers (scratch only — no content to preserve).
+    this.mBuf     = new Float64Array(maxRows * maxCols * 2)
+    this.aBuf     = new Float64Array(maxCols * maxRows * 2)
+    this.qBuf     = new Float64Array(maxRows * newMaxChi * 2)
+    this.rBuf     = new Float64Array(newMaxChi * maxCols * 2)
+    this.vBuf     = new Float64Array(maxCols * maxCols * 2)
+    this.sigmaBuf = new Float64Array(maxCols)
+    this.orderBuf = new Int32Array(maxCols)
+    this.sv0re    = new Float64Array(newMaxChi)
+    this.sv0im    = new Float64Array(newMaxChi)
+    this.sv1re    = new Float64Array(newMaxChi)
+    this.sv1im    = new Float64Array(newMaxChi)
+    this.stRe     = new Float64Array(newMaxChi)
+    this.stIm     = new Float64Array(newMaxChi)
+    this.exOgBuf  = new Float64Array(maxCols * maxCols * 2)
+    this.exFBuf   = new Float64Array(maxCols * maxCols * 2)
+    this.exCurBuf = new Float64Array(newMaxChi * newMaxChi * 2)
+    this.exNxtBuf = new Float64Array(newMaxChi * newMaxChi * 2)
+    this.exDiag   = new Float64Array(newMaxChi)
+
+    this._maxChi = newMaxChi
   }
 
   /** Reset to |0...0⟩. Sets all tensors to T[0][0][0]=1 with chiL=chiR=1. */
@@ -536,10 +621,21 @@ export class MpsTrajectory {
   private apply2Adjacent(a: number, gate: Gate4x4): void {
     const b    = a + 1
     const chiL = this.chiL[a]!
-    const chiM = this.chiR[a]!   // == this.chiL[b]
     const chiR = this.chiR[b]!
     const rows = chiL * 2
     const cols = chiR * 2
+
+    // Auto-grow BEFORE capturing any buffer references.
+    // min(rows, cols) is the maximum possible Schmidt rank this SVD can produce.
+    // If it exceeds the current maxChi, grow with a 1.5× factor for amortisation.
+    // Never allocate past chiCap: the `bond < maxChi` guard in the truncation
+    // loop below then does the capping, and flags the discarded weight.
+    const needed = Math.min(Math.min(rows, cols), this.chiCap)
+    if (needed > this._maxChi) {
+      this.growTo(Math.min(this.chiCap, Math.max(needed, Math.ceil(this._maxChi * 1.5))))
+    }
+
+    const chiM = this.chiR[a]!   // == this.chiL[b]
     const dA   = this.data[a]!
     const dB   = this.data[b]!
     const mBuf = this.mBuf
@@ -773,7 +869,9 @@ export class MpsTrajectory {
       }
     }
 
-    // Bond dimension: keep singular values above the cutoff, capped at maxChi.
+    // Bond dimension: keep singular values above the cutoff.
+    // growTo() has already raised maxChi to min(rows, cols) unless chiCap stopped
+    // it, so the `bond < maxChi` guard binds exactly when a cap was requested.
     // cutoff = max(absolute floor, relative fraction of σ_max).
     const sigma0 = sigmaBuf[orderBuf[0]!]!
     const cutoff = sigma0 > 0
@@ -782,8 +880,8 @@ export class MpsTrajectory {
     let bond = 0
     while (bond < cols && bond < maxChi && sigmaBuf[orderBuf[bond]!]! > cutoff) bond++
     if (bond === 0) bond = 1  // always keep at least one component
-    // Flag if the hard maxBond cap discarded a significant singular value.
-    if (bond === maxChi && bond < cols && sigmaBuf[orderBuf[bond]!]! > cutoff) {
+    // Flag if truncErr caused a physically meaningful value to be discarded.
+    if (bond < cols && sigmaBuf[orderBuf[bond]!]! > 1e-14) {
       this.wasTruncated_ = true
     }
 
@@ -878,6 +976,95 @@ export class MpsTrajectory {
     }
 
     return result
+  }
+
+  /**
+   * Project qubit `q` onto a computational basis state in-place.
+   *
+   * Probability is computed exactly from the Vidal form bond lambdas.
+   * The site tensor Γ[q] is projected and renormalized; all other tensors
+   * are unchanged, so Vidal canonical form is preserved.
+   *
+   * O(chiL · chiR) — no SVD, no allocation.
+   * Returns the measurement outcome (0 or 1).
+   */
+  measure(q: number, rand: () => number): 0 | 1 {
+    const data = this.data[q]!
+    const chiL = this.chiL[q]!, chiR = this.chiR[q]!
+    const lamL = q > 0          ? this.bondLambda[q - 1]! : null
+    const lamR = q < this.n - 1 ? this.bondLambda[q]!     : null
+
+    // P(q=1) = Σ_{l,r} λ[q-1][l]² · |Γ[q][l,1,r]|² · λ[q][r]²
+    let p1 = 0
+    for (let l = 0; l < chiL; l++) {
+      const wL = lamL ? lamL[l]! * lamL[l]! : 1
+      for (let r = 0; r < chiR; r++) {
+        const wR = lamR ? lamR[r]! * lamR[r]! : 1
+        const i1 = ((l * 2 + 1) * chiR + r) * 2
+        p1 += wL * wR * (data[i1]! * data[i1]! + data[i1 + 1]! * data[i1 + 1]!)
+      }
+    }
+
+    const bit: 0 | 1 = rand() < p1 ? 1 : 0
+    const pKeep = bit === 1 ? p1 : 1 - p1
+    const inv   = pKeep > 0 ? 1 / Math.sqrt(pKeep) : 0
+
+    for (let l = 0; l < chiL; l++) {
+      for (let r = 0; r < chiR; r++) {
+        const i0 = ((l * 2 + 0) * chiR + r) * 2
+        const i1 = ((l * 2 + 1) * chiR + r) * 2
+        const s0 = bit === 0 ? inv : 0
+        const s1 = bit === 1 ? inv : 0
+        data[i0]! *= s0; data[i0 + 1]! *= s0
+        data[i1]! *= s1; data[i1 + 1]! *= s1
+      }
+    }
+
+    // Projecting site q leaves the MPS out of canonical form: the bond lambdas
+    // either side of it are the Schmidt spectrum of the *pre-measurement* state
+    // and no longer describe this one. Both the marginal used above and
+    // `sample()` weight by those lambdas, so leaving them stale silently biases
+    // every later measurement — the first qubit measured comes out right and the
+    // rest drift. Re-canonicalise before returning.
+    this.recanonicalize()
+    return bit
+  }
+
+  /**
+   * Restore Vidal canonical form after an operation that invalidated it.
+   *
+   * A left-to-right then right-to-left sweep of two-site identity updates. Each
+   * one merges a neighbouring pair, re-splits it by QR + SVD, and writes back a
+   * correct Schmidt spectrum for that bond, so a full sweep repairs every bond.
+   *
+   * O(n·χ³), against O(χ²) for the measurement itself — measurements are rare
+   * next to gates, and correctness here is not optional.
+   */
+  private recanonicalize(): void {
+    if (this.n < 2) return
+    for (let q = 0; q < this.n - 1; q++) this.apply2Adjacent(q, ID4)
+    for (let q = this.n - 2; q >= 0; q--) this.apply2Adjacent(q, ID4)
+  }
+
+  /**
+   * Probability of qubit q being in state |1⟩ without collapsing.
+   * Same formula as `measure()` but read-only: O(chiL·chiR).
+   */
+  pQubit(q: number): number {
+    const data = this.data[q]!
+    const chiL = this.chiL[q]!, chiR = this.chiR[q]!
+    const lamL = q > 0          ? this.bondLambda[q - 1]! : null
+    const lamR = q < this.n - 1 ? this.bondLambda[q]!     : null
+    let p1 = 0
+    for (let l = 0; l < chiL; l++) {
+      const wL = lamL ? lamL[l]! * lamL[l]! : 1
+      for (let r = 0; r < chiR; r++) {
+        const wR = lamR ? lamR[r]! * lamR[r]! : 1
+        const i1 = ((l * 2 + 1) * chiR + r) * 2
+        p1 += wL * wR * (data[i1]! * data[i1]! + data[i1 + 1]! * data[i1 + 1]!)
+      }
+    }
+    return p1
   }
 
   /** Maximum bond dimension currently in use across all sites. */
@@ -1097,6 +1284,60 @@ export function dep1Traj(traj: MpsTrajectory, q: number, p: number, rand: number
   else               traj.apply1(q, G.Z)
 }
 
+/**
+ * Amplitude damping quantum jump on qubit q in MPS trajectory (T1 relaxation).
+ * K1 (decay |1⟩→|0⟩) is implemented via measure+X — preserves Vidal canonical form.
+ * K0 (no decay) applies diag(1, √(1−γ)) to the tensor then renormalises.
+ * Note: K0 leaves bond lambdas stale; canonical form is fully restored at the next apply2.
+ */
+export function dampAmpTraj(traj: MpsTrajectory, q: number, gamma: number, rng: () => number): void {
+  if (gamma <= 0) return
+  const p1    = traj.pQubit(q)
+  const pJump = gamma * p1
+  if (pJump < JUMP_THRESHOLD) return
+
+  if (rng() < pJump) {
+    // K1: |1⟩→|0⟩ decay — measure with rand=0 to force outcome=1 (0 < p1 holds since pJump > 1e-15), then X
+    traj.measure(q, () => 0)
+    traj.apply1(q, G.X)
+  } else {
+    // K0: damp |1⟩ amplitudes and renormalise
+    const sqG    = Math.sqrt(1 - gamma)
+    const invN   = 1 / Math.sqrt(1 - pJump)
+    const K0: Gate2x2 = [
+      [{ re: invN,       im: 0 }, { re: 0,          im: 0 }],
+      [{ re: 0,          im: 0 }, { re: sqG * invN, im: 0 }],
+    ]
+    traj.apply1(q, K0)
+  }
+}
+
+/**
+ * Pure dephasing quantum jump on qubit q in MPS trajectory (T2 beyond T1).
+ * K1 (dephasing, project to |1⟩) is implemented via forced measurement.
+ * K0 (no dephasing) applies diag(1, √(1−λ)) to the tensor then renormalises.
+ */
+export function dampPhaseTraj(traj: MpsTrajectory, q: number, lambda: number, rng: () => number): void {
+  if (lambda <= 0) return
+  const p1    = traj.pQubit(q)
+  const pJump = lambda * p1
+  if (pJump < JUMP_THRESHOLD) return
+
+  if (rng() < pJump) {
+    // K1: project to |1⟩ (dephasing collapse) — rand=0 forces outcome=1 since 0 < p1
+    traj.measure(q, () => 0)
+  } else {
+    // K0: damp |1⟩ amplitudes and renormalise
+    const sqL  = Math.sqrt(1 - lambda)
+    const invN = 1 / Math.sqrt(1 - pJump)
+    const K0: Gate2x2 = [
+      [{ re: invN,       im: 0 }, { re: 0,          im: 0 }],
+      [{ re: 0,          im: 0 }, { re: sqL * invN, im: 0 }],
+    ]
+    traj.apply1(q, K0)
+  }
+}
+
 /** Apply two-qubit depolarizing channel to a trajectory MPS in place. */
 export function dep2Traj(traj: MpsTrajectory, a: number, b: number, p: number, rand: number): void {
   if (rand >= p) return
@@ -1115,16 +1356,21 @@ export function dep2Traj(traj: MpsTrajectory, a: number, b: number, p: number, r
  * loop stays a flat switch with no helper calls.
  */
 export type TrajOp =
-  | { kind: 'single'; q: number;              gate: Gate2x2     }
-  | { kind: 'cnot';   control: number; target: number           }
-  | { kind: 'swap';   a: number;       b: number                }
-  | { kind: 'two';    a: number;       b: number; gate: Gate4x4 }
-  | { kind: 'barrier'                                           }
+  | { kind: 'single';  q: number;                                          gate: Gate2x2        }
+  | { kind: 'cnot';    control: number; target: number                                          }
+  | { kind: 'swap';    a: number;       b: number                                               }
+  | { kind: 'two';     a: number;       b: number;                         gate: Gate4x4        }
+  | { kind: 'measure'; q: number;       creg: string;                      bit: number          }
+  | { kind: 'reset';   q: number                                                                }
+  | { kind: 'if';      creg: string;    value: number; ops: readonly TrajOp[]                   }
+  | { kind: 'barrier'                                                                           }
 
 
 /**
  * Execute one trajectory: apply all ops with optional depolarizing noise.
- * rng() is only called when p1 or p2 is non-zero.
+ *
+ * `shotCregs` tracks per-shot classical register state for mid-circuit measurements.
+ * `pMeas` is the readout-error flip probability applied to measured bits.
  */
 export function applyTrajOps(
   traj: MpsTrajectory,
@@ -1132,25 +1378,52 @@ export function applyTrajOps(
   p1: number,
   p2: number,
   rng: () => number,
+  shotCregs?: Map<string, boolean[]>,
+  pMeas = 0,
+  gamma = 0,
+  lambda = 0,
 ): void {
   for (const op of ops) {
     switch (op.kind) {
       case 'single':
         traj.apply1(op.q, op.gate)
-        if (p1) dep1Traj(traj, op.q, p1, rng())
+        if (p1)     dep1Traj(traj, op.q, p1, rng())
+        if (gamma)  dampAmpTraj(traj, op.q, gamma, rng)
+        if (lambda) dampPhaseTraj(traj, op.q, lambda, rng)
         break
       case 'cnot':
         traj.apply2(op.control, op.target, CNOT4)
-        if (p2) dep2Traj(traj, op.control, op.target, p2, rng())
+        if (p2)     dep2Traj(traj, op.control, op.target, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.control, gamma, rng);  dampAmpTraj(traj, op.target, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.control, lambda, rng); dampPhaseTraj(traj, op.target, lambda, rng) }
         break
       case 'swap':
         traj.apply2(op.a, op.b, SWAP4)
-        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        if (p2)     dep2Traj(traj, op.a, op.b, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.a, gamma, rng);  dampAmpTraj(traj, op.b, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.a, lambda, rng); dampPhaseTraj(traj, op.b, lambda, rng) }
         break
       case 'two':
         traj.apply2(op.a, op.b, op.gate)
-        if (p2) dep2Traj(traj, op.a, op.b, p2, rng())
+        if (p2)     dep2Traj(traj, op.a, op.b, p2, rng())
+        if (gamma)  { dampAmpTraj(traj, op.a, gamma, rng);  dampAmpTraj(traj, op.b, gamma, rng) }
+        if (lambda) { dampPhaseTraj(traj, op.a, lambda, rng); dampPhaseTraj(traj, op.b, lambda, rng) }
         break
+      case 'measure': {
+        const raw: 0 | 1      = traj.measure(op.q, rng)
+        const reported: 0 | 1 = pMeas && rng() < pMeas ? (raw ^ 1) as 0 | 1 : raw
+        const reg = shotCregs?.get(op.creg)
+        if (reg) reg[op.bit] = reported === 1
+        break
+      }
+      case 'reset':
+        if (traj.measure(op.q, rng) === 1) traj.apply1(op.q, G.X)
+        break
+      case 'if': {
+        const val = (shotCregs?.get(op.creg) ?? []).reduce((acc, b, i) => b ? acc | (1 << i) : acc, 0)
+        if (val === op.value) applyTrajOps(traj, op.ops, p1, p2, rng, shotCregs, pMeas, gamma, lambda)
+        break
+      }
       case 'barrier': break
       default: { const _exhaustive: never = op; break }
     }

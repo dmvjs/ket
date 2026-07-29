@@ -1,0 +1,91 @@
+# From Bits to Qubits {#sec-bits}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+```
+
+A classical bit is a light switch — off (0) or on (1). Every computer you've ever used is built from billions of these, flipping furiously.
+
+A qubit is stranger. Flip one and measure it: you get 0 or 1 with equal probability. Every time, random. But apply the same flip *twice* and you always get back exactly where you started. No classical random process can do that.
+
+That's interference. It's what makes quantum computing interesting.
+
+## Superposition
+
+The **Hadamard gate** (`h`) takes a definite $|0\rangle$ and puts it into equal superposition:
+
+```{ojs}
+c_h = new ket.Circuit(1).h(0)
+svg(c_h.simulate({ shots: 10000 }).toSVG())
+```
+
+50/50 — each run varies slightly due to sampling, but the true probability is exactly $\frac{1}{2}$. Now apply it twice:
+
+```{ojs}
+c_hh = new ket.Circuit(1).h(0).h(0)
+svg(c_hh.simulate({ shots: 1000 }).toSVG())
+```
+
+Always `|0⟩`. The randomness cancels perfectly. This is **interference** — the defining feature that separates a qubit from a coin flip.
+
+## The math (briefly)
+
+A qubit's state is written as:
+
+$$|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$$
+
+$\alpha$ and $\beta$ are complex numbers called **amplitudes**. The probability of measuring 0 is $|\alpha|^2$, and of measuring 1 is $|\beta|^2$. They always sum to 1.
+
+After `h(0)`, both amplitudes are $\frac{1}{\sqrt{2}}$, so both probabilities are $\frac{1}{2}$.
+
+You can read the amplitudes directly with `stateAsArray()`:
+
+```{ojs}
+new ket.Circuit(1).h(0).stateAsArray()
+```
+
+Both amplitudes are exactly $1/\sqrt{2} \approx 0.707$, with phase 0. The `prob` column is $|0.707|^2 = 0.5$. After a Z gate the probabilities don't change — but the phase does:
+
+```{ojs}
+new ket.Circuit(1).h(0).z(0).stateAsArray()
+```
+
+Same probabilities, but the $|1\rangle$ amplitude is now $-0.707$ (phase = $\pi$). Measurement can't see this — but the next gate can. Phase is invisible to the observer, but real to the computation.
+
+The notation $|\cdot\rangle$ (a **ket**) is standard physics shorthand for a quantum state. This library is named after it.
+
+## Measurement collapses the state
+
+Before you measure, the qubit is genuinely in superposition — not secretly one or the other. The moment you measure, it collapses to a definite 0 or 1 and the amplitude information is gone.
+
+This is why H·H works: both gates interact with the amplitudes *before* any measurement. Once you measure, the phase is lost.
+
+To see it: a measurement between the two H gates collapses the qubit to either $|0\rangle$ or $|1\rangle$. Then the second H acts on a classical state — and both `H|0⟩` and `H|1⟩` give 50/50, not the original certainty:
+
+```{ojs}
+svg(new ket.Circuit(1).h(0).simulate({ shots: 10000 }).toSVG())
+```
+
+```{ojs}
+svg(new ket.Circuit(1).x(0).h(0).simulate({ shots: 10000 }).toSVG())
+```
+
+Both are 50/50 — the bars may differ by a percent or two from shot noise, but the underlying probability is exactly $\frac{1}{2}$ in both cases. The second H has no memory of the first. Contrast with H·H, which always returns `|0⟩`.
+
+## Bits vs. qubits
+
+| | Classical bit | Qubit |
+|---|---|---|
+| State | Always 0 or 1 | Superposition until measured |
+| Measurement effect | None | Collapses the state |
+| Interference | No | Yes |
+
+A qubit doesn't store more information than a classical bit — a measurement still yields one bit. The advantage is what you can do with amplitudes *before* measurement: steer interference toward right answers and away from wrong ones.
+
+That's the rest of this book.
+
+## What's next
+
+Chapter 2 introduces the **Bloch sphere** — a geometric picture of every possible single-qubit state — and the full set of single-qubit gates.

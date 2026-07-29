@@ -2,7 +2,7 @@
   "name": "@kirkelliott/ket",
   "version": "0.5.0",
   "type": "module",
-  "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, three backends, 14 import/export formats, zero dependencies.",
+  "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, four backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
   "license": "MIT",
   "repository": {
@@ -37,9 +37,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js",
+    "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "lint": "oxlint",
     "test": "vitest run",
-    "dev": "vitest"
+    "dev": "vitest",
+    "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test"
   },
   "engines": {
     "node": ">=22"
@@ -47,6 +50,7 @@
   "devDependencies": {
     "@types/node": "^25.4.0",
     "esbuild": "^0.21.5",
+    "oxlint": "^1.76.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   }

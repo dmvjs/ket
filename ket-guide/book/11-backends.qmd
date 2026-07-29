@@ -1,0 +1,209 @@
+# Backends and Classical Control {#sec-backends}
+
+```{ojs}
+//| echo: false
+ket = window.__ket_load
+svg = (s) => { const d = document.createElement("div"); d.innerHTML = s; return d; }
+pre = (s) => { const d = document.createElement("pre"); d.textContent = s; return d; }
+```
+
+The same `.simulate()` call handles circuits ranging from 2 qubits to 1000+. It does this by routing to different backends depending on what the circuit contains:
+
+| Backend | When used | Cost |
+|---|---|---|
+| **Clifford** | Circuits using only H, S, X, Y, Z, CNOT, CZ, SWAP | $O(n^2)$ per gate — handles 1000+ qubits |
+| **Statevector** | General circuits, no mid-circuit measurement | $O(2^n)$ memory — exact, small $n$ |
+| **MPS** | Low-entanglement circuits via `runMps()` | $O(n \chi^3)$ — scales with entanglement |
+| **Density matrix** | Any circuit via `run({ noise })` | $O(4^n)$ — exact noise simulation |
+
+The routing is automatic. You don't select a backend — `simulate()` inspects the circuit and picks the right one.
+
+## Clifford circuits at scale
+
+A **Clifford circuit** uses only stabilizer gates: H, S, X, Y, Z, CNOT, CZ, SWAP, and measurement. The Gottesman–Knill theorem says these circuits are classically simulable in polynomial time using a *stabilizer tableau* — a compact $O(n^2)$ representation that never touches the exponential state space.
+
+```{ojs}
+// 1000-qubit circuit — every qubit put in superposition
+clifford_1000 = {
+  let c = new ket.Circuit(1000)
+  for (let i = 0; i < 1000; i++) c = c.h(i)
+  return c.simulate({ shots: 200 })
+}
+```
+
+```{ojs}
+pre(`backend: ${clifford_1000.backend}   qubits: ${clifford_1000.qubits}`)
+```
+
+A 1000-qubit statevector would need $2^{1000}$ amplitudes — a number with 300 digits. The Clifford backend handles it by never constructing that vector at all.
+
+The price: Clifford circuits can't produce arbitrary quantum states. The Clifford group is exactly the set of circuits that *don't* require exponential classical resources to simulate. This is why random Clifford circuits don't give quantum advantage — they sit inside the simulable region. Quantum speedup requires gates that escape it (like T, Toffoli, and the gates inside Shor's controlled-$U_a$).
+
+Here's the same 1000-qubit structure but with a CNOT chain, which is still Clifford:
+
+```{ojs}
+clifford_ghz = {
+  let c = new ket.Circuit(1000).h(0)
+  for (let i = 0; i < 999; i++) c = c.cx(i, i+1)
+  return c.simulate({ shots: 200 })
+}
+```
+
+```{ojs}
+pre(`backend: ${clifford_ghz.backend}   qubits: ${clifford_ghz.qubits}`)
+```
+
+Only $|00\ldots0\rangle$ and $|11\ldots1\rangle$ — a 1000-qubit GHZ state, simulated classically in seconds.
+
+## Mid-circuit measurement and classical control
+
+Every circuit so far measured at the end. `ket` supports measuring qubits **mid-circuit** and using the classical result to conditionally apply gates — the same feedback loop used in quantum error correction and teleportation.
+
+```{ojs}
+// Measure |+⟩, then conditionally flip a second qubit to match
+c_midmeas = new ket.Circuit(2)
+  .h(0)
+  .measure(0, 'm', 0)
+  .if('m', 1, c => c.x(1))
+svg(c_midmeas.toSVG())
+```
+
+```{ojs}
+svg(c_midmeas.simulate({ shots: 1000 }).toSVG())
+```
+
+Qubit 0 is measured. If it came out 1, qubit 1 is flipped. The result is always $|00\rangle$ or $|11\rangle$ — the two qubits are forced to agree by classical feedback, even though they were never entangled.
+
+### Quantum teleportation
+
+The canonical application of mid-circuit measurement is **quantum teleportation**: transmitting a qubit's full quantum state using only classical bits and a pre-shared entangled pair.
+
+The protocol:
+
+1. Alice and Bob share a Bell pair (qubits 1 and 2)
+2. Alice holds the qubit to teleport (qubit 0)
+3. Alice entangles her qubit with her half of the Bell pair and measures both
+4. Alice sends her two classical measurement bits to Bob
+5. Bob applies conditional X and Z corrections to his qubit
+
+The state of qubit 0 arrives at qubit 2 — no quantum channel, just two classical bits.
+
+```{ojs}
+// Teleport |1⟩ from qubit 0 to qubit 2
+tele = new ket.Circuit(3)
+  .x(0)                         // state to teleport: |1⟩
+  .h(1).cx(1, 2)                // Bell pair on qubits 1 and 2
+  .cx(0, 1).h(0)                // Alice's Bell-basis measurement
+  .measure(0, 'm0', 0)
+  .measure(1, 'm1', 0)
+  .if('m1', 1, c => c.x(2))    // Bob's correction: X if m1 = 1
+  .if('m0', 1, c => c.z(2))    // Bob's correction: Z if m0 = 1
+svg(tele.toSVG())
+```
+
+```{ojs}
+svg(tele.simulate({ shots: 1000 }).toSVG())
+```
+
+Alice's measurement outcomes ($m_0$, $m_1$) are random and uniformly distributed across all four combinations. But qubit 2 — Bob's qubit — is always $|1\rangle$ regardless of which outcome Alice got. The corrections steer it to the right state every time.
+
+This is what makes teleportation remarkable: the quantum information travels without a quantum channel. The two classical bits tell Bob which of four correction operations to apply, and after applying it, he holds the original state exactly.
+
+## Quantum error correction
+
+Mid-circuit measurement makes **quantum error correction** (QEC) possible. The idea: encode one logical qubit across several physical qubits, measure *parities* (not values) to detect errors, then correct without ever touching the logical state.
+
+The simplest code is the **3-qubit bit-flip code**:
+
+- Encode: $|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$ → $\alpha|000\rangle + \beta|111\rangle$
+- Two syndrome ancillas measure $Z_0Z_1$ and $Z_1Z_2$ — the parity of adjacent qubit pairs
+- Any single bit-flip changes exactly two parities, uniquely identifying which qubit flipped
+- Classical control corrects the right qubit; the logical state is unchanged
+
+```{ojs}
+// Qubits 0,1,2 = logical data  |  qubits 3,4 = syndrome ancillas
+qec_error = new ket.Circuit(5)
+  .h(0)                                      // logical |+⟩ to protect
+  .cx(0, 1).cx(0, 2)                         // encode
+  .x(1)                                      // inject error: flip qubit 1
+  .cx(0, 3).cx(1, 3).measure(3, 's', 0)     // syndrome: parity(q0,q1) → s[0]
+  .cx(1, 4).cx(2, 4).measure(4, 's', 1)     // syndrome: parity(q1,q2) → s[1]
+  .if('s', 1, c => c.x(0))                  // s=01 → correct q0
+  .if('s', 3, c => c.x(1))                  // s=11 → correct q1
+  .if('s', 2, c => c.x(2))                  // s=10 → correct q2
+  .cx(0, 1).cx(0, 2)                        // decode
+svg(qec_error.toSVG())
+```
+
+```{ojs}
+svg(qec_error.simulate({ shots: 1000 }).toSVG())
+```
+
+The histogram shows only two outcomes — qubit 0 is 50/50 (the original $|+\rangle$ recovered), qubits 1 and 2 are always $|0\rangle$ after decoding, and the syndrome ancillas (qubits 3 and 4) are always $|11\rangle$, confirming that a qubit-1 error was detected and corrected every shot.
+
+Compare the clean case — no error injected:
+
+```{ojs}
+qec_clean = new ket.Circuit(5)
+  .h(0)
+  .cx(0, 1).cx(0, 2)
+  .cx(0, 3).cx(1, 3).measure(3, 's', 0)
+  .cx(1, 4).cx(2, 4).measure(4, 's', 1)
+  .if('s', 1, c => c.x(0))
+  .if('s', 3, c => c.x(1))
+  .if('s', 2, c => c.x(2))
+  .cx(0, 1).cx(0, 2)
+svg(qec_clean.simulate({ shots: 1000 }).toSVG())
+```
+
+Syndrome ancillas are $|00\rangle$ — no error detected. Logical qubit 0 is still $|+\rangle$. The parity measurements extracted error information without disturbing the encoded data.
+
+This is the principle behind every fault-tolerant quantum computer: errors are detectable and correctable because the logical state is spread across multiple qubits, and syndromes can be measured without collapsing the logical superposition.
+
+## Custom noise channels
+
+The T1/T2 model from Chapter 9 describes thermal relaxation and dephasing. But real hardware has many other error types. `run()` accepts custom **Kraus operators** — the most general way to describe any quantum channel.
+
+A Kraus channel $\mathcal{E}(\rho) = \sum_k K_k \rho K_k^\dagger$ is valid whenever $\sum_k K_k^\dagger K_k = I$. The simulator applies the channel after each single-qubit gate (pass `kraus1`) or two-qubit gate (pass `kraus2`).
+
+**Amplitude damping** models energy loss to the environment — a qubit in $|1\rangle$ spontaneously decays to $|0\rangle$ with probability $\gamma$:
+
+$$K_0 = \begin{pmatrix} 1 & 0 \\ 0 & \sqrt{1-\gamma} \end{pmatrix} \qquad K_1 = \begin{pmatrix} 0 & \sqrt{\gamma} \\ 0 & 0 \end{pmatrix}$$
+
+```{ojs}
+c_kraus = (re, im = 0) => ({ re, im })
+
+// Amplitude damping: qubit decays from |1⟩ to |0⟩ with probability gamma per gate
+gamma_low  = 0.05
+gamma_high = 0.40
+
+K0_low  = [[c_kraus(1), c_kraus(0)], [c_kraus(0), c_kraus(Math.sqrt(1 - gamma_low))]]
+K1_low  = [[c_kraus(0), c_kraus(Math.sqrt(gamma_low))],  [c_kraus(0), c_kraus(0)]]
+K0_high = [[c_kraus(1), c_kraus(0)], [c_kraus(0), c_kraus(Math.sqrt(1 - gamma_high))]]
+K1_high = [[c_kraus(0), c_kraus(Math.sqrt(gamma_high))], [c_kraus(0), c_kraus(0)]]
+```
+
+```{ojs}
+// Start in |1⟩ — amplitude damping pulls it toward |0⟩
+circ_damp = new ket.Circuit(1).x(0)
+svg(circ_damp.run({ shots: 2000, noise: { kraus1: [K0_low,  K1_low]  } }).toSVG())
+```
+
+```{ojs}
+svg(circ_damp.run({ shots: 2000, noise: { kraus1: [K0_high, K1_high] } }).toSVG())
+```
+
+At $\gamma = 0.05$ most population stays in $|1\rangle$. At $\gamma = 0.40$ the decay is severe — the energy loss dominates. Amplitude damping is not captured by dephasing alone: T2 noise randomises the phase but doesn't move population between $|0\rangle$ and $|1\rangle$. Kraus operators let you model both independently.
+
+**Phase damping** — pure dephasing with no energy loss — has its own Kraus form. You can also describe coherent errors, leakage to non-computational states, or any other physically motivated noise. The constraint is just $\sum_k K_k^\dagger K_k = I$.
+
+## What this means
+
+The backend architecture reflects a real partition in quantum computing:
+
+- **Clifford circuits** are classically simulable. They don't give quantum advantage. They're useful for error correction codes and benchmarking — but not for computation.
+- **Non-Clifford circuits** (T gates, Toffoli, controlled rotations) escape classical simulation and are where quantum advantage lives.
+- **Low-entanglement circuits** (small $\chi$) can be handled by MPS regardless of qubit count.
+- **Noisy circuits** require density matrix simulation — the state is now a $2^n \times 2^n$ matrix, not a vector.
+
+Mid-circuit measurement and classical control bridge classical and quantum computation — they're how error-corrected logical qubits are implemented in practice, where syndrome measurements drive real-time correction without disturbing the data.

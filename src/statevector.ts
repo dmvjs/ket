@@ -13,7 +13,7 @@ import { add, Complex, isNegligible, mul, ZERO } from './complex.js'
 export type StateVector = Map<bigint, Complex>
 
 /** |0...0⟩ for n qubits. */
-export const zero = (n: number): StateVector => new Map([[0n, { re: 1, im: 0 }]])
+export const zero = (_n: number): StateVector => new Map([[0n, { re: 1, im: 0 }]])
 
 /** Accumulate amplitude into a map, creating entry if needed. */
 function accumulate(sv: StateVector, idx: bigint, amp: Complex): void {
