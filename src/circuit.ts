@@ -248,6 +248,86 @@ const JUMP_THRESHOLD = 1e-15
  * noise — which is the physically realistic model for hardware that never supports
  * these gates natively. If noise on Toffoli/CSWAP matters, use `runMps()`.
  */
+/**
+ * Colour scheme for the SVG exporters — `toSVG()` and `blochSphere()`.
+ *
+ * `'light'` (the default) keeps the original white-background palette.
+ * `'dark'` swaps in a dark surface with light ink, so the output can be embedded
+ * in a dark document without sitting on a bright white panel. Both themes are
+ * self-contained: the colours are baked into the SVG, so there is no dependency
+ * on the host page's stylesheet or on `prefers-color-scheme`.
+ */
+export type SvgTheme = 'light' | 'dark'
+
+/** Resolved colour slots used by the SVG exporters. */
+interface SvgPalette {
+  /** Page/background fill. */
+  bg:          string
+  /** Fill behind a gate box — slightly offset from `bg`. */
+  surface:     string
+  /** Wires, gate outlines, control dots. */
+  ink:         string
+  /** Gate label text — the highest-contrast slot. */
+  inkStrong:   string
+  /** Axis lines and sphere outlines. */
+  axis:        string
+  /** Subtitles, tick labels, de-emphasised bars. */
+  muted:       string
+  /** Grid lines and unhighlighted bar fills. */
+  grid:        string
+  /** Highlighted bars, Bloch state vector. */
+  accent:      string
+  /** Percentage labels on highlighted bars. */
+  accentStrong: string
+}
+
+/**
+ * Accent hues, shared by both themes so a chart keeps its meaning when the
+ * surface flips. Teal is the primary accent and gold the secondary.
+ */
+const SVG_ACCENTS = Object.freeze({
+  teal:   '#54b4c5',
+  gold:   '#d4b560',
+  green:  '#8bdb78',
+  orange: '#f47e5b',
+  red:    '#d65c70',
+})
+
+const SVG_PALETTES: Readonly<Record<SvgTheme, Readonly<SvgPalette>>> = Object.freeze({
+  light: Object.freeze({
+    bg:           '#ffffff',
+    surface:      '#f5f7fa',
+    ink:          '#334155',
+    inkStrong:    '#1e293b',
+    axis:         '#475569',
+    muted:        '#94a3b8',
+    grid:         '#e2e8f0',
+    // Darkened one step so teal-on-white clears WCAG AA for a 2px stroke.
+    accent:       '#2f8b9b',
+    accentStrong: '#1f6f7d',
+  }),
+  dark: Object.freeze({
+    bg:           '#0c0e18',
+    surface:      '#161a28',
+    ink:          '#8b97a8',
+    inkStrong:    '#dde4ef',
+    axis:         '#6b7789',
+    muted:        '#7c8798',
+    grid:         '#2a2d3e',
+    accent:       SVG_ACCENTS.teal,
+    accentStrong: SVG_ACCENTS.gold,
+  }),
+})
+
+/** Resolve a theme name to its palette, defaulting to light. */
+function svgPalette(theme: SvgTheme = 'light'): Readonly<SvgPalette> {
+  const p = SVG_PALETTES[theme]
+  if (p === undefined) {
+    throw new TypeError(`Unknown SVG theme '${theme}' — expected 'light' or 'dark'`)
+  }
+  return p
+}
+
 export interface NoiseParams {
   /** Single-qubit depolarizing error probability per gate (0–1). */
   p1?: number
@@ -1302,10 +1382,11 @@ export class Distribution {
    * const result = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
    * fs.writeFileSync('bell.svg', result.toSVG())
    */
-  toSVG(opts: { title?: string; highlight?: readonly string[] } = {}): string {
+  toSVG(opts: { title?: string; highlight?: readonly string[]; theme?: SvgTheme } = {}): string {
+    const C = svgPalette(opts.theme)
     const entries = Object.entries(this.probs).toSorted(([a], [b]) => a.localeCompare(b))
     if (entries.length === 0) {
-      return '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="240" viewBox="0 0 300 240"><rect width="300" height="240" fill="#fff"/></svg>'
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="240" viewBox="0 0 300 240"><rect width="300" height="240" fill="${C.bg}"/></svg>`
     }
 
     const n        = entries.length
@@ -1332,12 +1413,12 @@ export class Distribution {
     const els: string[] = []
 
     // Background
-    els.push(`<rect width="${totalW}" height="${totalH}" fill="#fff"/>`)
+    els.push(`<rect width="${totalW}" height="${totalH}" fill="${C.bg}"/>`)
 
     // Subtitle
     els.push(
       `<text x="${(totalW / 2).toFixed(0)}" y="18" text-anchor="middle"` +
-      ` font-family="ui-sans-serif,sans-serif" font-size="11" fill="#94a3b8">${subtitle}</text>`,
+      ` font-family="ui-sans-serif,sans-serif" font-size="11" fill="${C.muted}">${subtitle}</text>`,
     )
 
     // Bars + labels
@@ -1348,7 +1429,7 @@ export class Distribution {
       const barH = (p / maxP) * maxBarH
       const y    = baseline - barH
       const isHi = highlighted.has(bs)
-      const fill = isHi ? '#3b82f6' : '#e2e8f0'
+      const fill = isHi ? C.accent : C.grid
 
       els.push(`<rect x="${x}" y="${y.toFixed(2)}" width="${barW}" height="${barH.toFixed(2)}" rx="2" fill="${fill}"/>`)
 
@@ -1357,19 +1438,19 @@ export class Distribution {
         const pct = `${(p * 100).toFixed(0)}%`
         els.push(
           `<text x="${cx.toFixed(0)}" y="${(y - 8).toFixed(0)}" text-anchor="middle"` +
-          ` font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#2563eb">${pct}</text>`,
+          ` font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="${C.accentStrong}">${pct}</text>`,
         )
         // Rotated bitstring label in blue
         els.push(
           `<text x="${cx.toFixed(0)}" y="${baseline + 18}" text-anchor="middle"` +
-          ` font-family="ui-monospace,monospace" font-size="9" fill="#2563eb"` +
+          ` font-family="ui-monospace,monospace" font-size="9" fill="${C.accentStrong}"` +
           ` transform="rotate(-45 ${cx.toFixed(0)} ${baseline + 18})">${bs}</text>`,
         )
       }
     }
 
     // Baseline
-    els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${ml + barsSpan + 2}" y2="${baseline}" stroke="#e2e8f0" stroke-width="1"/>`)
+    els.push(`<line x1="${ml - 1}" y1="${baseline}" x2="${ml + barsSpan + 2}" y2="${baseline}" stroke="${C.grid}" stroke-width="1"/>`)
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n${els.join('\n')}\n</svg>`
   }
@@ -4414,7 +4495,8 @@ export class Circuit {
    * @example
    * fs.writeFileSync('bell.svg', new Circuit(2).h(0).cnot(0, 1).toSVG())
    */
-  toSVG(): string {
+  toSVG({ theme }: { theme?: SvgTheme } = {}): string {
+    const C = svgPalette(theme)
     const n = this.qubits
     const ROW_H  = 40   // px between qubit rows
     const COL_W  = 52   // base px per column (may be wider for long labels)
@@ -4471,17 +4553,17 @@ export class Circuit {
     const svgParts: string[] = []
 
     // Background
-    svgParts.push(`<rect width="${totalW}" height="${totalH}" fill="#ffffff"/>`)
+    svgParts.push(`<rect width="${totalW}" height="${totalH}" fill="${C.bg}"/>`)
 
     // Horizontal wires
     for (let q = 0; q < n; q++) {
       const y = qy(q)
-      svgParts.push(`<line x1="${ML - 8}" y1="${y}" x2="${totalW - MR}" y2="${y}" stroke="#334155" stroke-width="1.5"/>`)
+      svgParts.push(`<line x1="${ML - 8}" y1="${y}" x2="${totalW - MR}" y2="${y}" stroke="${C.ink}" stroke-width="1.5"/>`)
     }
 
     // Qubit labels
     for (let q = 0; q < n; q++) {
-      svgParts.push(`<text x="${ML - 12}" y="${qy(q) + 4}" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#334155">q${q}:</text>`)
+      svgParts.push(`<text x="${ML - 12}" y="${qy(q) + 4}" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="${C.ink}">q${q}:</text>`)
     }
 
     // Gates
@@ -4492,7 +4574,7 @@ export class Circuit {
 
       // Vertical connector line between min and max qubit
       if (minQ !== maxQ) {
-        svgParts.push(`<line x1="${x}" y1="${qy(minQ)}" x2="${x}" y2="${qy(maxQ)}" stroke="#334155" stroke-width="1.5"/>`)
+        svgParts.push(`<line x1="${x}" y1="${qy(minQ)}" x2="${x}" y2="${qy(maxQ)}" stroke="${C.ink}" stroke-width="1.5"/>`)
       }
 
       for (const q of qs) {
@@ -4501,23 +4583,23 @@ export class Circuit {
 
         if (lbl === '●') {
           // Control dot
-          svgParts.push(`<circle cx="${x}" cy="${y}" r="5" fill="#334155"/>`)
+          svgParts.push(`<circle cx="${x}" cy="${y}" r="5" fill="${C.ink}"/>`)
         } else if (lbl === '⊕') {
           // CNOT target: circle with cross
-          svgParts.push(`<circle cx="${x}" cy="${y}" r="10" fill="none" stroke="#334155" stroke-width="1.5"/>`)
-          svgParts.push(`<line x1="${x}" y1="${y - 10}" x2="${x}" y2="${y + 10}" stroke="#334155" stroke-width="1.5"/>`)
-          svgParts.push(`<line x1="${x - 10}" y1="${y}" x2="${x + 10}" y2="${y}" stroke="#334155" stroke-width="1.5"/>`)
+          svgParts.push(`<circle cx="${x}" cy="${y}" r="10" fill="none" stroke="${C.ink}" stroke-width="1.5"/>`)
+          svgParts.push(`<line x1="${x}" y1="${y - 10}" x2="${x}" y2="${y + 10}" stroke="${C.ink}" stroke-width="1.5"/>`)
+          svgParts.push(`<line x1="${x - 10}" y1="${y}" x2="${x + 10}" y2="${y}" stroke="${C.ink}" stroke-width="1.5"/>`)
         } else if (lbl === '╳') {
           // SWAP target: X mark
           const d = 7
-          svgParts.push(`<line x1="${x - d}" y1="${y - d}" x2="${x + d}" y2="${y + d}" stroke="#334155" stroke-width="2"/>`)
-          svgParts.push(`<line x1="${x + d}" y1="${y - d}" x2="${x - d}" y2="${y + d}" stroke="#334155" stroke-width="2"/>`)
+          svgParts.push(`<line x1="${x - d}" y1="${y - d}" x2="${x + d}" y2="${y + d}" stroke="${C.ink}" stroke-width="2"/>`)
+          svgParts.push(`<line x1="${x + d}" y1="${y - d}" x2="${x - d}" y2="${y + d}" stroke="${C.ink}" stroke-width="2"/>`)
         } else {
           // Gate box
           const labelPx = Math.max(20, Math.ceil(lbl.length * CHAR_W) + 14)
           const bx = x - labelPx / 2, by = y - BOX_H / 2
-          svgParts.push(`<rect x="${bx}" y="${by}" width="${labelPx}" height="${BOX_H}" rx="${R}" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>`)
-          svgParts.push(`<text x="${x}" y="${y + 4}" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#1e293b">${lbl}</text>`)
+          svgParts.push(`<rect x="${bx}" y="${by}" width="${labelPx}" height="${BOX_H}" rx="${R}" fill="${C.surface}" stroke="${C.ink}" stroke-width="1.5"/>`)
+          svgParts.push(`<text x="${x}" y="${y + 4}" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="${C.inkStrong}">${lbl}</text>`)
         }
       }
     }
@@ -4634,7 +4716,8 @@ export class Circuit {
    *
    * @throws TypeError if the circuit contains measure/reset/if ops (see blochAngles).
    */
-  blochSphere(q: number): string {
+  blochSphere(q: number, { theme }: { theme?: SvgTheme } = {}): string {
+    const C = svgPalette(theme)
     const { theta, phi } = this.blochAngles(q)
 
     const bx = Math.sin(theta) * Math.cos(phi)
@@ -4650,39 +4733,39 @@ export class Circuit {
     const parts: string[] = []
 
     // Background
-    parts.push(`<rect width="300" height="300" fill="white"/>`)
+    parts.push(`<rect width="300" height="300" fill="${C.bg}"/>`)
 
     // Sphere outline
-    parts.push(`<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="#94a3b8" stroke-width="1.5"/>`)
+    parts.push(`<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${C.muted}" stroke-width="1.5"/>`)
 
     // Equatorial ellipse (dashed)
-    parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${R}" ry="${Math.round(R * 0.35)}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>`)
+    parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${R}" ry="${Math.round(R * 0.35)}" fill="none" stroke="${C.muted}" stroke-width="1" stroke-dasharray="4,3"/>`)
 
     // Z-axis: dashed above equator, solid below
     // Above equator: from cy to cy-R
-    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - R}" stroke="#475569" stroke-width="1.2" stroke-dasharray="5,3"/>`)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - R}" stroke="${C.axis}" stroke-width="1.2" stroke-dasharray="5,3"/>`)
     // Below equator: solid
-    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy + R}" stroke="#475569" stroke-width="1.2"/>`)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy + R}" stroke="${C.axis}" stroke-width="1.2"/>`)
 
     // Z-axis labels
-    parts.push(`<text x="${cx}" y="${cy - R - 8}" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|0⟩</text>`)
-    parts.push(`<text x="${cx}" y="${cy + R + 18}" text-anchor="middle" font-family="serif" font-size="14" fill="#1e293b">|1⟩</text>`)
+    parts.push(`<text x="${cx}" y="${cy - R - 8}" text-anchor="middle" font-family="serif" font-size="14" fill="${C.inkStrong}">|0⟩</text>`)
+    parts.push(`<text x="${cx}" y="${cy + R + 18}" text-anchor="middle" font-family="serif" font-size="14" fill="${C.inkStrong}">|1⟩</text>`)
 
     // X-axis (right-horizontal)
-    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx + R}" y2="${cy}" stroke="#475569" stroke-width="1.2"/>`)
-    parts.push(`<text x="${cx + R + 8}" y="${cy + 4}" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|+⟩</text>`)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${cx + R}" y2="${cy}" stroke="${C.axis}" stroke-width="1.2"/>`)
+    parts.push(`<text x="${cx + R + 8}" y="${cy + 4}" text-anchor="start" font-family="serif" font-size="13" fill="${C.inkStrong}">|+⟩</text>`)
 
     // Y-axis (diagonal lower-right — cavalier projection of +Y)
     const yTipX = cx + Math.round(R * 0.4)
     const yTipY = cy + Math.round(R * 0.1) + Math.round(R * 0.35)
-    parts.push(`<line x1="${cx}" y1="${cy}" x2="${yTipX}" y2="${yTipY}" stroke="#475569" stroke-width="1.2"/>`)
-    parts.push(`<text x="${yTipX + 6}" y="${yTipY + 4}" text-anchor="start" font-family="serif" font-size="13" fill="#1e293b">|i⟩</text>`)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${yTipX}" y2="${yTipY}" stroke="${C.axis}" stroke-width="1.2"/>`)
+    parts.push(`<text x="${yTipX + 6}" y="${yTipY + 4}" text-anchor="start" font-family="serif" font-size="13" fill="${C.inkStrong}">|i⟩</text>`)
 
     // State vector arrow (blue line)
-    parts.push(`<line x1="${cx}" y1="${cy}" x2="${px.toFixed(1)}" y2="${py.toFixed(1)}" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>`)
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${px.toFixed(1)}" y2="${py.toFixed(1)}" stroke="${C.accent}" stroke-width="2.5" stroke-linecap="round"/>`)
 
     // State vector dot at tip
-    parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#3b82f6"/>`)
+    parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="${C.accent}"/>`)
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">\n${parts.join('\n')}\n</svg>`
   }

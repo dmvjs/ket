@@ -22,7 +22,7 @@ This matches the convention used by every major quantum computing library and pa
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
 - **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
-- **WebGPU browser simulation** — the [interactive book](https://dmvjs.com/ket/) runs statevector QPE on GPU compute shaders, holding the state in VRAM rather than the JS heap and so bypassing the tab memory limit. It reaches 29-bit state spaces, but only on deliberately favourable targets: N = p(p+2) for twin primes p, with base a = p+1 chosen so that a² ≡ 1 (mod N) and the period is always r = 2, which lets a single counting qubit (t = 1) suffice. The circuit itself is not hand-compiled — every amplitude is computed — but these are not arbitrary semiprimes. See the [Shor chapter](https://dmvjs.com/ket/book/08-shor.html) for the full disclosure.
+- **WebGPU browser simulation** — the interactive guide (source in [`ket-guide/`](../ket-guide/), not yet published) runs statevector QPE on GPU compute shaders, holding the state in VRAM rather than the JS heap and so bypassing the tab memory limit. It reaches 29-bit state spaces, but only on deliberately favourable targets: N = p(p+2) for twin primes p, with base a = p+1 chosen so that a² ≡ 1 (mod N) and the period is always r = 2, which lets a single counting qubit (t = 1) suffice. The circuit itself is not hand-compiled — every amplitude is computed — but these are not arbitrary semiprimes. See [`ket-guide/book/08-shor.qmd`](../ket-guide/book/08-shor.qmd) for the full disclosure.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, Trotter simulation, QAOA, gradient (parameter shift rule), minimize, standard ansatz circuits, and Pauli operator algebra ship with the core.
 
@@ -43,7 +43,7 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle ships in two flavours — `ket.js` (332kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (150kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
+The ESM bundle ships in two flavours — `ket.js` (341kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (154kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
 
 Requires Node.js ≥ 22 for server-side use.
 
@@ -543,6 +543,40 @@ circuit.exactProbs()
 
 `gradient(ansatz, hamiltonian, params)` computes exact analytic gradients via the parameter shift rule — not finite differences. The rule is exact for any gate of the form e^{−iθP/2} (Rx, Ry, Rz, and all standard rotation gates). `minimize(ansatz, hamiltonian, initialParams, options?)` runs gradient descent until convergence or step budget exhaustion, returning `{ params, energy, steps, converged }`.
 
+`grover(n, oracle)` kicks the phase of the marked state; `groverAncilla(n, oracle)` instead gives the oracle an explicit ancilla qubit to flip, which is often the more natural way to express a Boolean predicate.
+
+### VQE beyond statevector width
+
+`gradientMps` and `minimizeMps` mirror `gradient` and `minimize` but evaluate on
+the MPS backend, so an ansatz whose ground state obeys an area law stays cheap at
+widths a statevector cannot hold:
+
+```typescript
+import { efficientSU2, minimizeMps } from '@kirkelliott/ket'
+
+const ansatz = efficientSU2(12, 2)
+const { energy, params } = minimizeMps(
+  ansatz, heisenbergH, Array(ansatz.paramCount).fill(0.1),
+  { lr: 0.12, steps: 80 }
+)
+```
+
+Two circuit methods support the same workflow. `expectMps(hamiltonian, options?)`
+returns `{ energy, truncated }` — the Pauli expectation value on MPS, with a flag
+telling you whether truncation made it approximate. `bondEntropies(options?)`
+returns the von Neumann entropy at every bond, which is the entanglement profile
+across the chain:
+
+```typescript
+const ghz = new Circuit(6).h(0).cnot(0,1).cnot(1,2).cnot(2,3).cnot(3,4).cnot(4,5)
+
+ghz.bondEntropies()  // [1, 1, 1, 1, 1] — every cut splits one shared bit
+ghz.expectMps([{ coeff: 1, ops: 'ZZIIII' }])  // { energy: 1, truncated: false }
+```
+
+A product state is flat at zero; GHZ is flat at exactly 1 bit. A circuit whose
+entropy grows toward the middle of the chain is one MPS will struggle with.
+
 `PauliOp` supports full complex-coefficient arithmetic: `.add()`, `.scale()`, `.mul()` (with phase tracking), and `.commutator()`. `.toTerms()` converts back to `PauliTerm[]` for use with `vqe()`, `gradient()`, and `minimize()`, and throws if the operator is not Hermitian.
 
 `trotter(n, hamiltonian, t, steps?, order?)` implements the Lie–Trotter product formula (`order=1`) and the symmetric Trotter–Suzuki decomposition (`order=2`). Error scales as O(t²/r) for order 1 and O(t³/r²) for order 2.
@@ -796,9 +830,16 @@ circuit.stateAsString()         // '0.7071|00⟩ + 0.7071|11⟩'
 circuit.stateAsArray()          // [{ bitstring, re, im, prob, phase }, ...] sorted by prob
 circuit.blochAngles(0)          // { theta, phi } via partial trace
 circuit.expectation('ZZ')       // number — ⟨ψ|P|ψ⟩ for a Pauli string P
+circuit.circuitMatrix()         // Complex[][] — the circuit's own 2ⁿ×2ⁿ unitary
 ```
 
 `stateAsArray()` returns one entry per basis state with non-negligible amplitude (|a|² ≥ 1e-10), sorted by probability descending. Each entry carries the real and imaginary parts, the probability, and the phase angle `atan2(im, re)`. Throws on circuits with measurements or unbound parameters.
+
+`circuitMatrix()` materializes the whole circuit as a single unitary, which is
+useful for verifying a decomposition against a target gate. It requires a pure
+circuit — `measure`, `reset`, or `if` throw `TypeError` — and refuses sizes whose
+matrix would not fit in memory, throwing `RangeError` rather than attempting the
+allocation.
 
 ## Classical control and named gates
 
@@ -847,6 +888,53 @@ circuit.runClifford({ shots: 10000, noise: { p1: 0.001, p2: 0.005 } })
 `p1` — single-qubit depolarizing error probability per gate. `p2` — two-qubit depolarizing probability. `pMeas` — bit-flip probability on each measured bit (SPAM error).
 
 Named profiles cover all devices in the [device table](#device-targeting) — IonQ, IBM, and Quantinuum. The density matrix backend applies exact per-gate depolarizing channels (no Monte Carlo sampling). Noiseless circuits take the fast path — zero overhead.
+
+### T1 / T2 relaxation
+
+Beyond depolarizing noise, `gamma` applies amplitude damping (T1 relaxation) and
+`lambda` pure dephasing (T2 beyond T1). Both are per-single-qubit-gate
+probabilities, applied to every qubit after every gate, so convert from
+coherence times:
+
+```typescript
+const tGate = 200e-9, T1 = 50e-6, T2 = 30e-6
+
+circuit.run({ shots: 4096, noise: {
+  gamma:  1 - Math.exp(-tGate / T1),
+  lambda: 1 - Math.exp(-2 * tGate * (1 / T2 - 1 / (2 * T1))),
+}})
+```
+
+### Custom Kraus channels
+
+`kraus1` and `kraus2` take arbitrary Kraus operators — 2×2 matrices applied
+after each single-qubit gate, 4×4 after each two-qubit gate. They must be
+trace-preserving (Σ_k K_k† K_k = I); one operator is sampled per shot per gate.
+
+```typescript
+import { c } from '@kirkelliott/ket'
+
+// Amplitude damping written out by hand, γ = 0.01
+const g = 0.01
+const K0 = [[c(1), c(0)], [c(0), c(Math.sqrt(1 - g))]]
+const K1 = [[c(0), c(Math.sqrt(g))], [c(0), c(0)]]
+
+circuit.run({ shots: 4096, noise: { kraus1: [K0, K1] } })
+```
+
+`kraus1` never applies after two-qubit gates and `kraus2` never after
+single-qubit ones — neither leaks into the other. Both work in `run()` and
+`dm()`, but **not** in `runMps()`.
+
+### Readout error mitigation
+
+Given a known symmetric bit-flip probability, `Distribution.mitigateReadout(p)`
+inverts the readout confusion matrix and returns a corrected distribution:
+
+```typescript
+const noisy = circuit.run({ shots: 8192, noise: { pMeas: 0.02 } })
+const fixed = noisy.mitigateReadout(0.02)
+```
 
 ## Serialization
 
@@ -936,7 +1024,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
 
 ## Testing
 
-1768 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+1,843 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test
