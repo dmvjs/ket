@@ -19,7 +19,7 @@ bell.stateAsString() // 0.7071|00⟩ + 0.7071|11⟩
 bell.exactProbs()    // { '00': 0.5, '11': 0.5 }
 ```
 
-**[Playground](https://dmvjs.com/ket/demo.html)** &nbsp;·&nbsp; **[Guide](https://dmvjs.com/ket/)** &nbsp;·&nbsp; **[API docs](https://dmvjs.com/ket/docs.html)** &nbsp;·&nbsp; **[Full reference](docs/REFERENCE.md)**
+**[Playground](https://dmvjs.com/ket/demo.html)** &nbsp;·&nbsp; **[Live demos](https://dmvjs.com/ket/)** &nbsp;·&nbsp; **[API docs](https://dmvjs.com/ket/docs.html)** &nbsp;·&nbsp; **[Full reference](docs/REFERENCE.md)**
 
 ## Install
 
@@ -105,13 +105,13 @@ without defensive copying.
 **BigInt state indices.** No 32-bit overflow at qubit 31, the failure mode that silently
 corrupts integer-indexed simulators.
 
-**1,768 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
+**1,843 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
 Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at indices
 30/31/40, and full round-trips for every supported import/export format. The sparse and
 dense statevector kernels are differentially tested against each other gate by gate,
 over every qubit ordering, so promotion can never change a result.
 
-**Zero dependencies.** 150 KB minified, total. Nothing to audit but ket.
+**Zero dependencies.** 154 KB minified, total. Nothing to audit but ket.
 
 ## Performance
 
@@ -142,7 +142,8 @@ the `dense` option when you want to trade memory against speed.
 
 ## Documentation
 
-- **[Guide](https://dmvjs.com/ket/)** — an interactive book, from bits to Shor's
+- **[Live demos](https://dmvjs.com/ket/)** — QAOA, Grover across hardware, 1,024-qubit GHZ, VQE
+- **[Playground](https://dmvjs.com/ket/demo.html)** — run circuits in the browser, nothing to install
 - **[API docs](https://dmvjs.com/ket/docs.html)** — every export
 - **[Full reference](docs/REFERENCE.md)** — all gates, 14 import/export formats, noise
   models, device targeting, visualization, QEC

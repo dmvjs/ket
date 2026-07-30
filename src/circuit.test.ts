@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Circuit, IONQ_DEVICES } from './circuit.js'
+import { Circuit, Distribution, IONQ_DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
 import { qft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
@@ -393,20 +393,20 @@ describe('Distribution', () => {
     expect(svg).toContain('</svg>')
   })
 
-  it('.toSVG highlights the dominant Bell peaks in blue', () => {
+  it('.toSVG highlights the dominant Bell peaks in the accent colour', () => {
     const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
     const svg = r.toSVG()
-    expect(svg).toContain('#3b82f6')   // highlighted bar fill
-    expect(svg).toContain('#2563eb')   // highlighted label color
+    expect(svg).toContain('#2f8b9b')   // highlighted bar fill (light accent)
+    expect(svg).toContain('#1f6f7d')   // highlighted label colour
   })
 
   it('.toSVG accepts explicit highlight list', () => {
     const r = new Circuit(2).h(0).cnot(0, 1).run({ shots: 1024, seed: 42 })
     const svg = r.toSVG({ highlight: ['00'] })
     // '00' label should appear in blue; '11' should not be highlighted
-    const blueTextCount = (svg.match(/fill="#2563eb"/g) ?? []).length
-    // only '00' is highlighted → 2 blue elements (pct label + rotated bitstring label)
-    expect(blueTextCount).toBe(2)
+    const accentTextCount = (svg.match(/fill="#1f6f7d"/g) ?? []).length
+    // only '00' is highlighted → 2 accent elements (pct label + rotated bitstring label)
+    expect(accentTextCount).toBe(2)
   })
 
   it('.toSVG subtitle shows all-states count correctly', () => {
@@ -422,6 +422,59 @@ describe('Distribution', () => {
     const r = c.run({ shots: 100000, seed: 42 })
     const svg = r.toSVG()
     expect(svg).toContain('all 4 states')
+  })
+
+  describe('SVG themes', () => {
+    const bgOf = (svg: string) => svg.match(/<rect[^>]*fill="([^"]+)"/)![1]
+
+    it('Circuit.toSVG defaults to the light theme', () => {
+      expect(bgOf(new Circuit(2).h(0).cnot(0, 1).toSVG())).toBe('#ffffff')
+    })
+
+    it('Circuit.toSVG dark theme swaps the surface, not the geometry', () => {
+      const c = new Circuit(2).h(0).cnot(0, 1)
+      const light = c.toSVG({ theme: 'light' })
+      const dark  = c.toSVG({ theme: 'dark' })
+      expect(bgOf(dark)).toBe('#0c0e18')
+      // Same drawing, different palette: identical once colours are stripped.
+      const strip = (s: string) => s.replace(/(fill|stroke)="[^"]*"/g, '')
+      expect(strip(dark)).toBe(strip(light))
+    })
+
+    it('dark theme uses light ink so text stays legible', () => {
+      const dark = new Circuit(1).h(0).toSVG({ theme: 'dark' })
+      expect(dark).toContain('#dde4ef')   // gate label
+      expect(dark).not.toContain('#1e293b')
+    })
+
+    it('blochSphere honours the theme', () => {
+      const c = new Circuit(1).h(0)
+      expect(bgOf(c.blochSphere(0, { theme: 'dark' }))).toBe('#0c0e18')
+      expect(bgOf(c.blochSphere(0))).toBe('#ffffff')
+      expect(c.blochSphere(0, { theme: 'dark' })).toContain('#54b4c5')  // teal accent
+    })
+
+    it('Distribution.toSVG honours the theme, including the empty case', () => {
+      const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 512, seed: 7 })
+      expect(bgOf(d.toSVG({ theme: 'dark' }))).toBe('#0c0e18')
+      expect(bgOf(d.toSVG())).toBe('#ffffff')
+      // The empty-distribution early return must interpolate its palette too.
+      const empty = new Distribution(0, 0, new Map(), new Map())
+      expect(empty.toSVG({ theme: 'dark' })).toContain('#0c0e18')
+      expect(empty.toSVG({ theme: 'dark' })).not.toContain('${')
+    })
+
+    it('theme composes with the other toSVG options', () => {
+      const d = new Circuit(2).h(0).cnot(0, 1).run({ shots: 512, seed: 7 })
+      const svg = d.toSVG({ theme: 'dark', title: 'themed', highlight: ['00'] })
+      expect(svg).toContain('themed')
+      expect(bgOf(svg)).toBe('#0c0e18')
+    })
+
+    it('rejects an unknown theme rather than silently defaulting', () => {
+      // @ts-expect-error — deliberately invalid theme name
+      expect(() => new Circuit(1).h(0).toSVG({ theme: 'neon' })).toThrow(TypeError)
+    })
   })
 
   it('.toSVG accepts a custom title', () => {
@@ -5904,7 +5957,7 @@ describe('circuit.blochSphere(q)', () => {
 
   it('H gate: equatorial state bloch sphere renders', () => {
     const svg = new Circuit(1).h(0).blochSphere(0)
-    expect(svg).toContain('stroke="#3b82f6"')  // blue arrow
+    expect(svg).toContain('stroke="#2f8b9b"')  // state-vector arrow, light accent
   })
 
   it('throws for circuits with measurement ops', () => {
