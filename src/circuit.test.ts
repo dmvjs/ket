@@ -90,16 +90,26 @@ describe('complex — construction and arithmetic', () => {
     expect(isNegligible(c(0, 0))).toBe(true)
   })
 
-  it('isNegligible: amplitude above norm² threshold (1e-14) is not negligible', () => {
-    // norm2(c(1e-6)) = 1e-12 > 1e-14 → not negligible
+  it('isNegligible: amplitude above AMP_EPSILON (1e-15) is not negligible', () => {
     expect(isNegligible(c(1e-6, 0))).toBe(false)
     expect(isNegligible(c(0, 1e-6))).toBe(false)
   })
 
-  it('isNegligible: amplitude below norm² threshold is negligible', () => {
-    // norm2(c(1e-8)) = 1e-16 < 1e-14 → negligible
-    expect(isNegligible(c(1e-8, 0))).toBe(true)
-    expect(isNegligible(c(1e-8, 1e-8))).toBe(true)
+  it('isNegligible: small but physical amplitudes are kept', () => {
+    // The threshold is on the amplitude, not on |amplitude|². 1e-8 and 1e-9 are
+    // real weight — they were discarded when this predicate used the 1e-14 bound
+    // meant for probabilities, which silently threw away every amplitude under
+    // 1e-7 and perturbed states far beyond the discarded amount.
+    expect(isNegligible(c(1e-8, 0))).toBe(false)
+    expect(isNegligible(c(1e-8, 1e-8))).toBe(false)
+    expect(isNegligible(c(1e-12, 0))).toBe(false)
+  })
+
+  it('isNegligible: rounding dust below AMP_EPSILON is negligible', () => {
+    // Where exact cancellations land — the |1⟩ branch of H·H, say.
+    expect(isNegligible(c(1e-17, 0))).toBe(true)
+    expect(isNegligible(c(0, 1e-18))).toBe(true)
+    expect(isNegligible(c(1e-16, 1e-16))).toBe(true)
   })
 })
 

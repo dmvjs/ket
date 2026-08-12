@@ -4,7 +4,7 @@
 [![npm](https://img.shields.io/npm/v/@kirkelliott/ket)](https://www.npmjs.com/package/@kirkelliott/ket)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Quantum circuits in TypeScript.** Immutable API, four backends, zero dependencies.
+**Quantum circuits in TypeScript.** Immutable API, five backends, zero dependencies.
 
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
@@ -72,6 +72,51 @@ shorBeauregard(15n, { a: 7n }).method  // 'quantum'
 This does not reach cryptographic sizes — no classical simulator does. What you get
 is the real circuit, exactly simulated, at sizes you can actually inspect.
 
+## Simulate 100 qubits with 50 T gates
+
+A statevector costs 2ⁿ and stops near 24 qubits. Stabilizer rank costs 2^0.228t
+in the *non-Clifford* count and is only polynomial in width, so it goes where a
+statevector cannot:
+
+```typescript
+let c = new Circuit(100).h(0)
+for (let q = 0; q < 99; q++) c = c.cnot(q, q + 1)
+for (let i = 0; i < 50; i++) c = c.t((i * 7) % 100)
+
+c.runStabilizerRank({ shots: 100, targetError: 0.3 })
+```
+
+Clifford gates are free; each T gate splits the decomposition in two. Exact
+simulation therefore costs 2^t and runs out near t = 18. Setting `targetError`
+instead derives a term budget of ⌈ξ/δ²⌉ from the circuit's stabilizer extent —
+30,495 terms at t=50, fewer than an *exact* t=15 run needs.
+
+| T gates | exact terms | budget at δ=0.3 | time, n=100 |
+|---|---|---|---|
+| 50 | 1.1×10¹⁵ | 30,495 | 5.6s |
+| 60 | 1.2×10¹⁸ | 148,565 | 67s |
+| 65 | 3.7×10¹⁹ | 327,916 | 228s |
+| 70 | 1.2×10²¹ | 723,785 | 27min |
+
+The ceiling is a property of your machine, not the algorithm — terms cost
+3n²/8 bytes each, so it moves with width, tolerance and RAM:
+
+```typescript
+maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 77
+```
+
+That is a *memory* bound, and memory is not what stops you on a large machine.
+Runtime grows faster than the term count, so on the 64 GB box those timings come
+from, t=70 is 27 minutes and t=76 was still running after 6 hours — while peak
+memory never passed 8.2 GB. Read `maxTGates` as "you will not run out of RAM
+below this", and measure the rest with `benchmark/stabilizer-rank.ts`.
+
+Sparsification is unbiased but randomised, and a streaming run applies it
+repeatedly, so the single-shot error bound does not certify the total.
+`Distribution.truncated` marks any approximate run, `sparsifications` counts how
+often it fired, and `estimateNorm()` measures what it actually cost — an exact
+decomposition of a unitary circuit has ‖ψ‖² = 1, so drift from 1 is the damage.
+
 ## Pick a backend, or let ket pick
 
 ```typescript
@@ -84,6 +129,7 @@ circuit.simulate({ shots: 1024 })   // routes to the cheapest exact backend
 | MPS / tensor network | O(n·χ²), χ grows on demand | Low-entanglement circuits, 50+ qubits |
 | Density matrix | sparse → dense, automatic | Mixed states and noise |
 | Clifford stabilizer | O(n²) | Clifford circuits, QEC thresholds |
+| Stabilizer rank | O(2^0.228t · n²/8) | Clifford+T at 100+ qubits |
 
 The statevector backend starts sparse and promotes itself to a contiguous
 `Float64Array` once a state is more than ⅛ full, so sparse circuits stay cheap and
@@ -105,13 +151,15 @@ without defensive copying.
 **BigInt state indices.** No 32-bit overflow at qubit 31, the failure mode that silently
 corrupts integer-indexed simulators.
 
-**1,843 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
+**1,953 tests.** Analytic correctness against known amplitudes — not "doesn't crash."
 Gate invertibility (U†U = I), backend cross-agreement, BigInt correctness at indices
 30/31/40, and full round-trips for every supported import/export format. The sparse and
 dense statevector kernels are differentially tested against each other gate by gate,
-over every qubit ordering, so promotion can never change a result.
+over every qubit ordering, so promotion can never change a result. The stabilizer
+backends are checked against the statevector kernel *including global phase*, and
+their exponential sums against brute-force enumeration.
 
-**Zero dependencies.** 154 KB minified, total. Nothing to audit but ket.
+**Zero dependencies.** 172 KB minified, total. Nothing to audit but ket.
 
 ## Performance
 
@@ -147,6 +195,10 @@ the `dense` option when you want to trade memory against speed.
 - **[API docs](https://dmvjs.com/ket/docs.html)** — every export
 - **[Full reference](docs/REFERENCE.md)** — all gates, 14 import/export formats, noise
   models, device targeting, visualization, QEC
+- **[Guide](ket-guide/)** — a 13-chapter Quarto book, from bits to backends, with
+  runnable blocks. `quarto render` after `npm run build`
+- **[Examples](examples/)** — Node scripts, a browser page, a Jupyter notebook, and
+  the SVGs the docs use
 
 ## License
 

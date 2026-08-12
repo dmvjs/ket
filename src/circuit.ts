@@ -20,6 +20,9 @@ import { wt } from './worker-shim.js'
 import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
 import { CliffordSim } from './clifford.js'
+import { makePrng } from './prng.js'
+import { StabilizerRank, buildSlice, countSplits, termBudget, type SrOp } from './stabilizer-rank.js'
+import { sampleFromOracle } from './stabilizer-sampling.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -1130,14 +1133,7 @@ function distributeShots(shots: number, n: number): number[] {
 
 // ─── Distribution ─────────────────────────────────────────────────────────────
 
-/** Seeded xorshift32 PRNG — same algorithm used by qsim for reproducibility. */
-export function makePrng(seed?: number): () => number {
-  let s = seed !== undefined ? ((seed >>> 0) || 1) : ((Date.now() & 0xffffffff) >>> 0) || 1
-  return () => {
-    s ^= s << 13; s ^= s >>> 17; s ^= s << 5
-    return (s >>> 0) / 0x100000000
-  }
-}
+export { makePrng } from './prng.js'
 
 export interface RunOptions {
   shots?: number
@@ -1283,7 +1279,7 @@ export class Distribution {
    * Which simulation backend produced this result.
    * Set by `simulate()` and the individual `run*` methods.
    */
-  readonly backend: 'clifford' | 'statevector' | 'mps' | undefined
+  readonly backend: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | undefined
   /**
    * Peak bond dimension χ used during MPS simulation.
    * Only defined when `backend === 'mps'`.
@@ -1306,7 +1302,7 @@ export class Distribution {
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
     truncated = false,
-    backend?: 'clifford' | 'statevector' | 'mps',
+    backend?: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank',
     peakChi?: number,
     representation?: 'sparse' | 'dense',
   ) {
@@ -1556,6 +1552,43 @@ function collectParams(ops: readonly Op[]): Set<string> {
 }
 
 // ─── Circuit ──────────────────────────────────────────────────────────────────
+
+/** Options for {@link Circuit.runStabilizerRank}. */
+export interface StabilizerRankRunOptions {
+  /** Number of measurement shots. Default 1024. */
+  shots?: number
+  /** PRNG seed for sampling and sparsification. */
+  seed?: number
+  /**
+   * Ceiling on the stabilizer-term count. Exceeding it triggers sparsification,
+   * which makes the run approximate and sets `Distribution.truncated`.
+   * Default `Infinity` — exact.
+   */
+  maxTerms?: number
+  /**
+   * Target ℓ₂ error δ. Derives the term budget from the circuit's stabilizer
+   * extent as ⌈ξ/δ²⌉, which costs 2^{0.228t}/δ² instead of the 2^t an exact run
+   * needs — the difference between a 16-T ceiling and a 50-T one. Overridden by
+   * an explicit `maxTerms`.
+   */
+  targetError?: number
+  /** Metropolis steps before the first sample. Default 200. */
+  burnIn?: number
+  /** Metropolis steps between samples. Default 20. */
+  thin?: number
+  /**
+   * Sampling strategy. `'auto'` (default) enumerates the exact distribution when
+   * 2ⁿ·terms fits `exactBudget`, else falls back to Metropolis.
+   */
+  method?: 'auto' | 'exact' | 'metropolis'
+  /** Amplitude-evaluation budget above which `'auto'` falls back to Metropolis. */
+  exactBudget?: number
+  /**
+   * Number of worker threads to split the 2^t terms across. Requires the built
+   * bundle and an exact run (`maxTerms` unset); ignored with a warning otherwise.
+   */
+  workers?: number
+}
 
 export class Circuit {
   readonly qubits: number
@@ -4943,6 +4976,235 @@ export class Circuit {
     }
 
     return new Distribution(this.qubits, shots, counts, cregCounts, false, 'clifford')
+  }
+
+  /**
+   * Simulate a Clifford + diagonal circuit by low-rank stabilizer decomposition.
+   *
+   * The state is carried as a sum of stabilizer states in CH-form. Clifford gates
+   * are free; each non-Clifford diagonal gate doubles the number of terms. Cost is
+   * therefore exponential in non-Clifford count and only polynomial in qubit
+   * count — the inverse of the statevector trade-off, which is what lets this
+   * backend reach circuit widths `run()` cannot hold in memory. A Toffoli is
+   * expanded into its standard 7-T decomposition.
+   *
+   * Exact by default, which costs 2^t terms and runs out of road near t = 18.
+   * Setting `targetError` instead derives a term budget of ⌈ξ/δ²⌉ from the
+   * circuit's stabilizer extent, costing 2^{0.228t}/δ² — that is what puts
+   * T-counts of 50 or more in reach. `maxTerms` caps the count directly and
+   * overrides it. Either way sparsification is unbiased but randomised, and
+   * `Distribution.truncated` reports `true` so an approximate run is never
+   * mistaken for an exact one.
+   *
+   * Sampling uses the Metropolis chain of Section 4.2 of the reference, which is
+   * a heuristic: it is not proven irreducible and its mixing time is unknown.
+   * Raise `burnIn`/`thin` if the output distribution is strongly multi-modal.
+   *
+   * Mid-circuit measurement, reset and classical control are not supported.
+   *
+   * @example
+   * // 60 qubits with 10 T gates — far beyond statevector reach
+   * new Circuit(60).h(0).cnot(0, 1).t(2).runStabilizerRank({ shots: 1000 })
+   */
+  runStabilizerRank({
+    shots = 1024, seed, maxTerms, targetError, burnIn = 200, thin = 20,
+    method = 'auto', exactBudget = 1 << 22, workers: numWorkers = 0,
+  }: StabilizerRankRunOptions = {}): Distribution {
+    const ops = this.#toSrOps()
+    // An explicit cap wins; otherwise a target error sets the budget, and with
+    // neither the run is exact.
+    const budget = maxTerms ?? (targetError === undefined ? Infinity : termBudget(ops, targetError))
+    const rng = makePrng(seed)
+
+    // Report the single reason parallelism is unavailable, most specific first.
+    const wtLocal = wt
+    const blocked =
+      numWorkers <= 1                                   ? ''
+      : budget !== Infinity                             ? 'sparsification resamples the decomposition globally and cannot be sliced'
+      : import.meta.url.endsWith('.ts') || wtLocal === null ? 'build the bundle first (npm run build) to enable parallel terms'
+      : ''
+    if (blocked) console.warn(`[ket] runStabilizerRank: workers option ignored — ${blocked}`)
+    if (numWorkers > 1 && !blocked && wtLocal !== null) {
+      return this.#srParallel(ops, { shots, rng, numWorkers, burnIn, thin, method, exactBudget, wt: wtLocal })
+    }
+
+    const sr = new StabilizerRank(this.qubits,
+      seed === undefined ? { maxTerms: budget } : { maxTerms: budget, seed })
+    for (const op of ops) {
+      switch (op.g) {
+        case 'cx': case 'cz': case 'swap': sr[op.g](op.a, op.b); break
+        case 'phase': sr.phase(op.theta, op.q); break
+        case 'rz': sr.rz(op.theta, op.q); break
+        default: sr[op.g](op.q)
+      }
+    }
+
+    const counts = new Map<bigint, number>()
+    for (const x of sr.sample(shots, rng, { burnIn, thin, method, exactBudget })) {
+      let idx = 0n
+      for (let q = 0; q < this.qubits; q++) if (x[q]) idx |= 1n << BigInt(q)
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+    }
+    return new Distribution(this.qubits, shots, counts, new Map(), sr.sparsified, 'stabilizer-rank')
+  }
+
+  /**
+   * Worker-parallel stabilizer-rank run.
+   *
+   * Each worker rebuilds a contiguous slice of the 2^t branch-index space from
+   * the op list alone, so both term construction and amplitude evaluation are
+   * divided — nothing is duplicated and nothing is shared. Amplitudes are linear
+   * in the terms, so the reduce is a complex sum of per-slice partials; the
+   * modulus is taken only afterwards, since probabilities are *not* linear.
+   */
+  #srParallel(
+    ops: SrOp[],
+    { shots, rng, numWorkers, burnIn, thin, method, exactBudget, wt: wtLocal }: {
+      shots: number; rng: () => number; numWorkers: number; burnIn: number; thin: number
+      method: 'auto' | 'exact' | 'metropolis'; exactBudget: number
+      wt: NonNullable<typeof wt>
+    },
+  ): Distribution {
+    const n = this.qubits
+    const total = 2 ** countSplits(ops)
+    const W = Math.max(1, Math.min(numWorkers, total))
+    const workerUrl = new URL('./stabilizer-rank.worker.js', import.meta.url)
+    const ws = acquirePool(W, workerUrl, wtLocal.Worker)
+    // Pooled workers outlive the call by design. unref() keeps them reusable
+    // without holding the host process open — safe because every handshake here
+    // blocks on Atomics.wait rather than the event loop.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const w of ws) (w as any).unref()
+    const channels = Array.from({ length: W }, () => new MessageChannel())
+    const flags = Array.from({ length: W }, () => new Int32Array(new SharedArrayBuffer(4)))
+
+    const collect = (i: number): { re: Float64Array; im: Float64Array; built?: number } => {
+      if (Atomics.wait(flags[i]!, 0, 0, 300_000) === 'timed-out')
+        throw new Error(`[ket] runStabilizerRank worker ${i} timed out after 5 minutes`)
+      return wtLocal.receiveMessageOnPort(channels[i]!.port1)!.message
+    }
+
+    // Build: worker i owns branch indices [lo, hi). The port is transferred once
+    // here and retained worker-side for every later reply.
+    for (let i = 0; i < W; i++) {
+      Atomics.store(flags[i]!, 0, 0)
+      const lo = Math.floor((i * total) / W), hi = Math.floor(((i + 1) * total) / W)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(ws[i] as any).postMessage(
+        { kind: 'build', n, ops, lo, hi, flag: flags[i]!, port: channels[i]!.port2 },
+        [channels[i]!.port2])
+    }
+    for (let i = 0; i < W; i++) collect(i)
+
+    /** Reduce partial amplitudes for a packed batch of basis states. */
+    const amplitudes = (basis: Uint8Array, count: number): { re: Float64Array; im: Float64Array } => {
+      for (let i = 0; i < W; i++) {
+        Atomics.store(flags[i]!, 0, 0)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(ws[i] as any).postMessage({ kind: 'amp', basis, count, flag: flags[i]! })
+      }
+      const re = new Float64Array(count), im = new Float64Array(count)
+      for (let i = 0; i < W; i++) {
+        const part = collect(i)
+        for (let j = 0; j < count; j++) { re[j]! += part.re[j]!; im[j]! += part.im[j]! }
+      }
+      return { re, im }
+    }
+
+    const counts = new Map<bigint, number>()
+    const record = (bits: ArrayLike<number>): void => {
+      let idx = 0n
+      for (let q = 0; q < n; q++) if (bits[q]) idx |= 1n << BigInt(q)
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+    }
+
+    // Ports retained worker-side keep their event loops — and so the host
+    // process — alive. Release them on every exit path, including throws.
+    const release = (): void => {
+      for (let i = 0; i < W; i++) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try { (ws[i] as any).postMessage({ kind: 'close' }) } catch { /* worker already gone */ }
+        channels[i]!.port1.close()
+      }
+    }
+
+    try {
+      const shotsOut = sampleFromOracle(n, shots, rng, amplitudes, {
+        burnIn, thin, method, exactBudget, terms: total,
+        // Rebuild one term locally to seed the chain. A uniformly random
+        // bitstring is almost never in the support of a sparse state, and
+        // seeding off-support silently degrades the chain to a random walk.
+        start: r => {
+          const idx = Math.floor(r() * total)
+          return buildSlice(n, ops, idx, idx + 1)[0]!.state.sample(r)
+        },
+      })
+      for (const bits of shotsOut) record(bits)
+      return new Distribution(this.qubits, shots, counts, new Map(), false, 'stabilizer-rank')
+    } finally {
+      release()
+    }
+  }
+
+  /** Lower this circuit to the serializable op list the rank backend replays. */
+  #toSrOps(): SrOp[] {
+    const out: SrOp[] = []
+    const reject = (what: string): never => {
+      throw new TypeError(
+        `runStabilizerRank: ${what} is not supported. This backend accepts Clifford and ` +
+        `diagonal gates: h, x, y, z, s, sdg, t, tdg, rz, u1/p, r2/r4/r8, cx, cy, cz, swap, ccx.`)
+    }
+
+    /** Standard 7-T Toffoli (Nielsen & Chuang Fig. 4.9). */
+    const ccx = (a: number, b: number, cq: number): void => {
+      const T = Math.PI / 4
+      out.push({ g: 'h', q: cq })
+      out.push({ g: 'cx', a: b, b: cq }, { g: 'phase', q: cq, theta: -T })
+      out.push({ g: 'cx', a, b: cq }, { g: 'phase', q: cq, theta: T })
+      out.push({ g: 'cx', a: b, b: cq }, { g: 'phase', q: cq, theta: -T })
+      out.push({ g: 'cx', a, b: cq }, { g: 'phase', q: b, theta: T }, { g: 'phase', q: cq, theta: T })
+      out.push({ g: 'h', q: cq })
+      out.push({ g: 'cx', a, b }, { g: 'phase', q: a, theta: T }, { g: 'phase', q: b, theta: -T }, { g: 'cx', a, b })
+    }
+
+    for (const op of flattenOps(this.#ops)) {
+      switch (op.kind) {
+        case 'barrier': break
+        case 'cnot': out.push({ g: 'cx', a: op.control, b: op.target }); break
+        case 'swap': out.push({ g: 'swap', a: op.a, b: op.b }); break
+        case 'toffoli': ccx(op.c1, op.c2, op.target); break
+        case 'single': {
+          const name = op.meta?.name ?? '?'
+          const p = op.meta?.params?.[0] ?? 0
+          switch (name) {
+            case 'id': break
+            case 'h': case 'x': case 'y': case 'z': case 's': out.push({ g: name, q: op.q }); break
+            case 'si': case 'sdg': out.push({ g: 'sdg', q: op.q }); break
+            case 't':   out.push({ g: 'phase', q: op.q, theta: Math.PI / 4 }); break
+            case 'ti': case 'tdg': out.push({ g: 'phase', q: op.q, theta: -Math.PI / 4 }); break
+            case 'r2':  out.push({ g: 'rz', q: op.q, theta: Math.PI / 2 }); break
+            case 'r4':  out.push({ g: 'rz', q: op.q, theta: Math.PI / 4 }); break
+            case 'r8':  out.push({ g: 'rz', q: op.q, theta: Math.PI / 8 }); break
+            case 'rz': case 'vz': out.push({ g: 'rz', q: op.q, theta: p }); break
+            case 'u1': case 'p':  out.push({ g: 'phase', q: op.q, theta: p }); break
+            default: reject(`gate '${name}'`)
+          }
+          break
+        }
+        case 'controlled': {
+          const name = op.meta?.name ?? '?'
+          if (name === 'cx') out.push({ g: 'cx', a: op.control, b: op.target })
+          else if (name === 'cz') out.push({ g: 'cz', a: op.control, b: op.target })
+          else if (name === 'cy') out.push(
+            { g: 'sdg', q: op.target }, { g: 'cx', a: op.control, b: op.target }, { g: 's', q: op.target })
+          else reject(`gate '${name}'`)
+          break
+        }
+        case 'measure': case 'reset': case 'if': reject('mid-circuit measurement'); break
+        default: reject(`gate '${(op as { meta?: GateMeta }).meta?.name ?? op.kind}'`)
+      }
+    }
+    return out
   }
 
   // ── Auto-routing simulation ───────────────────────────────────────────────

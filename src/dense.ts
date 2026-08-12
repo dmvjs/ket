@@ -19,8 +19,14 @@
  * `hybrid.ts` decides which representation a circuit runs on.
  */
 
-import type { Complex } from './complex.js'
+import { AMP_EPSILON, type Complex } from './complex.js'
 import type { Gate2x2, Gate4x4, StateVector } from './statevector.js'
+
+/**
+ * Amplitude-magnitude-squared cutoff, matching `isNegligible` on the sparse side
+ * so a state means the same thing in either representation.
+ */
+const AMP_MIN_NORM2 = AMP_EPSILON * AMP_EPSILON
 
 /**
  * Dense state over `n` qubits.
@@ -151,7 +157,7 @@ export function toSparse(d: DenseState): StateVector {
   const total = 1 << d.n
   for (let i = 0; i < total; i++) {
     const re = data[i << 1]!, im = data[(i << 1) | 1]!
-    if (re * re + im * im >= 1e-14) sv.set(BigInt(i), { re, im })
+    if (re * re + im * im >= AMP_MIN_NORM2) sv.set(BigInt(i), { re, im })
   }
   return sv
 }
@@ -176,7 +182,7 @@ export function denseNnz(d: DenseState): number {
   let count = 0
   for (let i = 0; i < total; i++) {
     const re = data[i << 1]!, im = data[(i << 1) | 1]!
-    if (re * re + im * im >= 1e-14) count++
+    if (re * re + im * im >= AMP_MIN_NORM2) count++
   }
   return count
 }
@@ -307,29 +313,42 @@ export function denseControlled(d: DenseState, control: number, target: number, 
  */
 export function denseTwo(d: DenseState, qa: number, qb: number, gate: Gate4x4): void {
   const { data } = d
-  const total = 1 << d.n
   const ma = 1 << qa, mb = 1 << qb
   const g = flatten4(gate)
-  const re = new Float64Array(4), im = new Float64Array(4)
 
-  for (let i = 0; i < total; i++) {
-    if ((i & ma) !== 0 || (i & mb) !== 0) continue   // iterate contexts only
-    const bases = [i, i | mb, i | ma, i | ma | mb]
+  // Enumerate the 2ⁿ⁻² contexts directly with `spread`, rather than walking all
+  // 2ⁿ indices and rejecting three quarters of them on a branch.
+  const lo = qa < qb ? qa : qb
+  const hi = qa < qb ? qb : qa
+  const lowMask = (1 << lo) - 1
+  const midMask = (1 << (hi - 1 - lo)) - 1
+  const contexts = (1 << d.n) >>> 2
 
-    for (let k = 0; k < 4; k++) {
-      const p = bases[k]! << 1
-      re[k] = data[p]!; im[k] = data[p + 1]!
-    }
-    for (let r = 0; r < 4; r++) {
-      let sr = 0, si = 0
-      for (let c = 0; c < 4; c++) {
-        const gr = g[(r << 3) | (c << 1)]!, gi = g[(r << 3) | (c << 1) | 1]!
-        sr += gr * re[c]! - gi * im[c]!
-        si += gr * im[c]! + gi * re[c]!
-      }
-      const p = bases[r]! << 1
-      data[p] = sr; data[p + 1] = si
-    }
+  const g00r = g[0]!,  g00i = g[1]!,  g01r = g[2]!,  g01i = g[3]!
+  const g02r = g[4]!,  g02i = g[5]!,  g03r = g[6]!,  g03i = g[7]!
+  const g10r = g[8]!,  g10i = g[9]!,  g11r = g[10]!, g11i = g[11]!
+  const g12r = g[12]!, g12i = g[13]!, g13r = g[14]!, g13i = g[15]!
+  const g20r = g[16]!, g20i = g[17]!, g21r = g[18]!, g21i = g[19]!
+  const g22r = g[20]!, g22i = g[21]!, g23r = g[22]!, g23i = g[23]!
+  const g30r = g[24]!, g30i = g[25]!, g31r = g[26]!, g31i = g[27]!
+  const g32r = g[28]!, g32i = g[29]!, g33r = g[30]!, g33i = g[31]!
+
+  for (let c = 0; c < contexts; c++) {
+    const i = (c & lowMask) | (((c >>> lo) & midMask) << (lo + 1)) | ((c >>> (hi - 1)) << (hi + 1))
+    const p0 = i << 1, p1 = (i | mb) << 1, p2 = (i | ma) << 1, p3 = (i | ma | mb) << 1
+    const r0 = data[p0]!, m0 = data[p0 + 1]!
+    const r1 = data[p1]!, m1 = data[p1 + 1]!
+    const r2 = data[p2]!, m2 = data[p2 + 1]!
+    const r3 = data[p3]!, m3 = data[p3 + 1]!
+
+    data[p0]     = g00r * r0 - g00i * m0 + g01r * r1 - g01i * m1 + g02r * r2 - g02i * m2 + g03r * r3 - g03i * m3
+    data[p0 + 1] = g00r * m0 + g00i * r0 + g01r * m1 + g01i * r1 + g02r * m2 + g02i * r2 + g03r * m3 + g03i * r3
+    data[p1]     = g10r * r0 - g10i * m0 + g11r * r1 - g11i * m1 + g12r * r2 - g12i * m2 + g13r * r3 - g13i * m3
+    data[p1 + 1] = g10r * m0 + g10i * r0 + g11r * m1 + g11i * r1 + g12r * m2 + g12i * r2 + g13r * m3 + g13i * r3
+    data[p2]     = g20r * r0 - g20i * m0 + g21r * r1 - g21i * m1 + g22r * r2 - g22i * m2 + g23r * r3 - g23i * m3
+    data[p2 + 1] = g20r * m0 + g20i * r0 + g21r * m1 + g21i * r1 + g22r * m2 + g22i * r2 + g23r * m3 + g23i * r3
+    data[p3]     = g30r * r0 - g30i * m0 + g31r * r1 - g31i * m1 + g32r * r2 - g32i * m2 + g33r * r3 - g33i * m3
+    data[p3 + 1] = g30r * m0 + g30i * r0 + g31r * m1 + g31i * r1 + g32r * m2 + g32i * r2 + g33r * m3 + g33i * r3
   }
 }
 
@@ -369,35 +388,60 @@ export function denseUnitary(d: DenseState, qs: readonly number[], matrix: reado
   const k = qs.length
   const dim = 1 << k
   const { data } = d
-  const total = 1 << d.n
-  const masks = qs.map(q => 1 << q)
-  const allMask = masks.reduce((acc, m) => acc | m, 0)
+
+  // Flatten the matrix once: [re, im] per entry, row-major. Reading it as f64
+  // from a contiguous buffer keeps the inner product off the object heap, where
+  // every `matrix[r][c].re` was a pointer chase.
+  const g = new Float64Array(dim * dim * 2)
+  for (let r = 0; r < dim; r++) {
+    const row = matrix[r]!
+    for (let c = 0; c < dim; c++) {
+      const v = row[c]!
+      g[(r * dim + c) * 2]     = v.re
+      g[(r * dim + c) * 2 + 1] = v.im
+    }
+  }
+
+  // Byte offset of each local basis state relative to its context index. The
+  // gate's first qubit is the high bit of the local index, matching applyUnitary.
+  const offset = new Int32Array(dim)
+  for (let local = 0; local < dim; local++) {
+    let o = 0
+    for (let bit = 0; bit < k; bit++) {
+      if ((local >> (k - 1 - bit)) & 1) o |= 1 << qs[bit]!
+    }
+    offset[local] = o
+  }
+
+  // Positions to re-insert as zero bits when expanding a context counter, low to
+  // high, so `spread` below walks contexts without testing every index in 2ⁿ.
+  const lowMasks = Int32Array.from([...qs].sort((a, b) => a - b), q => (1 << q) - 1)
+  const contexts = (1 << d.n) >>> k
 
   const re = new Float64Array(dim), im = new Float64Array(dim)
-  const bases = new Int32Array(dim)
 
-  for (let i = 0; i < total; i++) {
-    if ((i & allMask) !== 0) continue   // contexts only
+  for (let ctx = 0; ctx < contexts; ctx++) {
+    let i = ctx
+    for (let h = 0; h < k; h++) {
+      const lowMask = lowMasks[h]!
+      i = (i & lowMask) | ((i & ~lowMask) << 1)
+    }
 
     for (let local = 0; local < dim; local++) {
-      let g = i
-      for (let bit = 0; bit < k; bit++) {
-        if ((local >> (k - 1 - bit)) & 1) g |= masks[bit]!
-      }
-      bases[local] = g
-      const p = g << 1
+      const p = (i | offset[local]!) << 1
       re[local] = data[p]!; im[local] = data[p + 1]!
     }
 
+    let gi = 0
     for (let r = 0; r < dim; r++) {
-      const row = matrix[r]!
       let sr = 0, si = 0
       for (let c = 0; c < dim; c++) {
-        const g = row[c]!
-        sr += g.re * re[c]! - g.im * im[c]!
-        si += g.re * im[c]! + g.im * re[c]!
+        const ar = g[gi]!, ai = g[gi + 1]!
+        gi += 2
+        sr += ar * re[c]! - ai * im[c]!
+        si += ar * im[c]! + ai * re[c]!
       }
-      const p = bases[r]! << 1
+      const p = (i | offset[r]!) << 1
       data[p] = sr; data[p + 1] = si
     }
   }
