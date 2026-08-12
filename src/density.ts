@@ -2,8 +2,9 @@
  * Exact density matrix simulation for mixed-state and noise research.
  *
  * Two representations, switched automatically. ρ starts as a sparse
- * `Map<bigint, Complex>` keyed `(row << n) | col`, holding only entries with
- * |ρ[r][c]|² > 1e-14 — the right shape for a near-pure state under light noise.
+ * `Map<bigint, Complex>` keyed `(row << n) | col`, holding only entries above the
+ * `AMP_EPSILON` dust threshold — the right shape for a near-pure state under
+ * light noise.
  * Once it passes 1/32 fill it is promoted to the dense `Float64Array` backend in
  * `density-dense.ts`, which is flat 16·4ⁿ bytes and makes every channel a tight
  * loop. See the `DmState` dispatch section below.

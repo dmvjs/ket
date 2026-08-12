@@ -226,8 +226,9 @@ circuit.simulate({ statevectorLimit: 30 })  // use statevector up to n=30
 | MPS / tensor network | `circuit.runMps({ shots, maxBond? })` | O(n·χ²), adaptive χ | Low-entanglement circuits, 50+ qubits |
 | Exact density matrix | `circuit.dm({ noise? })` | sparse → dense, automatic | Mixed-state and noisy simulation |
 | Clifford stabilizer | `circuit.runClifford({ shots, noise? })` | O(n²) | Clifford-only circuits, QEC threshold curves |
+| Stabilizer rank | `circuit.runStabilizerRank({ shots, targetError? })` | O(2^0.228t · n²/8) | Clifford+T at 100+ qubits |
 
-All four backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
+All five backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
 
 ```typescript
 const d = myCircuit.runMps({ shots: 1024 })
@@ -246,6 +247,66 @@ circuit.run({ initialState: '110' })
 circuit.runMps({ shots: 1000, initialState: '110' })
 circuit.statevector({ initialState: '110' })
 ```
+
+### Clifford+T: stabilizer rank
+
+`runStabilizerRank()` carries the state as a sum of stabilizer states,
+|ψ⟩ = Σ c_α|φ_α⟩, each in CH-form. Clifford gates act on every term and leave the
+count alone; each non-Clifford diagonal gate splits every term in two. Cost is
+therefore exponential in *non-Clifford count* and only polynomial in width — the
+inverse of the statevector trade, which is why it reaches circuits `run()` cannot
+hold.
+
+Accepts `h, x, y, z, s, sdg, t, tdg, rz, u1/p, r2/r4/r8, cx, cy, cz, swap, ccx`.
+A Toffoli expands to its standard 7-T decomposition. Mid-circuit measurement is
+not supported.
+
+| Option | Default | Effect |
+|---|---|---|
+| `targetError` | unset | Target ℓ₂ error δ. Sets the term budget to ⌈ξ/δ²⌉ from the circuit's stabilizer extent. |
+| `maxTerms` | `Infinity` | Hard cap on terms. Overrides `targetError`. |
+| `workers` | 0 | Split the 2^t terms across worker threads. Requires the built bundle and an exact run. |
+| `method` | `'auto'` | `'exact'` enumerates all 2ⁿ amplitudes; `'metropolis'` runs the chain of §4.2. `'auto'` picks exact when it fits `exactBudget`. |
+
+Exact simulation costs 2^t terms and runs out near t = 18. `targetError` costs
+2^0.228t/δ² instead — 30,495 terms for 50 T gates at δ=0.3, fewer than an exact
+t=15 run. Measured at n=100, δ=0.3: t=40 in 0.6s, t=50 in 4.7s, t=60 in 57s.
+
+The ceiling is a property of the machine. Terms cost 3n²/8 bytes, so it moves
+with width, tolerance and RAM:
+
+```typescript
+import { maxTGates, termBudget, extent } from '@kirkelliott/ket'
+
+maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 76
+maxTGates({ qubits: 400, targetError: 0.3, memoryBytes: 64e9 })  // 61
+```
+
+**Approximation is always reported.** Sparsification is unbiased but randomised,
+and a streaming run applies it repeatedly, so the single-application error bound
+does not certify the total. `Distribution.truncated` marks any approximate run,
+`StabilizerRank.sparsifications` counts how often it fired, and `estimateNorm()`
+measures the damage — an exact decomposition of a unitary circuit has ‖ψ‖² = 1,
+so drift from 1 is what sparsification actually cost:
+
+```typescript
+const sr = new StabilizerRank(4, { maxTerms: 64 })
+sr.h(0).t(0).cx(0, 1).t(1)
+sr.estimateNorm({ epsilon: 0.1, delta: 0.05 })   // ≈ 1 if the run stayed faithful
+```
+
+`estimateNorm` uses the norm-estimation routine of §4.3 — inner products against
+random equatorial stabilizer states, evaluated as quadratic-form exponential sums
+in O(n³) rather than O(2ⁿ).
+
+Metropolis sampling is a heuristic and can be *wrong*, not merely noisy: its
+single-bit-flip proposals cannot cross a zero-amplitude basis state, so a
+distribution whose support is not single-flip connected is sampled from one
+component only. `'auto'` therefore prefers exact enumeration whenever 2ⁿ·terms
+fits the budget.
+
+Reference: Bravyi, Browne, Calpin, Campbell, Gosset, Howard, *Simulation of
+quantum circuits by low-rank stabilizer decompositions*, Quantum 3, 181 (2019).
 
 ### Tuning sparse → dense promotion
 

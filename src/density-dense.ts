@@ -14,8 +14,16 @@
  * both the row and column index.
  */
 
-import type { Complex } from './complex.js'
+import { AMP_EPSILON, type Complex } from './complex.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
+
+/**
+ * Magnitude-squared cutoff for a ρ entry, matching `isNegligible` on the sparse
+ * side. Entries of ρ are bounded by 1 just as amplitudes are — |ρ_rc| ≤
+ * √(ρ_rr·ρ_cc) — so the same dust threshold applies, and off-diagonal coherences
+ * well above it are physics, not rounding.
+ */
+const DM_MIN_NORM2 = AMP_EPSILON * AMP_EPSILON
 
 /** Dense ρ over n qubits. `data.length === 2·dim²` with `dim = 2ⁿ`. */
 export interface DenseDM {
@@ -69,7 +77,7 @@ export function dmToSparse(d: DenseDM): Map<bigint, Complex> {
     for (let c = 0; c < dim; c++) {
       const p = at(dim, r, c)
       const re = data[p]!, im = data[p + 1]!
-      if (re * re + im * im >= 1e-14) out.set((BigInt(r) << shift) | BigInt(c), { re, im })
+      if (re * re + im * im >= DM_MIN_NORM2) out.set((BigInt(r) << shift) | BigInt(c), { re, im })
     }
   }
   return out
@@ -81,7 +89,7 @@ export function denseDmNnz(d: DenseDM): number {
   let count = 0
   for (let i = 0; i < data.length; i += 2) {
     const re = data[i]!, im = data[i + 1]!
-    if (re * re + im * im >= 1e-14) count++
+    if (re * re + im * im >= DM_MIN_NORM2) count++
   }
   return count
 }

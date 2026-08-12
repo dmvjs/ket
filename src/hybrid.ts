@@ -19,7 +19,7 @@
  * so the caller's dispatch table does not change shape.
  */
 
-import type { Complex } from './complex.js'
+import { AMP_EPSILON, type Complex } from './complex.js'
 import {
   denseClone, denseCNOT, denseCollapse, denseControlled, denseCsrSwap, denseCSwap,
   denseDecay, denseNnz, denseNorm2, denseProbabilities, denseProbOne, denseSample,
@@ -106,7 +106,7 @@ export function simForEach(s: SimState, fn: (idx: number, re: number, im: number
   const total = 1 << s.d.n
   for (let i = 0; i < total; i++) {
     const re = data[i << 1]!, im = data[(i << 1) | 1]!
-    if (re * re + im * im >= 1e-14) fn(i, re, im)
+    if (re * re + im * im >= AMP_EPSILON * AMP_EPSILON) fn(i, re, im)
   }
 }
 

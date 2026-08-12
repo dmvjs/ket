@@ -164,11 +164,22 @@ describe('dense backend — matches the sparse backend gate for gate', () => {
     expectSame(toSparse(fromSparse(sv, 4)), sv)
   })
 
-  it('toSparse drops negligible amplitudes, as the sparse backend does', () => {
-    const sv: StateVector = new Map([[0n, { re: 1, im: 0 }], [3n, { re: 1e-9, im: 0 }]])
-    // 1e-9 squared is 1e-18, below the 1e-14 support threshold.
-    expect(toSparse(fromSparse(sv, 3)).has(3n)).toBe(false)
-    expect(denseNnz(fromSparse(sv, 3))).toBe(1)
+  it('toSparse drops rounding dust, as the sparse backend does', () => {
+    // Below AMP_EPSILON (1e-15) an amplitude is indistinguishable from an exact
+    // cancellation, so both representations discard it.
+    const dust: StateVector = new Map([[0n, { re: 1, im: 0 }], [3n, { re: 1e-17, im: 0 }]])
+    expect(toSparse(fromSparse(dust, 3)).has(3n)).toBe(false)
+    expect(denseNnz(fromSparse(dust, 3))).toBe(1)
+  })
+
+  it('toSparse keeps small but physical amplitudes', () => {
+    // 1e-9 is dust under the old 1e-7 cutoff and real physics under the current
+    // one. Discarding it perturbs the state by far more than its own weight once
+    // later entangling gates spread the loss, so it has to survive the round trip.
+    const small: StateVector = new Map([[0n, { re: 1, im: 0 }], [3n, { re: 1e-9, im: 0 }]])
+    expect(toSparse(fromSparse(small, 3)).has(3n)).toBe(true)
+    expect(toSparse(fromSparse(small, 3)).get(3n)?.re).toBeCloseTo(1e-9, 20)
+    expect(denseNnz(fromSparse(small, 3))).toBe(2)
   })
 })
 
