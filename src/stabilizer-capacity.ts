@@ -19,16 +19,19 @@ const ZETA = 1 / Math.cos(Math.PI / 8) ** 2
  * Peak resident memory as a multiple of the decomposition's steady-state size.
  *
  * A split allocates the 2m-term arrays while the m-term originals are still live,
- * and GC lags behind. Fitted to `process.resourceUsage().maxRSS` at n=100, δ=0.3
- * with packed tableaus.
+ * and GC lags behind. Fitted to `process.resourceUsage().maxRSS` at n=100, δ=0.3,
+ * one measurement per process:
  *
- * Caveat worth knowing before trusting the high end: the fit is anchored on
- * points at t ≤ 60. Runs above that were originally measured with
- * `process.memoryUsage().rss` *after* the call returned, which reports post-GC
- * residual rather than peak and understates large runs. The two sources agree
- * closely at t ≤ 60; above it this constant is under-validated.
+ *   t=50  0.20 GB resident  1.14 GB peak  ×5.71
+ *   t=55  0.44 GB           1.99 GB       ×4.51
+ *   t=60  0.97 GB           3.98 GB       ×4.09
+ *   t=65  2.15 GB           8.21 GB       ×3.82
+ *
+ * The ratio falls as the decomposition outgrows Node's baseline footprint and
+ * converges near 4, so 4 is the right asymptote and small runs are simply
+ * dominated by fixed overhead.
  */
-const PEAK_FACTOR = 5
+const PEAK_FACTOR = 4
 
 /**
  * Resident bytes per stabilizer term at `n` qubits.
@@ -61,17 +64,22 @@ export interface MaxTGatesOptions {
  * The ceiling is a property of the machine, not the algorithm: it moves with
  * qubit count, with the error tolerance, and with available RAM.
  *
- * Memory is only half the story, and increasingly the less important half.
- * Runtime grows faster than the term count — a measured exponent of 1.74 between
- * t=60 and t=65, rising to 2.46 between t=65 and t=70 as the working set outruns
- * cache — so on a large machine the wall you hit first is time, and this function
- * will happily report a T-count that would take hours. Extrapolate runtime from
- * the two highest points you have actually measured; fits from lower pairs have
- * consistently proven optimistic.
+ * **This is a memory bound, and on a large machine memory is not what stops you.**
+ * Runtime grows faster than the term count, so the usable ceiling is well below
+ * the number returned here. Measured at n=100, δ=0.3 on a 64 GB machine, one run
+ * per process: t=60 took 67 s, t=65 took 228 s, t=70 took 27 min, and t=76 was
+ * abandoned unfinished after 6 h — while this function reports 77 for that
+ * machine, and memory never exceeded 8.2 GB of the 64 available.
+ *
+ * Treat the result as "you will not run out of RAM below this", not "this is
+ * reachable". For what is reachable, measure: `benchmark/stabilizer-rank.ts`
+ * takes one T-count per invocation. Do not extrapolate runtime from low points —
+ * the growth exponent itself rises with t, and every such fit made during
+ * development proved optimistic.
  *
  * @example
- * maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 76
- * maxTGates({ qubits: 400, targetError: 0.3, memoryBytes: 64e9 })  // 61
+ * maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 77 — but ~70 is practical
+ * maxTGates({ qubits: 400, targetError: 0.3, memoryBytes: 64e9 })  // 63
  */
 export function maxTGates({ qubits, targetError, memoryBytes = 4e9 }: MaxTGatesOptions): number {
   if (!(targetError > 0)) throw new RangeError(`targetError must be positive, got ${targetError}`)

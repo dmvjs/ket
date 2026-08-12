@@ -79,9 +79,9 @@ in the *non-Clifford* count and is only polynomial in width, so it goes where a
 statevector cannot:
 
 ```typescript
-const c = new Circuit(100).h(0)
+let c = new Circuit(100).h(0)
 for (let q = 0; q < 99; q++) c = c.cnot(q, q + 1)
-for (let i = 0; i < 50; i++) c = c.t(i * 7 % 100)
+for (let i = 0; i < 50; i++) c = c.t((i * 7) % 100)
 
 c.runStabilizerRank({ shots: 100, targetError: 0.3 })
 ```
@@ -93,16 +93,23 @@ instead derives a term budget of ⌈ξ/δ²⌉ from the circuit's stabilizer ext
 
 | T gates | exact terms | budget at δ=0.3 | time, n=100 |
 |---|---|---|---|
-| 40 | 1.1×10¹² | 6,260 | 0.6s |
-| 50 | 1.1×10¹⁵ | 30,495 | 4.7s |
-| 60 | 1.2×10¹⁸ | 148,565 | 57s |
+| 50 | 1.1×10¹⁵ | 30,495 | 5.6s |
+| 60 | 1.2×10¹⁸ | 148,565 | 67s |
+| 65 | 3.7×10¹⁹ | 327,916 | 228s |
+| 70 | 1.2×10²¹ | 723,785 | 27min |
 
 The ceiling is a property of your machine, not the algorithm — terms cost
 3n²/8 bytes each, so it moves with width, tolerance and RAM:
 
 ```typescript
-maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 76
+maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 77
 ```
+
+That is a *memory* bound, and memory is not what stops you on a large machine.
+Runtime grows faster than the term count, so on the 64 GB box those timings come
+from, t=70 is 27 minutes and t=76 was still running after 6 hours — while peak
+memory never passed 8.2 GB. Read `maxTGates` as "you will not run out of RAM
+below this", and measure the rest with `benchmark/stabilizer-rank.ts`.
 
 Sparsification is unbiased but randomised, and a streaming run applies it
 repeatedly, so the single-shot error bound does not certify the total.

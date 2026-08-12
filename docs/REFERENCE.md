@@ -270,7 +270,17 @@ not supported.
 
 Exact simulation costs 2^t terms and runs out near t = 18. `targetError` costs
 2^0.228t/δ² instead — 30,495 terms for 50 T gates at δ=0.3, fewer than an exact
-t=15 run. Measured at n=100, δ=0.3: t=40 in 0.6s, t=50 in 4.7s, t=60 in 57s.
+t=15 run.
+
+Measured at n=100, δ=0.3 on a 64 GB machine, one run per process:
+
+| t | terms | time | peak RSS |
+|---|---|---|---|
+| 50 | 30,495 | 5.6s | 1.14 GB |
+| 55 | 67,309 | 17.8s | 1.99 GB |
+| 60 | 148,565 | 67s | 3.98 GB |
+| 65 | 327,916 | 228s | 8.21 GB |
+| 70 | 723,785 | 27min | — |
 
 The ceiling is a property of the machine. Terms cost 3n²/8 bytes, so it moves
 with width, tolerance and RAM:
@@ -278,9 +288,16 @@ with width, tolerance and RAM:
 ```typescript
 import { maxTGates, termBudget, extent } from '@kirkelliott/ket'
 
-maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 76
-maxTGates({ qubits: 400, targetError: 0.3, memoryBytes: 64e9 })  // 61
+maxTGates({ qubits: 100, targetError: 0.3, memoryBytes: 64e9 })  // 77
+maxTGates({ qubits: 400, targetError: 0.3, memoryBytes: 64e9 })  // 63
 ```
+
+**`maxTGates` bounds memory, not time, and time is what binds first.** On the
+machine above it reports 77, while t=76 was abandoned unfinished after six hours
+and peak memory never exceeded 8.2 GB of the 64 available. Runtime grows faster
+than the term count and the growth exponent itself rises with t, so do not
+extrapolate from low points — measure with `benchmark/stabilizer-rank.ts`, which
+takes one T-count per invocation for exactly this reason.
 
 **Approximation is always reported.** Sparsification is unbiased but randomised,
 and a streaming run applies it repeatedly, so the single-application error bound

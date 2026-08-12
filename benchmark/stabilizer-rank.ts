@@ -1,28 +1,33 @@
 /**
  * Stabilizer-rank scaling — how far Clifford+T simulation reaches on this machine.
  *
- * Run with: node --max-old-space-size=32768 benchmark/stabilizer-rank.ts
- * Optionally: T_MIN=40 T_MAX=76 QUBITS=100 DELTA=0.3 node ... benchmark/stabilizer-rank.ts
+ * Measures exactly one T-count per invocation. Loop in the shell:
  *
- * Not wired into .github/workflows/benchmark.yml — the high-T points take minutes
- * to hours and would stall CI. This is a machine-characterisation tool: it prints
- * measured time and peak RSS against the `maxTGates` model so the two can be
- * compared directly.
+ *   for t in 50 55 60 65 70; do
+ *     T=$t node --max-old-space-size=32768 benchmark/stabilizer-rank.ts
+ *   done
  *
- * Memory is read from `process.resourceUsage().maxRSS`, the OS high-water mark.
- * `process.memoryUsage().rss` sampled after the call returns is post-GC residual,
- * not peak, and understates a run that has already released its decomposition —
- * and an interval sampler cannot help because `runStabilizerRank` is synchronous
- * and never yields the event loop. maxRSS is process-lifetime and therefore
- * monotonic across the sweep, which is fine for an increasing T schedule.
+ * One point per process is not fussiness — measuring a sweep inside a single
+ * process corrupts both numbers it reports:
+ *
+ *   - `process.resourceUsage().maxRSS` is a process-lifetime high-water mark, so
+ *     later points inherit earlier peaks.
+ *   - Timings inherit heap growth and GC pressure from earlier points. Measured:
+ *     t=65 took 228 s in a fresh process and 532 s as the fourth point of a
+ *     sweep — a 2.3× inflation that is pure measurement artefact.
+ *
+ * maxRSS is used rather than `process.memoryUsage().rss`, which reports post-GC
+ * residual after the call returns and understates large runs. An interval sampler
+ * cannot substitute: `runStabilizerRank` is synchronous and never yields.
+ *
+ * Not wired into .github/workflows/benchmark.yml — high-T points take minutes to
+ * hours and would stall CI.
  */
 import { Circuit, termBudget, maxTGates, bytesPerTerm } from '@kirkelliott/ket'
 
+const T = Number(process.env.T ?? 50)
 const QUBITS = Number(process.env.QUBITS ?? 100)
 const DELTA = Number(process.env.DELTA ?? 0.3)
-const T_MIN = Number(process.env.T_MIN ?? 40)
-const T_MAX = Number(process.env.T_MAX ?? 60)
-const STEP = Number(process.env.STEP ?? 5)
 
 /** GHZ chain plus `t` T gates — entangled across the full width, cheap to build. */
 function circuit(n: number, t: number): Circuit {
@@ -32,31 +37,26 @@ function circuit(n: number, t: number): Circuit {
   return c
 }
 
-const phaseOps = (t: number, n: number) =>
-  Array.from({ length: t }, (_, i) => ({ g: 'phase' as const, q: i % n, theta: Math.PI / 4 }))
+const phaseOps = Array.from({ length: T }, (_, i) => ({
+  g: 'phase' as const, q: i % QUBITS, theta: Math.PI / 4,
+}))
+const budget = termBudget(phaseOps, DELTA)
+const resident = (budget * bytesPerTerm(QUBITS)) / 1e9
 
-console.log(`n=${QUBITS}  targetError=${DELTA}  ${(bytesPerTerm(QUBITS) / 1024).toFixed(2)} KB/term`)
-for (const gb of [16, 64]) {
-  console.log(`  model ceiling at ${gb} GB: t=${maxTGates({ qubits: QUBITS, targetError: DELTA, memoryBytes: gb * 1e9 })}`)
-}
-console.log()
+const started = performance.now()
+const d = circuit(QUBITS, T).runStabilizerRank({
+  shots: 5, seed: 1, targetError: DELTA, burnIn: 4, thin: 1,
+})
+const secs = (performance.now() - started) / 1000
+const maxRss = (process.resourceUsage().maxRSS * 1024) / 1e9
 
-for (let t = T_MIN; t <= T_MAX; t += STEP) {
-  const budget = termBudget(phaseOps(t, QUBITS), DELTA)
-  const started = performance.now()
-  try {
-    const d = circuit(QUBITS, t).runStabilizerRank({
-      shots: 5, seed: 1, targetError: DELTA, burnIn: 4, thin: 1,
-    })
-    const secs = (performance.now() - started) / 1000
-    const maxRss = (process.resourceUsage().maxRSS * 1024) / 1e9
-    console.log(
-      `t=${String(t).padStart(2)}  budget=${budget.toLocaleString().padStart(10)} terms  ` +
-      `${secs.toFixed(1).padStart(7)}s  maxRSS=${maxRss.toFixed(2)}GB  ` +
-      `approx=${d.truncated}  outcomes=${Object.keys(d.probs).length}`)
-  } catch (err) {
-    const secs = (performance.now() - started) / 1000
-    console.log(`t=${t}  budget=${budget.toLocaleString()}  FAILED after ${secs.toFixed(1)}s: ${(err as Error).message}`)
-    break
-  }
-}
+console.log(
+  `n=${QUBITS} δ=${DELTA} t=${T}  ` +
+  `budget=${budget.toLocaleString()} terms  ` +
+  `${secs.toFixed(1)}s  maxRSS=${maxRss.toFixed(2)}GB  ` +
+  `resident=${resident.toFixed(2)}GB  peakFactor=${(maxRss / resident).toFixed(2)}  ` +
+  `approx=${d.truncated}`)
+console.log(
+  `  model: memory ceiling at 64 GB is t=` +
+  `${maxTGates({ qubits: QUBITS, targetError: DELTA, memoryBytes: 64e9 })} ` +
+  `(memory only — runtime binds first; see maxTGates docs)`)
