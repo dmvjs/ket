@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { Circuit, Distribution, IONQ_DEVICES } from './circuit.js'
+import { Circuit, Distribution, IONQ_DEVICES, DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
 import { qft, grover, groverAncilla, phaseEstimation, vqe, gradient, minimize, trotter, qaoa, maxCutHamiltonian, realAmplitudes, efficientSU2, PauliOp } from './algorithms.js'
+import { shorCircuit } from './beauregard.js'
 import type { PauliTerm } from './algorithms.js'
 import { CliffordSim } from './clifford.js'
 import { add, mul, scale, conj, norm2, isNegligible, c } from './complex.js'
@@ -1531,7 +1532,7 @@ describe('vz — VirtualZ gate', () => {
   it('toIonQ emits rz gate for vz (IonQ has no native vz)', () => {
     const ionq = new Circuit(1).vz(Math.PI / 4, 0).toIonQ()
     expect(ionq.circuit[0]?.gate).toBe('rz')
-    expect(ionq.circuit[0]?.rotation).toBeCloseTo(0.25)  // π/4 / π = 0.25
+    expect(ionq.circuit[0]?.rotation).toBeCloseTo(Math.PI / 4)  // radians, per IonQ's QIS spec
   })
 })
 
@@ -2046,7 +2047,13 @@ describe('measure + reset integration', () => {
 //
 // Round-trip invariant: Circuit.fromIonQ(c.toIonQ()) produces a circuit whose
 // statevector is identical to c's.  Also covers the IonQ angle convention
-// (rotation in π-radians, phase/phases in turns) and error cases.
+// (QIS `rotation` in radians, native gpi/gpi2/ms `phase`/`phases` in turns)
+// and error cases.
+//
+// Round-trip alone is not sufficient: it passed for a long time while both
+// directions shared the same wrong scale factor, and only a live submission
+// exposed it. The literal wire-value assertions below are what actually pin
+// the convention.
 
 describe('toIonQ() — serialization', () => {
   it('empty circuit serializes to empty gate list', () => {
@@ -2071,14 +2078,18 @@ describe('toIonQ() — serialization', () => {
     expect(j.circuit).toEqual([{ gate: 'swap', targets: [0, 1] }])
   })
 
-  it('rx: rotation stored as θ/π (half-turns)', () => {
+  // IonQ's QIS gateset takes `rotation` in radians — their own example gives
+  // Rx(π/2) as `rotation: 1.5708`. Only the native gates (gpi/gpi2/ms) use turns.
+  // These assert the literal wire value, because a round-trip test cannot: a
+  // matching error in fromIonQ would cancel it and hide the bug.
+  it('rx: rotation stored in radians', () => {
     const j = new Circuit(1).rx(Math.PI / 2, 0).toIonQ()
-    expect(j.circuit[0]!.rotation).toBeCloseTo(0.5, 10)
+    expect(j.circuit[0]!.rotation).toBeCloseTo(1.5708, 4)
   })
 
-  it('rz: rotation stored as θ/π', () => {
+  it('rz: rotation stored in radians', () => {
     const j = new Circuit(1).rz(Math.PI / 4, 0).toIonQ()
-    expect(j.circuit[0]!.rotation).toBeCloseTo(0.25, 10)
+    expect(j.circuit[0]!.rotation).toBeCloseTo(Math.PI / 4, 10)
   })
 
   it('r2/r4/r8 serialize as named gates with no rotation field', () => {
@@ -2105,15 +2116,17 @@ describe('toIonQ() — serialization', () => {
     expect(j.circuit[0]!.phases![1]).toBeCloseTo(0.5, 10)
   })
 
-  it('xx/yy/zz: rotation stored as θ/π', () => {
+  it('xx/yy/zz: rotation stored in radians', () => {
     const j = new Circuit(2).xx(Math.PI / 2, 0, 1).yy(Math.PI / 4, 0, 1).zz(Math.PI, 0, 1).toIonQ()
-    expect(j.circuit[0]!.rotation).toBeCloseTo(0.5,  10)
-    expect(j.circuit[1]!.rotation).toBeCloseTo(0.25, 10)
-    expect(j.circuit[2]!.rotation).toBeCloseTo(1.0,  10)
+    expect(j.circuit[0]!.rotation).toBeCloseTo(Math.PI / 2, 10)
+    expect(j.circuit[1]!.rotation).toBeCloseTo(Math.PI / 4, 10)
+    expect(j.circuit[2]!.rotation).toBeCloseTo(Math.PI,     10)
   })
 
-  it('throws for an unsupported gate (e.g. cy — controlled-Y)', () => {
-    expect(() => new Circuit(2).cy(0, 1).toIonQ()).toThrow(TypeError)
+  // cy/crz/ccx are now emitted natively as base gate + `controls`. cu1 is not:
+  // `u1` is absent from IonQ's legal set, so it must still be expanded first.
+  it('throws for a controlled gate outside IonQ\'s legal set (cu1)', () => {
+    expect(() => new Circuit(2).cu1(Math.PI / 4, 0, 1).toIonQ()).toThrow(TypeError)
   })
 
   it('throws for u1 (OpenQASM gate, no IonQ representation)', () => {
@@ -2140,11 +2153,11 @@ describe('fromIonQ() — parsing', () => {
     expect(near(r.probs['00'] ?? 0, 0.5)).toBe(true)
   })
 
-  it('rotation angle round-trip: rx(π/3) through JSON', () => {
+  it('rotation angle parsed as radians: rx(π/3) through JSON', () => {
     const json: IonQCircuit = {
       format: 'ionq.circuit.v0',
       qubits: 1,
-      circuit: [{ gate: 'rx', rotation: 1 / 3, target: 0 }],
+      circuit: [{ gate: 'rx', rotation: Math.PI / 3, target: 0 }],
     }
     const c = Circuit.fromIonQ(json)
     // Rx(π/3)|0⟩: p(|0⟩) = cos²(π/6) ≈ 0.75
@@ -5816,9 +5829,44 @@ describe('IONQ_DEVICES', () => {
     expect(Object.keys(IONQ_DEVICES)).toEqual(expect.arrayContaining(['aria-1', 'forte-1', 'harmony']))
   })
 
-  it('aria-1 has correct qubit count and noise', () => {
+  it('aria-1 matches IonQ published noise-model parameters', () => {
+    // r_1q / r_2q from IonQ's noise-model documentation. A previous version of
+    // this table carried p2 = 0.005, which is 2.7x optimistic against the
+    // published 0.0133 — noisy IonQ simulations were correspondingly rosy.
     expect(IONQ_DEVICES['aria-1']!.qubits).toBe(25)
-    expect(IONQ_DEVICES['aria-1']!.noise.p2).toBeCloseTo(0.005)
+    expect(IONQ_DEVICES['aria-1']!.noise.p1).toBeCloseTo(0.0005, 6)
+    expect(IONQ_DEVICES['aria-1']!.noise.p2).toBeCloseTo(0.0133, 6)
+  })
+
+  it('records fleet status so retired machines are not silently recommended', () => {
+    // Verified against the public GET /v0.3/backends endpoint.
+    expect(IONQ_DEVICES['aria-1']!.status).toBe('retired')
+    expect(IONQ_DEVICES['harmony']!.status).toBe('retired')
+    expect(IONQ_DEVICES['forte-1']!.status).toBe('available')
+    expect(IONQ_DEVICES['forte-enterprise-1']!.status).toBe('available')
+  })
+
+  it('every device declares vendor, source and noise provenance', () => {
+    // Provenance is a typed field rather than a comment because it is
+    // load-bearing: ket previously shipped IonQ rates 2.5x optimistic against
+    // IonQ's own published parameters, and nothing made that checkable.
+    for (const [name, d] of Object.entries(DEVICES)) {
+      expect(d.source, `${name} must cite a source`).toBeTruthy()
+      expect(d.vendor, `${name} must name a vendor`).toBeTruthy()
+      expect(['vendor-published', 'estimated'], `${name} must declare confidence`)
+        .toContain(d.confidence)
+    }
+  })
+
+  it('marks as vendor-published only what a vendor actually published', () => {
+    // IonQ publishes r_1q/r_2q; Quantinuum publishes Helios gate fidelities.
+    // IBM publishes per-device calibration only behind an account, so no IBM
+    // entry may claim vendor attestation.
+    expect(DEVICES['forte-1']!.confidence).toBe('vendor-published')
+    expect(DEVICES['helios']!.confidence).toBe('vendor-published')
+    for (const [name, d] of Object.entries(DEVICES)) {
+      if (d.vendor === 'IBM') expect(d.confidence, `${name}`).toBe('estimated')
+    }
   })
 
   it('forte-1 includes zz in native gates', () => {
@@ -7026,11 +7074,154 @@ describe('classical control — if op edge cases', () => {
 // guard against gates that predate the unitary feature being silently dropped.
 
 describe('toIonQ() — unsupported gate errors', () => {
-  it('throws for toffoli (ccx)',  () => expect(() => new Circuit(3).ccx(0, 1, 2).toIonQ()).toThrow())
+  it('emits toffoli as controlled x', () => {
+    expect(new Circuit(3).ccx(0, 1, 2).toIonQ().circuit[0])
+      .toEqual({ gate: 'x', controls: [0, 1], target: 2 })
+  })
   it('throws for cswap',          () => expect(() => new Circuit(3).cswap(0, 1, 2).toIonQ()).toThrow())
   it('throws for csrswap',        () => expect(() => new Circuit(3).csrswap(0, 1, 2).toIonQ()).toThrow())
   it('throws for measure',        () => expect(() => new Circuit(1).creg('c',1).measure(0,'c',0).toIonQ()).toThrow())
   it('throws for if op',          () => expect(() => new Circuit(1).creg('c',1).if('c', 0, q => q.x(0)).toIonQ()).toThrow())
+})
+
+/**
+ * Fidelity |<A|B>| keyed by basis label — 1.0 iff the states agree up to global
+ * phase.
+ *
+ * Keyed deliberately: `stateAsArray()` returns amplitudes in sparse-map
+ * insertion order, so two circuits producing the same state can return them in
+ * different orders. An element-wise comparison of those arrays reports a
+ * mismatch for circuits that are in fact identical.
+ */
+function stateFidelity(a: Circuit, b: Circuit): number {
+  const keys = new Set([...Object.keys(a.exactProbs()), ...Object.keys(b.exactProbs())])
+  let re = 0, im = 0, na = 0, nb = 0
+  for (const k of keys) {
+    const x = a.amplitude(k), y = b.amplitude(k)
+    re += x.re * y.re + x.im * y.im
+    im += x.re * y.im - x.im * y.re
+    na += x.re ** 2 + x.im ** 2
+    nb += y.re ** 2 + y.im ** 2
+  }
+  return Math.hypot(re, im) / Math.sqrt(na * nb)
+}
+
+describe('toIonQ() — native controlled gates', () => {
+  it('emits a controlled rotation as base gate plus controls', () => {
+    expect(new Circuit(2).crz(0.5, 0, 1).toIonQ().circuit[0])
+      .toEqual({ gate: 'rz', controls: [0], target: 1, rotation: 0.5 })
+  })
+
+  it('normalises a daggered base gate through the alias table', () => {
+    expect(new Circuit(2).ctdg(0, 1).toIonQ().circuit[0])
+      .toEqual({ gate: 'ti', controls: [0], target: 1 })
+  })
+
+  it('round-trips controlled gates through fromIonQ', () => {
+    const c = new Circuit(3).h(0).h(1).ccx(0, 1, 2).crz(Math.PI / 3, 0, 2).cy(1, 2)
+    expect(stateFidelity(c, Circuit.fromIonQ(c.toIonQ()))).toBeCloseTo(1, 12)
+  })
+
+  it('rejects a controlled gate with no ket equivalent on import', () => {
+    expect(() => Circuit.fromIonQ({
+      format: 'ionq.circuit.v0', qubits: 4,
+      circuit: [{ gate: 'x', controls: [0, 1, 2], target: 3 }],
+    })).toThrow(TypeError)
+  })
+})
+
+describe('toIonQBasis() — gate expansion', () => {
+  /**
+   * Compare two operators up to a single global phase.
+   *
+   * Every rule here is exact only up to global phase (u1 -> rz contributes
+   * e^(-i0/2)), so a phase-blind comparison is the correct contract. State
+   * comparison is not: it is easy to write one that normalises incorrectly and
+   * reports mismatches for circuits that are in fact identical.
+   */
+  const opError = (a: Circuit, b: Circuit): number => {
+    const A = a.circuitMatrix(), B = b.circuitMatrix()
+    let i0 = 0, j0 = 0
+    outer: for (let i = 0; i < A.length; i++)
+      for (let j = 0; j < A.length; j++)
+        if (Math.hypot(A[i]![j]!.re, A[i]![j]!.im) > 1e-9) { i0 = i; j0 = j; break outer }
+    const p = A[i0]![j0]!, q = B[i0]![j0]!
+    const d = q.re * q.re + q.im * q.im
+    const pr = (p.re * q.re + p.im * q.im) / d, pi = (p.im * q.re - p.re * q.im) / d
+    let worst = 0
+    for (let i = 0; i < A.length; i++)
+      for (let j = 0; j < A.length; j++) {
+        const x = B[i]![j]!
+        worst = Math.max(worst, Math.hypot(
+          A[i]![j]!.re - (x.re * pr - x.im * pi), A[i]![j]!.im - (x.re * pi + x.im * pr)))
+      }
+    return worst
+  }
+
+  const ANGLES = [Math.PI, Math.PI / 2, Math.PI / 4, Math.PI / 256, -Math.PI / 3]
+
+  for (const th of ANGLES) {
+    it(`cu1(${th.toFixed(3)}) expands exactly`, () => {
+      const c = new Circuit(2).cu1(th, 0, 1)
+      expect(opError(c, c.toIonQBasis())).toBeLessThan(1e-9)
+    })
+    it(`u1(${th.toFixed(3)}) expands exactly`, () => {
+      const c = new Circuit(1).u1(th, 0)
+      expect(opError(c, c.toIonQBasis())).toBeLessThan(1e-9)
+    })
+  }
+
+  it('ccx expands exactly', () => {
+    const c = new Circuit(3).ccx(0, 1, 2)
+    expect(opError(c, c.toIonQBasis())).toBeLessThan(1e-9)
+  })
+
+  it('cswap expands exactly', () => {
+    const c = new Circuit(3).cswap(0, 1, 2)
+    expect(opError(c, c.toIonQBasis())).toBeLessThan(1e-9)
+  })
+
+  it('expands a mixed circuit exactly', () => {
+    const c = new Circuit(3).h(0).h(1).cu1(Math.PI / 8, 0, 1).cswap(0, 1, 2).u1(0.3, 2).ccx(2, 1, 0)
+    expect(opError(c, c.toIonQBasis())).toBeLessThan(1e-9)
+  })
+
+  it('output serializes to IonQ JSON', () => {
+    const c = new Circuit(3).h(0).cu1(Math.PI / 4, 0, 1).cswap(0, 1, 2)
+    expect(() => c.toIonQ()).toThrow()
+    expect(() => c.toIonQBasis().toIonQ()).not.toThrow()
+  })
+
+  it('passes supported gates through untouched', () => {
+    const c = new Circuit(2).h(0).cnot(0, 1).rz(0.4, 1).swap(0, 1)
+    expect(c.toIonQBasis().toJSON().ops).toEqual(c.toJSON().ops)
+  })
+
+  it('preserves classical registers', () => {
+    const c = new Circuit(2).creg('c', 2).cu1(Math.PI / 4, 0, 1)
+    expect(c.toIonQBasis().toJSON().cregs).toEqual(c.toJSON().cregs)
+  })
+
+  it('preserves the state of a real algorithm circuit', () => {
+    // Operator-level tests cover each rule in isolation; this checks that
+    // thousands of them compose without drift. cu1 -> rz + crz is exact only up
+    // to global phase, so the comparison must be phase-blind.
+    const c = shorCircuit(15n, 7n, 3)
+    expect(stateFidelity(c, c.toIonQBasis())).toBeCloseTo(1, 10)
+  })
+
+  it('round-trips a real algorithm circuit through IonQ JSON', () => {
+    const c = shorCircuit(15n, 7n, 3)
+    expect(stateFidelity(c, Circuit.fromIonQ(c.toIonQBasis().toIonQ()))).toBeCloseTo(1, 10)
+  })
+
+  it('expands a QFT-based circuit that could not previously be exported', () => {
+    const c = shorCircuit(15n, 7n)
+    expect(() => c.toIonQ()).toThrow()
+    const native = c.toIonQBasis()
+    expect(() => native.checkDevice('forte-1')).not.toThrow()
+    expect(native.toIonQ().circuit.length).toBeGreaterThan(c.gateCounts().total)
+  })
 })
 
 // ─── serializer contracts — comprehensive throw coverage ──────────────────────
@@ -7834,5 +8025,49 @@ describe('readout error mitigation', () => {
     const corrected = noisy.mitigateReadout(pMeas)
     const total = Object.values(corrected.probs).reduce((s, p) => s + p, 0)
     expect(total).toBeCloseTo(1, 1)  // integer rounding of counts introduces ~1/shots error
+  })
+})
+
+describe('Circuit.gateCounts', () => {
+  it('separates arity and names the gates', () => {
+    const c = new Circuit(3).h(0).t(0).cnot(0, 1).swap(1, 2)
+    const g = c.gateCounts()
+    expect(g.total).toBe(4)
+    expect(g.oneQubit).toBe(2)
+    expect(g.twoQubit).toBe(2)
+    expect(g.byName).toMatchObject({ h: 1, t: 1, cnot: 1, swap: 1 })
+  })
+
+  it('counts a three-qubit gate as six two-qubit equivalents', () => {
+    // Standard Toffoli decomposition. Two-qubit error dominates on every device
+    // in DEVICES, so this is the figure hardware feasibility turns on.
+    const g = new Circuit(3).ccx(0, 1, 2).gateCounts()
+    expect(g.total).toBe(1)
+    expect(g.twoQubit).toBe(6)
+    expect(g.byName['ccx']).toBe(1)
+  })
+
+  it('excludes barriers, measurement and reset', () => {
+    const c = new Circuit(2).creg('m', 1).h(0).barrier(0, 1).measure(0, 'm', 0).reset(1)
+    const g = c.gateCounts()
+    expect(g.total).toBe(1)
+    expect(g.oneQubit).toBe(1)
+  })
+
+  it('expands subcircuits so counts describe what executes', () => {
+    const inner = new Circuit(2).h(0).cnot(0, 1)
+    const outer = new Circuit(2).defineGate('bell', inner).gate('bell', 0, 1)
+    expect(outer.gateCounts()).toMatchObject({ total: 2, oneQubit: 1, twoQubit: 1 })
+  })
+
+  it('exposes T-count for non-Clifford accounting', () => {
+    const c = new Circuit(2).h(0).t(0).t(1).tdg(0)
+    const { byName } = c.gateCounts()
+    expect(byName['t']).toBe(2)
+    expect(byName['tdg']).toBe(1)
+  })
+
+  it('is empty for a circuit with no gates', () => {
+    expect(new Circuit(3).gateCounts()).toEqual({ total: 0, oneQubit: 0, twoQubit: 0, byName: {} })
   })
 })

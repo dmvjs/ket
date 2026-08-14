@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ket — Quantum Computing in JavaScript · dmvjs</title>
+<meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Four exact backends — statevector, MPS, density matrix, Clifford — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
+<meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
+<meta property="og:description" content="Four exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,012 tests.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
+<meta name="twitter:description" content="Four exact backends, cross-verified. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies.">
+<style>
+  :root {
+    --bg: #080a10; --card: #0c0e18; --border: #1a1d2e;
+    --accent: #54b4c5; --accent2: #d4b560; --green: #8bdb78;
+    --orange: #f47e5b; --red: #d65c70;
+    --text: #dde4ef; --muted: #4e5a6b; --font: system-ui,sans-serif; --mono: monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); padding: 2rem 1.5rem; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 2.2rem; text-align: center; margin-bottom: 0.3rem;
+       background: linear-gradient(135deg,#54b4c5,#d4b560); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+  .subtitle { text-align:center; color:var(--muted); margin-bottom:2.5rem; font-size:0.88rem; letter-spacing:.03em; }
+  .section-title { font-size:1.1rem; font-weight:600; margin:2.5rem 0 1rem;
+    color:var(--accent); border-left:3px solid var(--accent); padding-left:.75rem; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.25rem; }
+  h2 { font-size:1rem; margin-bottom:.2rem; }
+  .tag { display:inline-block; font-size:.68rem; padding:2px 8px; border-radius:99px;
+         background:var(--accent); color:#fff; margin-left:.4rem; vertical-align:middle; }
+  .tag.green { background:var(--green); color:#000; }
+  .tag.orange { background:var(--orange); color:#000; }
+  p.desc { color:var(--muted); font-size:.84rem; margin:.5rem 0 1rem; line-height:1.65; }
+  .state-box { background:#06080f; border:1px solid var(--border); border-radius:5px;
+               padding:.6rem .9rem; font-family:var(--mono); font-size:.75rem;
+               color:var(--accent2); overflow-x:auto; white-space:pre; margin-bottom:.75rem; }
+  .meta { display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.75rem; }
+  .meta span { background:#06080f; border:1px solid var(--border); border-radius:5px;
+               padding:3px 9px; font-size:.75rem; color:var(--muted); }
+  .meta span b { color:var(--text); }
+  .big-num { font-size:2.2rem; font-weight:800; color:var(--green); line-height:1; }
+  .big-label { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
+  .backend-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+  .backend-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; display:flex; flex-direction:column; gap:.6rem; }
+  .backend-name { font-size:.9rem; font-weight:700; }
+  .backend-type { font-size:.72rem; color:var(--muted); }
+  /* hero */
+  .hero { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; align-items:start; margin-bottom:2rem; }
+  .hero-copy p { color:var(--text); font-size:.95rem; line-height:1.7; }
+  .hero-install { margin:1.1rem 0 .6rem; background:#06080f; border:1px solid var(--accent);
+                  border-radius:7px; padding:.7rem 1rem; font-family:var(--mono); font-size:.85rem; color:var(--accent); }
+  .hero-note { color:var(--muted); font-size:.8rem; line-height:1.6; }
+  .hero-card .state-box { margin-bottom:.5rem; }
+  .hero-out-label { font-family:var(--mono); font-size:.7rem; color:var(--muted); margin:.6rem 0 .25rem; }
+  /* why strip */
+  .why-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.75rem; margin-bottom:1rem; }
+  .why-chip { background:var(--card); border:1px solid var(--border); border-radius:8px;
+              padding:.8rem .9rem; font-size:.78rem; color:var(--muted); line-height:1.55; }
+  .why-chip b { display:block; color:var(--text); font-size:.85rem; margin-bottom:.25rem; }
+  /* interop */
+  .fmt-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:.5rem; }
+  .fmt { background:#06080f; border:1px solid var(--border); border-radius:6px; padding:.5rem .6rem;
+         font-size:.74rem; color:var(--text); }
+  .fmt span { display:block; font-family:var(--mono); font-size:.68rem; color:var(--muted); margin-top:.15rem; }
+  /* Every chart and diagram on this page is generated dark — via the SDK's
+     theme:'dark' option or the local helpers' matching palette — so panels
+     are transparent. A white panel behind a dark chart reads as a bright frame.
+     SVGs render at natural size, centred: upscaling a 500px chart to 1000px
+     just blurs it and eats a screen. Shrinking to fit is fine. */
+  .svg-panel, .chart-panel { background:transparent; border-radius:6px; overflow:hidden;
+               line-height:0; display:flex; justify-content:center; }
+  .svg-panel svg, .chart-panel svg { display:block; max-width:100%; height:auto; }
+  svg { max-width: 100%; height: auto; }
+  .bench-table { width:100%; border-collapse:collapse; font-size:.82rem; margin-top:.75rem; }
+  .bench-table th { color:var(--muted); font-weight:500; text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--border); }
+  .bench-table td { padding:.35rem .6rem; border-bottom:1px solid #1a1d27; }
+  .bench-bar { display:inline-block; height:10px; border-radius:3px; background:var(--accent); vertical-align:middle; margin-left:.5rem; }
+  .bloch-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
+  .bloch-label { text-align:center; font-family:var(--mono); font-size:.78rem; color:var(--accent2); margin-top:.3rem; }
+  .bloch-sublabel { text-align:center; font-size:.68rem; color:var(--muted); }
+  @media (max-width: 900px) {
+    .backend-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    body { padding: 1rem .75rem; }
+    h1 { font-size: 1.55rem; }
+    .subtitle { font-size: .8rem; }
+    .hero { grid-template-columns: 1fr; }
+    .why-grid { grid-template-columns: 1fr 1fr; }
+    .grid2 { grid-template-columns: 1fr; }
+    .backend-grid { grid-template-columns: repeat(2, 1fr); }
+    .bloch-grid { grid-template-columns: repeat(2, 1fr); }
+    .big-num { font-size: 1.5rem; }
+    .bench-table { font-size: .72rem; }
+    .section-title { font-size: .95rem; }
+    [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+    .two-col-mobile { grid-template-columns: 1fr 1fr !important; }
+    .state-box { white-space: pre-wrap; word-break: break-all; font-size: .68rem; }
+    table { display: block; overflow-x: auto; }
+    /* nav row wraps gracefully on small screens */
+    body > div:first-child, body > div:nth-child(2) { gap: .5rem; }
+  }
+</style>
+</head>
+<body>
+<!-- ── HEADER ─────────────────────────────────────────────────── -->
+<div style="display:flex;justify-content:center;gap:.6rem;margin-bottom:.75rem;flex-wrap:wrap">
+  <a href="docs.html"
+     style="display:flex;align-items:center;background:#0c0e18;border:1px solid #1a1d2e;border-radius:8px;padding:.5rem 1rem;text-decoration:none;color:#dde4ef;font-size:.85rem;transition:border-color .2s"
+     onmouseover="this.style.borderColor='#54b4c5'" onmouseout="this.style.borderColor='#1a1d2e'">Docs</a>
+  <a href="demo.html"
+     style="display:flex;align-items:center;background:#0c0e18;border:1px solid #1a1d2e;border-radius:8px;padding:.5rem 1rem;text-decoration:none;color:#dde4ef;font-size:.85rem;transition:border-color .2s"
+     onmouseover="this.style.borderColor='#54b4c5'" onmouseout="this.style.borderColor='#1a1d2e'">Playground</a>
+</div>
+<div style="display:flex;justify-content:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap">
+  <a href="https://github.com/dmvjs/ket" target="_blank" rel="noopener"
+     style="display:flex;align-items:center;gap:.5rem;background:#0c0e18;border:1px solid #1a1d2e;border-radius:8px;padding:.5rem 1rem;text-decoration:none;color:#dde4ef;font-size:.85rem;transition:border-color .2s"
+     onmouseover="this.style.borderColor='#54b4c5'" onmouseout="this.style.borderColor='#1a1d2e'">
+    <svg height="18" width="18" viewBox="0 0 16 16" fill="#dde4ef"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    <span><b style="color:#54b4c5">dmvjs</b> / <b>ket</b></span>
+    <span style="color:#4e5a6b">GitHub</span>
+  </a>
+  <a href="https://www.npmjs.com/package/@kirkelliott/ket" target="_blank" rel="noopener"
+     style="display:flex;align-items:center;gap:.5rem;background:#0c0e18;border:1px solid #1a1d2e;border-radius:8px;padding:.5rem 1rem;text-decoration:none;color:#dde4ef;font-size:.85rem;transition:border-color .2s"
+     onmouseover="this.style.borderColor='#d65c70'" onmouseout="this.style.borderColor='#1a1d2e'">
+    <svg height="18" width="18" viewBox="0 0 18 7" fill="#cc3534"><rect x="0" y="0" width="18" height="7"/><rect x="1" y="1" width="4" height="5" fill="#fff"/><rect x="2" y="1" width="1" height="4" fill="#fff"/><rect x="6" y="1" width="4" height="5" fill="#fff"/><rect x="7" y="2" width="1" height="3" fill="#cc3534"/><rect x="11" y="1" width="1" height="5" fill="#fff"/><rect x="13" y="1" width="4" height="4" fill="#fff"/><rect x="14" y="2" width="1" height="2" fill="#cc3534"/></svg>
+    <span><b style="color:#d65c70">@kirkelliott</b> / <b>ket</b></span>
+    <span style="color:#4e5a6b">npm</span>
+  </a>
+</div>
+<h1>ket</h1>
+<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,012 tests · v0.8.0</p>
+
+<!-- ═══ HERO ═══════════════════════════════════════════════════ -->
+<div class="hero">
+  <div class="hero-copy">
+    <p>A general-purpose quantum circuit simulator for TypeScript and JavaScript. Four backends, 14 import/export formats, and no dependencies — install it and a Bell state is three lines away.</p>
+    <div class="hero-install"><code>npm install @kirkelliott/ket</code></div>
+    <p class="hero-note">Node ≥ 22, or straight from a CDN in the browser. No Python, no build step, no toolchain.</p>
+  </div>
+  <div class="card hero-card">
+    <div class="state-box">import { Circuit } from '@kirkelliott/ket'
+
+const bell = new Circuit(2).h(0).cnot(0, 1)</div>
+    <div class="hero-out">
+      <div class="hero-out-label">bell.draw()</div>
+      <div class="state-box">q0: ─H──●──
+        │ 
+q1: ────⊕──</div>
+      <div class="hero-out-label">bell.stateAsString()</div>
+      <div class="state-box">0.7071|00⟩ + 0.7071|11⟩</div>
+      <div class="hero-out-label">bell.exactProbs()</div>
+      <div class="state-box">{'11': 0.4999999999999999, '00': 0.4999999999999999}</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ WHY ════════════════════════════════════════════════════ -->
+<div class="why-grid">
+  <div class="why-chip"><b>Immutable</b>Every gate returns a new <code>Circuit</code>. Compose and branch without defensive copying.</div>
+  <div class="why-chip"><b>Types are the source</b>Strict TypeScript, not JS with a <code>.d.ts</code> bolted on.</div>
+  <div class="why-chip"><b>Bounds-checked</b>Bad qubit index throws <code>RangeError</code> at construction, not 200 gates later.</div>
+  <div class="why-chip"><b>BigInt indices</b>No 32-bit overflow at qubit 31 — the failure mode that silently corrupts.</div>
+  <div class="why-chip"><b>2,012 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
+  <div class="why-chip"><b>Zero dependencies</b>154 KB minified, total. Nothing to audit but ket.</div>
+</div>
+
+<!-- ═══ SIMULATE() ═════════════════════════════════════════════ -->
+<div class="section-title">One call, right backend <span class="tag">simulate()</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  You don't have to know which representation fits your circuit. <code>simulate()</code> inspects it and
+  routes to the cheapest <em>exact</em> backend. Same call, three very different circuits:
+</p>
+<div class="card" style="margin-bottom:1.25rem">
+  <div class="state-box">circuit.simulate({ shots: 1024 })   // → Distribution, with .backend telling you what ran</div>
+  <table class="bench-table">
+    <tr><th>Circuit</th><th>Qubits</th><th>Routed to</th><th>Time</th></tr>
+    <tr><td>GHZ-8, Clifford-only gates</td><td>8</td><td style="color:var(--green)"><code>clifford</code></td><td>3ms</td></tr><tr><td>QFT-10, non-Clifford phases</td><td>10</td><td style="color:var(--green)"><code>statevector</code></td><td>2ms</td></tr><tr><td>40 qubits, non-Clifford phases</td><td>40</td><td style="color:var(--green)"><code>mps</code></td><td>4ms</td></tr>
+  </table>
+  <p class="desc" style="margin-bottom:0">Exact in every case — routing changes the cost, never the answer.</p>
+</div>
+
+<!-- ═══ BACKENDS ═══════════════════════════════════════════════ -->
+<div class="section-title">Four backends, one API</div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  ket matches its representation to the circuit instead of committing to one, so the same API stays
+  efficient across shapes that usually need different tools. Pick a backend explicitly when you want to.
+</p>
+<div class="card" style="margin-bottom:1.25rem">
+  <table class="bench-table">
+    <tr><th>Backend</th><th>Call</th><th>Memory</th><th>Best for</th><th>Measured</th></tr>
+    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20 — <1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127 — 15ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — 2ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 3997ms</td></tr>
+  </table>
+  <p class="desc" style="margin-bottom:0">
+    The statevector starts as a sparse map and promotes itself to a flat <code>Float64Array</code> past ⅛ fill.
+    MPS bond dimension χ is exact by default and grows on demand — <code>maxBond</code> is an initial
+    allocation, not a cap.
+  </p>
+</div>
+
+<!-- ═══ CORRECTNESS ════════════════════════════════════════════ -->
+<div class="section-title">How you know it's right</div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  Four backends built on four unrelated representations — amplitudes, density matrices, tensor
+  trains, stabilizer tableaux — have to agree. Where a circuit can be expressed in all four, ket
+  checks that they do, and the suite is built on analytic expectations rather than snapshots.
+  These numbers are computed while this page builds:
+</p>
+<div class="card" style="margin-bottom:1.25rem">
+  <div class="hero-out-label">GHZ-6 — same circuit, four representations, 200,000 shots for the sampled ones</div>
+  <table class="bench-table">
+    <tr><th>Outcome</th><th>Statevector (exact)</th><th>Density matrix</th><th>MPS</th><th>Clifford</th></tr>
+    <tr><td><code>|000000⟩</code></td><td>0.500000</td><td>0.500000</td><td>0.499870</td><td>0.499870</td></tr><tr><td><code>|111111⟩</code></td><td>0.500000</td><td>0.500000</td><td>0.500130</td><td>0.500130</td></tr>
+  </table>
+  <div class="meta">
+    <span><b>Density matrix:</b> bit-identical</span>
+    <span><b>MPS:</b> within 1.3e-4 (sampling)</span>
+    <span><b>Clifford:</b> within 1.3e-4 (sampling)</span>
+  </div>
+  <p class="desc" style="margin-top:.75rem;margin-bottom:0">
+    The density matrix backend is exact, so it matches to floating-point precision. MPS and Clifford
+    sample, so they land within shot noise of the analytic answer — which is the correct result, not a
+    tolerance that was widened until it passed.
+  </p>
+</div>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Unitarity, from the circuit's own matrix</h2>
+    <p class="desc">Every circuit can hand you its full 2ⁿ×2ⁿ unitary via <code>circuitMatrix()</code>. For a five-gate circuit mixing Clifford and non-Clifford rotations, U†U − I is:</p>
+    <div class="state-box">max |U†U − I| = 4.44e-16</div>
+    <p class="desc" style="margin-bottom:0">Machine epsilon. The suite asserts this for every gate in the library, not just this one circuit.</p>
+  </div>
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Honest about limits</h2>
+    <p class="desc">
+      A serious simulator tells you when its answer is approximate. MPS runs set
+      <code>truncated</code> the moment a physically significant singular value is discarded, and
+      report the peak bond dimension actually reached:
+    </p>
+    <div class="state-box">const d = circuit.runMps({ shots: 1024 })
+
+d.truncated  // false — nothing was thrown away
+d.peakChi    // the χ this circuit really needed
+d.backend    // which representation ran</div>
+    <p class="desc" style="margin-bottom:0">
+      Exact by default. Approximation is something you opt into with <code>truncErr</code> or
+      <code>maxChi</code>, and it is always flagged.
+    </p>
+  </div>
+</div>
+
+<!-- ═══ INTEROP ════════════════════════════════════════════════ -->
+<div class="section-title">Talks to the rest of the ecosystem <span class="tag">14 formats</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  A simulator you can't get circuits into or out of is a dead end. ket reads and writes the formats
+  the field actually uses, with round-trips covered by the test suite for every one of them.
+</p>
+<div class="card" style="margin-bottom:1.25rem">
+  <div class="fmt-grid">
+    <div class="fmt">OpenQASM 2 / 3<span>import · export</span></div><div class="fmt">IonQ JSON<span>import · export</span></div><div class="fmt">Quil 2.0<span>import · export</span></div><div class="fmt">Qiskit<span>import · export</span></div><div class="fmt">Cirq<span>import · export</span></div><div class="fmt">ket JSON<span>import · export</span></div><div class="fmt">Qiskit Qobj<span>import</span></div><div class="fmt">Q#<span>export</span></div><div class="fmt">pyQuil<span>export</span></div><div class="fmt">Amazon Braket<span>export</span></div><div class="fmt">CUDA-Q<span>export</span></div><div class="fmt">TensorFlow Q<span>export</span></div><div class="fmt">Quirk<span>export</span></div><div class="fmt">LaTeX quantikz<span>export</span></div>
+  </div>
+  <div class="hero-out-label" style="margin-top:1rem">QASM round-trip — export, re-import, compare distributions</div>
+  <div class="state-box">OPENQASM 2.0;
+include "qelib1.inc";
+
+qreg q[3];
+h q[0];
+cx q[0],q[1];
+t q[2];
+  ...</div>
+  <div class="meta"><span><b>Distributions identical:</b> yes</span><span><b>Round-tripped:</b> H · CNOT · T · Rz · CCX</span></div>
+</div>
+
+<!-- ═══ SHOR'S ═════════════════════════════════════════════════ -->
+<div class="section-title">Shor's algorithm, actually decomposed <span class="tag green">shorBeauregard()</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  Not an oracle mock-up. The full Beauregard circuit, modular exponentiation compiled down to
+  primitive gates, simulated exactly — then the period recovered from phase estimation by
+  continued fractions.
+</p>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <div class="state-box">import { shorBeauregard } from '@kirkelliott/ket'
+
+const r = shorBeauregard(15n, { a: 7n })</div>
+    <table class="bench-table">
+      <tr><td>r.factors</td><td style="color:var(--green)">[5n, 3n]</td></tr>
+      <tr><td>r.period</td><td style="color:var(--green)">4n</td></tr>
+      <tr><td>r.method</td><td style="color:var(--green)">'quantum'</td></tr>
+      <tr><td>r.qubits</td><td style="color:var(--green)">19</td></tr>
+    </table>
+    <div class="meta"><span><b>Wall time:</b> 478ms</span><span><b>Gate-decomposed:</b> no oracle</span></div>
+  </div>
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">It tells you when it cheated</h2>
+    <p class="desc">
+      At these sizes classical shortcuts hit often — an even N, or a base sharing a factor with N,
+      falls to <code>gcd</code> with no circuit at all. <code>method</code> reports which path ran, so a
+      demo can prove the quantum one did.
+    </p>
+    <div class="state-box">shorBeauregard(15n, { a: 3n }).method
+// 'classical-gcd' — no circuit built
+
+shorBeauregard(15n, { a: 7n }).method
+// 'quantum'</div>
+    <p class="desc" style="margin-bottom:0">
+      This does not reach cryptographic sizes — no classical simulator does. What you get is the real
+      circuit, exactly simulated, at sizes you can inspect.
+    </p>
+  </div>
+</div>
+
+<!-- ═══ IONQ ═══════════════════════════════════════════════════ -->
+<div class="section-title">IonQ hardware, first class <span class="tag" style="background:#00a3e0">compile()</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  IonQ's native gate set is built in, not bolted on. <code>gpi</code>, <code>gpi2</code>, <code>ms</code>,
+  and <code>vz</code> are first-class gates you can write directly, <code>compile(device)</code> transpiles
+  an abstract circuit into them, and <code>toIonQ()</code> emits submit-ready JSON.
+</p>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Transpile to native gates</h2>
+    <p class="desc">A textbook Bell pair, rewritten into what the trap actually executes — GPI2 and MS, with virtual-Z frame rotations that cost nothing on hardware.</p>
+    <div class="hero-out-label">new Circuit(2).h(0).cnot(0, 1).compile('forte-1')</div>
+    <div class="state-box">q0: ─Rz(π/2)──GPI2(0)──Rz(π/2)──GPI2(π/2)──MS(0,0)──GPI2(-π/2)──Rz(-π/2)──
+                                              │                          
+q1: ─GPI2(π)───────────────────────────────MS(0,0)────────────────────────</div>
+    <div class="meta"><span><b>Native ops:</b> 8</span><span><b>Validated:</b> checkDevice()</span></div>
+  </div>
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Submit-ready JSON</h2>
+    <p class="desc"><code>toIonQ()</code> produces the API payload directly — no adapter, no Python bridge.</p>
+    <div class="state-box">{
+  "format": "ionq.circuit.v0",
+  "qubits": 2,
+  "circuit": [
+    {
+      "gate": "rz",
+      "target": 0,
+      "rotation": 0.5
+    },
+    {
+      "gate": "gpi2",
+      "target": 0,
+      "phase": 0
+    },
+  ... ]
+}</div>
+  </div>
+</div>
+<div class="card" style="margin-bottom:1.25rem">
+  <h2 style="margin-bottom:.5rem">Published device profiles <span class="tag" style="background:#00a3e0">IONQ_DEVICES</span></h2>
+  <p class="desc">Every IonQ system ships with its native gate set and published error rates, so a noisy run is one option away — <code>run({ noise: 'forte-1' })</code>.</p>
+  <table class="bench-table">
+    <tr><th>Device</th><th>Qubits</th><th>Native gates</th><th>1Q error</th><th>2Q error</th><th>Readout</th></tr>
+    <tr><td><b>aria-1</b></td><td>25</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz</code></td><td>0.030%</td><td>0.50%</td><td>0.40%</td></tr><tr><td><b>forte-1</b></td><td>36</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz, zz</code></td><td>0.010%</td><td>0.20%</td><td>0.20%</td></tr><tr><td><b>harmony</b></td><td>11</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz</code></td><td>0.100%</td><td>1.50%</td><td>1.00%</td></tr>
+  </table>
+</div>
+
+<div class="section-title" style="margin-top:3rem">Everything below runs at build time</div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1.5rem;line-height:1.65">
+  No screenshots and no mock data — every chart, circuit diagram, and number on the rest of this page
+  is produced by executing ket when the page is generated.
+</p>
+
+<!-- ═══ QAOA MAX-CUT ═══════════════════════════════════════════ -->
+<div class="section-title">QAOA Max-Cut — Quantum Optimization</div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  A 4-cycle graph has two optimal bipartitions: {0,2} vs {1,3} and {1,3} vs {0,2}, each cutting all 4 edges.
+  QAOA p=1 finds them — the two dominant peaks are the correct answers.
+</p>
+<div class="card" style="margin-bottom:1.25rem">
+  <div class="svg-panel" style="margin-bottom:1rem">
+    <svg xmlns="http://www.w3.org/2000/svg" width="500" height="215" viewBox="0 0 500 215"><rect width="500" height="215" fill="#0c0e18"/><line x1="115" y1="33" x2="189" y2="107" stroke="#7c8798" stroke-width="2.5" stroke-dasharray="7 4"/><line x1="189" y1="107" x2="115" y2="181" stroke="#7c8798" stroke-width="2.5" stroke-dasharray="7 4"/><line x1="115" y1="181" x2="41" y2="107" stroke="#7c8798" stroke-width="2.5" stroke-dasharray="7 4"/><line x1="41" y1="107" x2="115" y2="33" stroke="#7c8798" stroke-width="2.5" stroke-dasharray="7 4"/><circle cx="115" cy="33" r="20" fill="#54b4c5" stroke="#0c0e18" stroke-width="2.5"/><text x="115" y="38" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13" font-weight="bold" fill="#0c0e18">0</text><circle cx="189" cy="107" r="20" fill="#f47e5b" stroke="#0c0e18" stroke-width="2.5"/><text x="189" y="112" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13" font-weight="bold" fill="#0c0e18">1</text><circle cx="115" cy="181" r="20" fill="#54b4c5" stroke="#0c0e18" stroke-width="2.5"/><text x="115" y="186" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13" font-weight="bold" fill="#0c0e18">2</text><circle cx="41" cy="107" r="20" fill="#f47e5b" stroke="#0c0e18" stroke-width="2.5"/><text x="41" y="112" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13" font-weight="bold" fill="#0c0e18">3</text><line x1="218" y1="12" x2="218" y2="203" stroke="#161a28" stroke-width="1"/><text x="360" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">measurement outcomes (all 16 states)</text><rect x="232" y="166.05" width="14" height="8.95" rx="2" fill="#2a2d3e"/><rect x="248" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="264" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="280" y="153.72" width="14" height="21.28" rx="2" fill="#2a2d3e"/><rect x="296" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="312" y="87.00" width="14" height="88.00" rx="2" fill="#54b4c5"/><text x="319" y="83" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">26%</text><text x="319" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 319 189)">0101</text><rect x="328" y="153.72" width="14" height="21.28" rx="2" fill="#2a2d3e"/><rect x="344" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="360" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="376" y="153.72" width="14" height="21.28" rx="2" fill="#2a2d3e"/><rect x="392" y="87.00" width="14" height="88.00" rx="2" fill="#54b4c5"/><text x="399" y="83" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">26%</text><text x="399" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 399 189)">1010</text><rect x="408" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="424" y="153.72" width="14" height="21.28" rx="2" fill="#2a2d3e"/><rect x="440" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="456" y="168.32" width="14" height="6.68" rx="2" fill="#2a2d3e"/><rect x="472" y="166.05" width="14" height="8.95" rx="2" fill="#2a2d3e"/><line x1="229" y1="175" x2="486" y2="175" stroke="#2a2d3e" stroke-width="1"/><circle cx="34" cy="175" r="7" fill="#54b4c5"/><text x="46" y="179" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#475569">{0, 2}</text><circle cx="34" cy="193" r="7" fill="#f47e5b"/><text x="46" y="197" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#475569">{1, 3}</text></svg>
+  </div>
+  <div class="state-box">const edges = [[0,1],[1,2],[2,3],[3,0]]
+const circuit = qaoa(4, edges, [Math.PI / 4], [0.15 * Math.PI])
+circuit.exactProbs()  // → { '0101': 26.5%, '1010': 26.5%, … }</div>
+  <div class="meta">
+    <span><b>Expected cut:</b> 2.95 edges</span>
+    <span><b>Random baseline:</b> 2.0 edges</span>
+    <span><b>Optimal:</b> 4.0 edges</span>
+    <span><b>Top states:</b> '1010' 26.5% · '0101' 26.5%</span>
+  </div>
+</div>
+
+<!-- ═══ DRAWING API ════════════════════════════════════════════ -->
+<div class="section-title">Circuit Drawing API — <code style="font-size:.9em;color:var(--accent2)">toSVG()</code> · <code style="font-size:.9em;color:var(--accent2)">blochSphere(q)</code></div>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <h2>Circuit SVG <span class="tag">toSVG()</span></h2>
+    <p class="desc">Self-contained SVG string — no external fonts or stylesheets. Same column layout as <code>draw()</code>. Embed directly in HTML, save to a file, or use in notebooks.</p>
+    <div class="svg-panel" style="margin-bottom:.75rem"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 120" width="180" height="120">
+<rect width="180" height="120" fill="#0c0e18"/>
+<line x1="44" y1="44" x2="156" y2="44" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="44" y1="84" x2="156" y2="84" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="40" y="48" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#8b97a8">q0:</text>
+<text x="40" y="88" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#8b97a8">q1:</text>
+<rect x="67" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="78" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<line x1="130" y1="44" x2="130" y2="84" stroke="#8b97a8" stroke-width="1.5"/>
+<circle cx="130" cy="44" r="5" fill="#8b97a8"/>
+<circle cx="130" cy="84" r="10" fill="none" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="130" y1="74" x2="130" y2="94" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="120" y1="84" x2="140" y2="84" stroke="#8b97a8" stroke-width="1.5"/>
+</svg></div>
+    <div class="state-box">new Circuit(2).h(0).cnot(0, 1).toSVG({ theme: 'dark' })
+// → self-contained SVG string</div>
+    <div class="meta">
+      <span><b>Format:</b> SVG string</span>
+      <span><b>Background:</b> self-contained</span>
+      <span><b>Also:</b> toLatex()</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Bloch Sphere <span class="tag">blochSphere(q)</span></h2>
+    <p class="desc">300×300 SVG for a single qubit's state using cavalier projection. Partial-traces over all other qubits — works on any circuit, including entangled states.</p>
+    <div class="bloch-grid">
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="150.0" y2="40.0" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="150.0" cy="40.0" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|0⟩</div>
+        <div class="bloch-sublabel">ground state</div>
+      </div>
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="260.0" y2="150.0" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="260.0" cy="150.0" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|+⟩</div>
+        <div class="bloch-sublabel">H gate</div>
+      </div>
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="150.0" y2="260.0" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="150.0" cy="260.0" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|1⟩</div>
+        <div class="bloch-sublabel">X gate</div>
+      </div>
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="40.0" y2="150.0" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="40.0" cy="150.0" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|−⟩</div>
+        <div class="bloch-sublabel">H · Z</div>
+      </div>
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="106.0" y2="139.0" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="106.0" cy="139.0" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|+i⟩</div>
+        <div class="bloch-sublabel">H · S</div>
+      </div>
+      <div>
+        <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+<rect width="300" height="300" fill="#0c0e18"/>
+<circle cx="150" cy="150" r="110" fill="none" stroke="#7c8798" stroke-width="1.5"/>
+<ellipse cx="150" cy="150" rx="110" ry="39" fill="none" stroke="#7c8798" stroke-width="1" stroke-dasharray="4,3"/>
+<line x1="150" y1="150" x2="150" y2="40" stroke="#6b7789" stroke-width="1.2" stroke-dasharray="5,3"/>
+<line x1="150" y1="150" x2="150" y2="260" stroke="#6b7789" stroke-width="1.2"/>
+<text x="150" y="32" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|0⟩</text>
+<text x="150" y="278" text-anchor="middle" font-family="serif" font-size="14" fill="#dde4ef">|1⟩</text>
+<line x1="150" y1="150" x2="260" y2="150" stroke="#6b7789" stroke-width="1.2"/>
+<text x="268" y="154" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|+⟩</text>
+<line x1="150" y1="150" x2="194" y2="200" stroke="#6b7789" stroke-width="1.2"/>
+<text x="200" y="204" text-anchor="start" font-family="serif" font-size="13" fill="#dde4ef">|i⟩</text>
+<line x1="150" y1="150" x2="196.7" y2="142.2" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="196.7" cy="142.2" r="5" fill="#54b4c5"/>
+</svg></div>
+        <div class="bloch-label">|T⟩</div>
+        <div class="bloch-sublabel">H · T</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ GROVER ACROSS HARDWARE ════════════════════════════════ -->
+<div class="section-title">Grover's Search — Hardware Fidelity</div>
+<p style="color:var(--muted);font-size:.82rem;margin-bottom:1rem;line-height:1.65">
+  The same 3-qubit Grover circuit (target: |101⟩) run across six backends with 4,096 shots each.
+  Lower gate error rates preserve the quadratic amplitude advantage.
+  All results use published device noise models — not real hardware runs.
+</p>
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="margin-bottom:.5rem">Circuit <span class="tag">toSVG()</span></h2>
+  <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1168 160" width="1168" height="160">
+<rect width="1168" height="160" fill="#0c0e18"/>
+<line x1="44" y1="44" x2="1144" y2="44" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="44" y1="84" x2="1144" y2="84" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="44" y1="124" x2="1144" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="40" y="48" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#8b97a8">q0:</text>
+<text x="40" y="88" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#8b97a8">q1:</text>
+<text x="40" y="128" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#8b97a8">q2:</text>
+<rect x="67" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="78" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="67" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="78" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="67" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="78" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="119" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="130" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="119" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="130" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<line x1="182" y1="44" x2="182" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<circle cx="182" cy="44" r="5" fill="#8b97a8"/>
+<circle cx="182" cy="84" r="5" fill="#8b97a8"/>
+<circle cx="182" cy="124" r="10" fill="none" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="182" y1="114" x2="182" y2="134" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="172" y1="124" x2="192" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<rect x="223" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="234" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="223" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="234" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="223" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="234" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="275" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="286" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="275" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="286" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="275" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="286" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="327" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="338" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="327" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="338" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="379" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="390" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<line x1="442" y1="44" x2="442" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<circle cx="442" cy="44" r="5" fill="#8b97a8"/>
+<circle cx="442" cy="84" r="5" fill="#8b97a8"/>
+<circle cx="442" cy="124" r="10" fill="none" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="442" y1="114" x2="442" y2="134" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="432" y1="124" x2="452" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<rect x="483" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="494" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="483" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="494" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="483" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="494" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="535" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="546" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="535" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="546" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="535" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="546" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="587" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="598" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="587" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="598" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="639" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="650" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<line x1="702" y1="44" x2="702" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<circle cx="702" cy="44" r="5" fill="#8b97a8"/>
+<circle cx="702" cy="84" r="5" fill="#8b97a8"/>
+<circle cx="702" cy="124" r="10" fill="none" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="702" y1="114" x2="702" y2="134" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="692" y1="124" x2="712" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<rect x="743" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="754" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="743" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="754" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="743" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="754" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="795" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="806" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="795" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="806" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="795" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="806" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="847" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="858" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="847" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="858" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="899" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="910" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<line x1="962" y1="44" x2="962" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<circle cx="962" cy="44" r="5" fill="#8b97a8"/>
+<circle cx="962" cy="84" r="5" fill="#8b97a8"/>
+<circle cx="962" cy="124" r="10" fill="none" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="962" y1="114" x2="962" y2="134" stroke="#8b97a8" stroke-width="1.5"/>
+<line x1="952" y1="124" x2="972" y2="124" stroke="#8b97a8" stroke-width="1.5"/>
+<rect x="1003" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1014" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="1003" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1014" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="1003" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1014" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="1055" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1066" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">X</text>
+<rect x="1055" y="33" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1066" y="48" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="1055" y="73" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1066" y="88" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+<rect x="1107" y="113" width="22" height="22" rx="5" fill="#161a28" stroke="#8b97a8" stroke-width="1.5"/>
+<text x="1118" y="128" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#dde4ef">H</text>
+</svg></div>
+</div>
+<div class="backend-grid" style="margin-bottom:1.25rem">
+  <div class="backend-card" style="border-color:#54b4c555;position:relative">
+    
+    <div class="backend-name" style="color:#54b4c5;margin-top:0">Ideal</div>
+    <div class="backend-type">Statevector · no noise</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">Ideal (all 8 states)</text><rect x="67" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="83" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="99" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="115" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="131" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">95%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="179" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#54b4c5">94.53%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+  <div class="backend-card" style="border-color:#00a3e055;box-shadow:0 0 0 1px #00a3e0,0 4px 24px #00a3e033;position:relative">
+    <div style="position:absolute;top:-1px;right:12px;background:#00a3e0;color:#000;font-size:.65rem;font-weight:800;padding:2px 10px;border-radius:0 0 6px 6px;letter-spacing:.05em">BEST</div>
+    <div class="backend-name" style="color:#00a3e0;margin-top:.75rem">IonQ Forte-1</div>
+    <div class="backend-type">Trapped-Ion · 36 qubits</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Forte-1 (all 8 states)</text><rect x="67" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="83" y="173.53" width="14" height="1.47" rx="2" fill="#2a2d3e"/><rect x="99" y="174.13" width="14" height="0.87" rx="2" fill="#2a2d3e"/><rect x="115" y="174.31" width="14" height="0.69" rx="2" fill="#2a2d3e"/><rect x="131" y="173.63" width="14" height="1.37" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">94%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.97" width="14" height="1.03" rx="2" fill="#2a2d3e"/><rect x="179" y="173.56" width="14" height="1.44" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#00a3e0">93.90%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+  <div class="backend-card" style="border-color:#0077b655;position:relative">
+    
+    <div class="backend-name" style="color:#0077b6;margin-top:0">IonQ Aria-1</div>
+    <div class="backend-type">Trapped-Ion · 25 qubits</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Aria-1 (all 8 states)</text><rect x="67" y="174.02" width="14" height="0.98" rx="2" fill="#2a2d3e"/><rect x="83" y="173.30" width="14" height="1.70" rx="2" fill="#2a2d3e"/><rect x="99" y="173.99" width="14" height="1.01" rx="2" fill="#2a2d3e"/><rect x="115" y="174.24" width="14" height="0.76" rx="2" fill="#2a2d3e"/><rect x="131" y="173.27" width="14" height="1.73" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">93%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.87" width="14" height="1.13" rx="2" fill="#2a2d3e"/><rect x="179" y="173.33" width="14" height="1.67" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#0077b6">93.04%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+  <div class="backend-card" style="border-color:#023e8a55;position:relative">
+    
+    <div class="backend-name" style="color:#023e8a;margin-top:0">IonQ Harmony</div>
+    <div class="backend-type">Trapped-Ion · 11 qubits</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Harmony (all 8 states)</text><rect x="67" y="173.57" width="14" height="1.43" rx="2" fill="#2a2d3e"/><rect x="83" y="172.40" width="14" height="2.60" rx="2" fill="#2a2d3e"/><rect x="99" y="173.76" width="14" height="1.24" rx="2" fill="#2a2d3e"/><rect x="115" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="131" y="172.07" width="14" height="2.93" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">90%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.63" width="14" height="1.37" rx="2" fill="#2a2d3e"/><rect x="179" y="172.27" width="14" height="2.73" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#023e8a">90.06%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+  <div class="backend-card" style="border-color:#f47e5b55;position:relative">
+    
+    <div class="backend-name" style="color:#f47e5b;margin-top:0">IBM Torino</div>
+    <div class="backend-type">Superconducting · 133 qubits</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IBM Torino (all 8 states)</text><rect x="67" y="174.11" width="14" height="0.89" rx="2" fill="#2a2d3e"/><rect x="83" y="172.89" width="14" height="2.11" rx="2" fill="#2a2d3e"/><rect x="99" y="173.95" width="14" height="1.05" rx="2" fill="#2a2d3e"/><rect x="115" y="174.23" width="14" height="0.77" rx="2" fill="#2a2d3e"/><rect x="131" y="172.48" width="14" height="2.52" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">92%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.79" width="14" height="1.21" rx="2" fill="#2a2d3e"/><rect x="179" y="172.73" width="14" height="2.27" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#f47e5b">91.72%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+  <div class="backend-card" style="border-color:#d65c7055;position:relative">
+    
+    <div class="backend-name" style="color:#d65c70;margin-top:0">IBM Sherbrooke</div>
+    <div class="backend-type">Superconducting · 127 qubits</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IBM Sherbrooke (all 8 states)</text><rect x="67" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="83" y="172.42" width="14" height="2.58" rx="2" fill="#2a2d3e"/><rect x="99" y="173.90" width="14" height="1.10" rx="2" fill="#2a2d3e"/><rect x="115" y="174.19" width="14" height="0.81" rx="2" fill="#2a2d3e"/><rect x="131" y="172.16" width="14" height="2.84" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">91%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.81" width="14" height="1.19" rx="2" fill="#2a2d3e"/><rect x="179" y="172.19" width="14" height="2.81" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#d65c70">90.72%</div>
+    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
+  </div>
+</div>
+
+<!-- ═══ 1,024-QUBIT GHZ ════════════════════════════════════════ -->
+<div class="section-title">1,024-Qubit GHZ State <span class="tag">CliffordSim</span></div>
+
+<div class="card" style="margin-bottom:1.25rem">
+  <h2>Stabilizer Tableau Heatmap <span class="tag orange">Gottesman-Knill</span></h2>
+  <p class="desc">
+    A 1,024-qubit GHZ state built with one H gate + 1,023 CNOTs.
+    Classically infeasible with statevector simulation (2<sup>1024</sup> amplitudes),
+    but the Gottesman-Knill theorem lets us track it exactly in O(n²) space.
+    Each row is a stabilizer generator; each column is a qubit.
+    <br><br>
+    Row 0 (bright stripe): <b style="color:#54b4c5">X⊗¹⁰²⁴</b> — all 1,024 qubits correlated via X. &nbsp;·&nbsp;
+    Rows 1–1023 (diagonal): <b style="color:#d4b560">ZZ</b> at adjacent qubit positions.
+  </p>
+  <canvas id="bigCanvas" width="1024" height="200" style="display:block;width:100%;max-height:200px;border-radius:6px;margin-bottom:.75rem"></canvas>
+  <script>
+  (function(){
+    // 1,024 stabilizer rows compressed into 200px of height: column = qubit
+    // (1:1), row scaled by H/1024 so the ZZ diagonal spans corner to corner.
+    var cv = document.getElementById('bigCanvas'), ctx = cv.getContext('2d');
+    var W = 1024, H = 200, N = 1024;
+    ctx.fillStyle = '#06080f'; ctx.fillRect(0,0,W,H);
+    // Row 0: X on every qubit — the full-width stripe.
+    ctx.fillStyle = '#54b4c5'; ctx.fillRect(0,0,W,3);
+    // Rows 1..N-1: ZZ on adjacent qubits — one pixel per generator.
+    ctx.fillStyle = '#d4b560';
+    for (var g = 1; g < N; g++) ctx.fillRect(g-1, (g/N)*H, 2, 1.5);
+    // Legend, bottom-left where the diagonal has already moved right.
+    ctx.fillStyle = 'rgba(6,8,15,0.88)'; ctx.fillRect(10,H-48,214,40);
+    ctx.fillStyle='#54b4c5'; ctx.fillRect(18,H-40,16,9);
+    ctx.fillStyle='#d4b560'; ctx.fillRect(18,H-24,16,9);
+    ctx.fillStyle='#dde4ef'; ctx.font='11px monospace';
+    ctx.fillText('X  row 0 — all 1,024 qubits', 40, H-32);
+    ctx.fillText('Z  diagonal, rows 1–1,023',  40, H-16);
+  })();
+  </script>
+  <div class="meta" style="margin-top:.75rem">
+    <span><b>Qubits:</b> 1,024</span>
+    <span><b>Gates:</b> 1,024 (1H + 1,023 CNOT)</span>
+    <span><b>Build time:</b> 6ms</span>
+    <span><b>Stabilizers:</b> 1,024 generators</span>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1.25rem">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:start">
+    <div style="padding-right:1.5rem;border-right:1px solid var(--border);min-width:0">
+      <h2 style="margin-bottom:.3rem">Scalability</h2>
+      <p class="desc">O(n²) per gate — statevector needs 2<sup>n</sup> complex numbers, impossible beyond ~50 qubits.</p>
+      <table class="bench-table">
+        <tr><th>Qubits</th><th>Time</th><th>Statevector RAM</th></tr>
+        <tr><td><b>64</b></td><td><1ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>128</b></td><td><1ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>256</b></td><td>1ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>512</b></td><td>1ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>1,024</b></td><td>7ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>2,048</b></td><td>25ms <span class="bench-bar" style="width:9.09090909090909px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>4,096</b></td><td>117ms <span class="bench-bar" style="width:40px"></span></td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
+      </table>
+    </div>
+    <div style="padding-left:1.5rem;min-width:0">
+      <h2 style="margin-bottom:.3rem">Measurement Verification</h2>
+      <p class="desc">Every qubit collapses to the same value — perfect quantum correlation across all 1,024 qubits.</p>
+      <div class="state-box">|ψ⟩ = (1/√2)(|000…0⟩ + |111…1⟩)
+       ←    1,024 qubits    →
+
+Qubit    0 measured: 1
+Qubit  511 measured: 1  (same)
+Qubit 1023 measured: 1  (same)</div>
+      <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
+        <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+          <div class="big-num">1,024</div>
+          <div class="big-label">qubits — all correlated</div>
+        </div>
+        <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+          <div class="big-num" style="color:var(--accent2)">6ms</div>
+          <div class="big-label">to build &amp; run</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MPS TRAJECTORIES ══════════════════════════════════════ -->
+<div class="section-title">Matrix Product State Trajectories <span class="tag">runMps()</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  The trajectory-MPS backend simulates noisy circuits at 127+ qubits by representing the quantum state
+  as a product of rank-3 tensors. Bond dimension χ tracks <em>entanglement</em>, not qubit count —
+  a 127-qubit GHZ state maintains χ = 2 throughout, making it as cheap as a 3-qubit simulation.
+  Noisy trajectories are embarrassingly parallel: pass <code style="color:var(--accent2)">workers: N</code> for N× speedup.
+</p>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <h2>GHZ Fidelity vs Qubit Count <span class="tag orange">noise model</span></h2>
+    <p class="desc">P(|00…0⟩ + |11…1⟩) for an n-qubit GHZ state under depolarizing noise.
+      Bond dimension stays at χ = 2 for all n — fidelity decays from gate errors only, not simulation approximation.</p>
+    <div class="chart-panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="460" height="195" viewBox="0 0 460 195"><rect width="460" height="195" fill="#0c0e18" rx="6"/><line x1="50" y1="167.0" x2="444" y2="167.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="171" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">0%</text><line x1="50" y1="129.3" x2="444" y2="129.3" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="133" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">25%</text><line x1="50" y1="91.5" x2="444" y2="91.5" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="95" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">50%</text><line x1="50" y1="53.8" x2="444" y2="53.8" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="57" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">75%</text><line x1="50" y1="16.0" x2="444" y2="16.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="20" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">100%</text><line x1="50.0" y1="16" x2="50.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="50.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">0</text><line x1="127.6" y1="16" x2="127.6" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="127.6" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">25</text><line x1="205.1" y1="16" x2="205.1" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="205.1" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">50</text><line x1="282.7" y1="16" x2="282.7" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="282.7" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">75</text><line x1="360.2" y1="16" x2="360.2" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="360.2" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">100</text><line x1="444.0" y1="16" x2="444.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="444.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">127</text><line x1="50" y1="16" x2="50" y2="167" stroke="#2a2d3e" stroke-width="1"/><line x1="50" y1="167" x2="444" y2="167" stroke="#2a2d3e" stroke-width="1"/><path d="M59.3,17.2 L81.0,20.7 L112.0,23.4 L143.1,29.6 L205.1,39.0 L282.7,47.6 L360.2,64.1 L444.0,76.7" fill="none" stroke="#00a3e0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M59.3,23.7 L81.0,41.1 L112.0,68.8 L143.1,82.7 L205.1,113.3 L282.7,135.2 L360.2,144.9 L444.0,154.0" fill="none" stroke="#d65c70" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="304" y="22" width="136" height="40" fill="rgba(6,8,15,0.85)" rx="4"/><line x1="312" y1="34" x2="332" y2="34" stroke="#00a3e0" stroke-width="2.5"/><text x="336" y="38" font-family="system-ui,sans-serif" font-size="10" fill="#dde4ef">IonQ Forte-1</text><line x1="312" y1="50" x2="332" y2="50" stroke="#d65c70" stroke-width="2.5"/><text x="336" y="54" font-family="system-ui,sans-serif" font-size="10" fill="#dde4ef">IBM Sherbrooke</text><text x="247" y="192" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#4e5a6b">GHZ qubits (n)</text></svg>
+    </div>
+    <div class="meta" style="margin-top:.75rem">
+      <span><b>IBM Sherbrooke:</b> p₂ = 7.4 × 10⁻³</span>
+      <span><b>IonQ Forte-1:</b> p₂ ≈ 10⁻³</span>
+      <span><b>Model:</b> depolarizing channel · gate errors only</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>127-Qubit IBM Sherbrooke <span class="tag">χ = 2</span></h2>
+    <p class="desc">Statevector simulation of a 127-qubit circuit would require
+      2<sup>127</sup> complex amplitudes — roughly 10<sup>20</sup>× more RAM than all data ever created.
+      MPS stores O(n · χ²) numbers — <b>linear in qubit count</b>.</p>
+    <div class="state-box">import { Circuit, DEVICES } from '@kirkelliott/ket'
+
+let c = new Circuit(127).h(0)
+for (let i = 0; i &lt; 126; i++) c = c.cnot(i, i+1)
+
+const result = c.runMps({
+  shots: 256,
+  seed: 42,
+  noise: DEVICES['ibm_sherbrooke'].noise,
+})
+// → { '000…0': 2.3%, '111…1': 2.1%, … }</div>
+    <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem">
+      <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+        <div class="big-num">127</div>
+        <div class="big-label">qubits · noisy · χ = 2</div>
+      </div>
+      <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+        <div class="big-num" style="color:var(--accent2)">O(n)</div>
+        <div class="big-label">memory — not O(2ⁿ)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1.25rem">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:start">
+    <div style="padding-right:1.5rem;border-right:1px solid var(--border);min-width:0">
+      <h2 style="margin-bottom:.3rem">Scalability — GHZ with Noise</h2>
+      <p class="desc">256 shots, IBM Sherbrooke noise model, single-threaded. Time scales linearly with n because χ = 2 throughout the GHZ circuit.</p>
+      <table class="bench-table">
+        <tr><th>Qubits</th><th>Time</th><th>χ</th><th>Statevector RAM</th></tr>
+        <tr><td><b>10</b></td><td>6ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">16 KB</td></tr><tr><td><b>20</b></td><td>9ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">16 MB</td></tr><tr><td><b>50</b></td><td>20ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>100</b></td><td>38ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>127</b></td><td>47ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
+      </table>
+    </div>
+    <div style="padding-left:1.5rem;min-width:0">
+      <h2 style="margin-bottom:.3rem">Multi-Core Speedup</h2>
+      <p class="desc">Each noisy trajectory is an independent simulation — distribute across OS threads with <code style="color:var(--accent2)">workers: N</code>. Requires built bundle and Node.js ≥ 22.</p>
+      <div class="state-box">circuit.runMps({
+  shots: 1024,
+  noise: DEVICES['forte-1'].noise,
+  workers: 4,   // ~4× wall-time speedup
+  seed:    42,
+})</div>
+      <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
+        <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+          <div class="big-num" style="font-size:1.8rem">4×</div>
+          <div class="big-label">speedup · 4 workers</div>
+        </div>
+        <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+          <div class="big-num" style="color:var(--accent);font-size:1.3rem">O(n·χ²)</div>
+          <div class="big-label">memory — linear in n</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ VQE AT SCALE ══════════════════════════════════════════ -->
+<div class="section-title">VQE at Scale — 12-Qubit Heisenberg XXX <span class="tag">minimizeMps()</span></div>
+<p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
+  Variational quantum eigensolver on the 12-qubit antiferromagnetic Heisenberg chain
+  (H = Σ X<sub>i</sub>X<sub>i+1</sub> + Y<sub>i</sub>Y<sub>i+1</sub> + Z<sub>i</sub>Z<sub>i+1</sub>) using
+  MPS-based parameter-shift gradients. A 12-qubit statevector needs 128 KB — manageable — but 50+ qubits needs petabytes.
+  MPS VQE scales to hundreds of qubits at low entanglement.
+</p>
+<div class="grid2" style="margin-bottom:1rem">
+  <div class="card">
+    <h2>Energy Convergence <span class="tag green">MPS gradient</span></h2>
+    <p class="desc">Parameter-shift gradients computed via MPS — same accuracy as statevector but O(n·χ²) memory. Each step: 2 × 36 MPS evaluations.</p>
+    <div class="chart-panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="460" height="195" viewBox="0 0 460 195"><rect width="460" height="195" fill="#0c0e18" rx="6"/><line x1="50" y1="16.0" x2="444" y2="16.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="20" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">6.35</text><line x1="50" y1="66.3" x2="444" y2="66.3" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="70" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">-2.58</text><line x1="50" y1="116.7" x2="444" y2="116.7" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="120" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">-11.51</text><line x1="50" y1="167.0" x2="444" y2="167.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="171" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">-20.44</text><line x1="50.0" y1="16" x2="50.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="50.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">0</text><line x1="148.5" y1="16" x2="148.5" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="148.5" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">20</text><line x1="247.0" y1="16" x2="247.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="247.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">40</text><line x1="345.5" y1="16" x2="345.5" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="345.5" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">60</text><line x1="444.0" y1="16" x2="444.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="444.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">80</text><line x1="50" y1="16" x2="50" y2="167" stroke="#2a2d3e" stroke-width="1"/><line x1="50" y1="167" x2="444" y2="167" stroke="#2a2d3e" stroke-width="1"/><line x1="50" y1="155.8" x2="444" y2="155.8" stroke="#d4b56055" stroke-width="1" stroke-dasharray="6 4"/><path d="M50.0,16.0 L54.9,32.7 L59.9,44.5 L64.8,53.6 L69.7,64.7 L74.6,75.1 L79.5,81.4 L84.5,85.6 L89.4,89.4 L94.3,93.4 L99.3,97.5 L104.2,101.9 L109.1,106.6 L114.0,111.8 L118.9,117.5 L123.9,123.4 L128.8,128.7 L133.7,132.7 L138.7,135.6 L143.6,138.5 L148.5,142.0 L153.4,146.1 L158.4,149.9 L163.3,152.5 L168.2,153.9 L173.1,154.5 L178.1,154.7 L183.0,154.9 L187.9,154.9 L192.8,155.0 L197.8,155.1 L202.7,155.1 L207.6,155.1 L212.5,155.2 L217.4,155.2 L222.4,155.3 L227.3,155.3 L232.2,155.3 L237.1,155.4 L242.1,155.4 L247.0,155.4 L251.9,155.5 L256.9,155.5 L261.8,155.5 L266.7,155.5 L271.6,155.6 L276.5,155.6 L281.5,155.6 L286.4,155.6 L291.3,155.7 L296.3,155.7 L301.2,155.7 L306.1,155.7 L311.0,155.7 L316.0,155.7 L320.9,155.7 L325.8,155.7 L330.7,155.8 L335.6,155.8 L340.6,155.8 L345.5,155.8 L350.4,155.8 L355.4,155.8 L360.3,155.8 L365.2,155.8 L370.1,155.8 L375.0,155.8 L380.0,155.8 L384.9,155.8 L389.8,155.8 L394.8,155.8 L399.7,155.8 L404.6,155.8 L409.5,155.8 L414.5,155.8 L419.4,155.8 L424.3,155.8 L429.2,155.8 L434.1,155.8 L439.1,155.8 L444.0,155.8 L444.0,167 L50,167 Z" fill="#54b4c510"/><path d="M50.0,16.0 L54.9,32.7 L59.9,44.5 L64.8,53.6 L69.7,64.7 L74.6,75.1 L79.5,81.4 L84.5,85.6 L89.4,89.4 L94.3,93.4 L99.3,97.5 L104.2,101.9 L109.1,106.6 L114.0,111.8 L118.9,117.5 L123.9,123.4 L128.8,128.7 L133.7,132.7 L138.7,135.6 L143.6,138.5 L148.5,142.0 L153.4,146.1 L158.4,149.9 L163.3,152.5 L168.2,153.9 L173.1,154.5 L178.1,154.7 L183.0,154.9 L187.9,154.9 L192.8,155.0 L197.8,155.1 L202.7,155.1 L207.6,155.1 L212.5,155.2 L217.4,155.2 L222.4,155.3 L227.3,155.3 L232.2,155.3 L237.1,155.4 L242.1,155.4 L247.0,155.4 L251.9,155.5 L256.9,155.5 L261.8,155.5 L266.7,155.5 L271.6,155.6 L276.5,155.6 L281.5,155.6 L286.4,155.6 L291.3,155.7 L296.3,155.7 L301.2,155.7 L306.1,155.7 L311.0,155.7 L316.0,155.7 L320.9,155.7 L325.8,155.7 L330.7,155.8 L335.6,155.8 L340.6,155.8 L345.5,155.8 L350.4,155.8 L355.4,155.8 L360.3,155.8 L365.2,155.8 L370.1,155.8 L375.0,155.8 L380.0,155.8 L384.9,155.8 L389.8,155.8 L394.8,155.8 L399.7,155.8 L404.6,155.8 L409.5,155.8 L414.5,155.8 L419.4,155.8 L424.3,155.8 L429.2,155.8 L434.1,155.8 L439.1,155.8 L444.0,155.8" fill="none" stroke="#54b4c5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="247" y="192" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#4e5a6b">gradient descent step</text></svg>
+    </div>
+    <div class="meta" style="margin-top:.75rem">
+      <span><b>Qubits:</b> 12</span>
+      <span><b>Params:</b> 36</span>
+      <span><b>Steps:</b> 80</span>
+      <span><b>Initial E:</b> 6.354</span>
+      <span><b>Final E:</b> -18.4590</span>
+      <span><b>Wall time:</b> 915ms</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Ground State <span class="tag green">area law</span></h2>
+    <p class="desc">Bond entropies of the optimized ground state — the area-law profile confirms the Heisenberg chain has limited entanglement, making MPS the ideal representation.</p>
+    <div class="chart-panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="340" height="155" viewBox="0 0 340 155"><rect width="340" height="155" fill="#0c0e18" rx="6"/><text x="170" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#c8d2e0">Heisenberg ground state — area law</text><line x1="28" y1="133.0" x2="332" y2="133.0" stroke="#1a1d2e" stroke-width="1"/><text x="25" y="136" text-anchor="end" font-family="monospace" font-size="8" fill="#4e5a6b">0.0</text><line x1="28" y1="80.2" x2="332" y2="80.2" stroke="#1a1d2e" stroke-width="1"/><text x="25" y="83" text-anchor="end" font-family="monospace" font-size="8" fill="#4e5a6b">0.5</text><line x1="28" y1="27.3" x2="332" y2="27.3" stroke="#1a1d2e" stroke-width="1"/><text x="25" y="30" text-anchor="end" font-family="monospace" font-size="8" fill="#4e5a6b">1.0</text><rect x="29.5" y="50.4" width="24.6" height="82.6" rx="1.5" fill="#00a3e088"/><rect x="29.5" y="50.4" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="57.2" y="90.6" width="24.6" height="42.4" rx="1.5" fill="#00a3e088"/><rect x="57.2" y="90.6" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="84.8" y="87.5" width="24.6" height="45.5" rx="1.5" fill="#00a3e088"/><rect x="84.8" y="87.5" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="112.4" y="54.6" width="24.6" height="78.4" rx="1.5" fill="#00a3e088"/><rect x="112.4" y="54.6" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="140.1" y="115.7" width="24.6" height="17.3" rx="1.5" fill="#00a3e088"/><rect x="140.1" y="115.7" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="167.7" y="27.6" width="24.6" height="105.4" rx="1.5" fill="#00a3e088"/><rect x="167.7" y="27.6" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="195.3" y="111.1" width="24.6" height="21.9" rx="1.5" fill="#00a3e088"/><rect x="195.3" y="111.1" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="223.0" y="61.2" width="24.6" height="71.8" rx="1.5" fill="#00a3e088"/><rect x="223.0" y="61.2" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="250.6" y="83.7" width="24.6" height="49.3" rx="1.5" fill="#00a3e088"/><rect x="250.6" y="83.7" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="278.2" y="91.9" width="24.6" height="41.1" rx="1.5" fill="#00a3e088"/><rect x="278.2" y="91.9" width="24.6" height="2" rx="1" fill="#00a3e0"/><rect x="305.9" y="50.0" width="24.6" height="83.0" rx="1.5" fill="#00a3e088"/><rect x="305.9" y="50.0" width="24.6" height="2" rx="1" fill="#00a3e0"/><line x1="28" y1="22" x2="28" y2="133" stroke="#2a2d3e" stroke-width="1"/><line x1="28" y1="133" x2="332" y2="133" stroke="#2a2d3e" stroke-width="1"/><text x="180" y="152" text-anchor="middle" font-family="monospace" font-size="8" fill="#4e5a6b">bond</text></svg>
+    </div>
+    <div class="state-box" style="margin-top:.75rem">import { minimizeMps, realAmplitudes } from '@kirkelliott/ket'
+
+const ansatz = realAmplitudes(12, 2)
+const result = minimizeMps(ansatz, heisenbergH, params, {
+  maxBond: 8,  // MPS bond dimension
+})
+// → { energy: -18.4590, converged: … }</div>
+  </div>
+</div>
+<div class="card" style="margin-bottom:1.25rem">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+    <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+      <div class="big-num" style="font-size:1.6rem">12</div>
+      <div class="big-label">qubits · open chain</div>
+    </div>
+    <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+      <div class="big-num" style="color:var(--accent2);font-size:1.4rem">-18.459</div>
+      <div class="big-label">VQE ground energy</div>
+    </div>
+    <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+      <div class="big-num" style="color:var(--accent);font-size:1.4rem">0.9s</div>
+      <div class="big-label">total · JavaScript</div>
+    </div>
+    <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
+      <div class="big-num" style="color:var(--green);font-size:1.3rem">O(n·χ²)</div>
+      <div class="big-label">scales to 100+ qubits</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── FOOTER ────────────────────────────────────────────────── -->
+<div style="border-top:1px solid var(--border);margin-top:2rem;padding-top:2rem;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:1rem">
+  <div>
+    <div style="font-size:1.1rem;font-weight:700;margin-bottom:.3rem">
+      <span style="color:#54b4c5">ket</span>
+      <span style="color:var(--muted);font-weight:400;font-size:.85rem"> — quantum circuits in JavaScript</span>
+    </div>
+    <div style="font-size:.8rem;color:var(--muted)">Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a></div>
+  </div>
+  <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+    <a href="https://github.com/dmvjs/ket" target="_blank" rel="noopener"
+       style="background:#54b4c5;color:#000;font-weight:700;font-size:.85rem;padding:.5rem 1.1rem;border-radius:7px;text-decoration:none">
+      dmvjs/ket on GitHub →
+    </a>
+    <a href="https://www.npmjs.com/package/@kirkelliott/ket" target="_blank" rel="noopener"
+       style="background:var(--card);border:1px solid var(--border);color:var(--text);font-size:.85rem;padding:.5rem 1.1rem;border-radius:7px;text-decoration:none">
+      npm install @kirkelliott/ket
+    </a>
+  </div>
+</div>
+
+</body>
+</html>

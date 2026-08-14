@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ket playground · dmvjs</title>
+<meta name="description" content="Interactive browser playground for @kirkelliott/ket — quantum circuit simulator in JavaScript. Zero install.">
+<style>
+  :root {
+    --bg: #080a10; --card: #0c0e18; --border: #1a1d2e;
+    --accent: #54b4c5; --accent2: #d4b560; --green: #8bdb78;
+    --red: #d65c70; --text: #dde4ef; --muted: #4e5a6b;
+    --font: system-ui, sans-serif;
+    --mono: 'Cascadia Code','Fira Code','JetBrains Mono',ui-monospace,'SF Mono',Menlo,Monaco,'Courier New',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--font);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .55rem 1.25rem; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; gap: 1rem;
+  }
+  .logo { display: flex; align-items: baseline; gap: .45rem; }
+  .logo-name {
+    font-size: 1.05rem; font-weight: 700;
+    background: linear-gradient(135deg, #54b4c5, #d4b560);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .logo-sub { font-size: .72rem; color: var(--muted); }
+  .header-links { display: flex; gap: .45rem; align-items: center; }
+  .header-links a {
+    font-size: .72rem; color: var(--muted); text-decoration: none;
+    padding: .22rem .6rem; border: 1px solid var(--border); border-radius: 4px;
+    transition: color .15s, border-color .15s;
+  }
+  .header-links a:hover { color: var(--text); border-color: var(--accent); }
+
+  .workspace { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+  .editor-pane {
+    width: 52%; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); min-width: 0;
+  }
+  .tabs {
+    display: flex; overflow-x: auto; flex-shrink: 0;
+    border-bottom: 1px solid var(--border); scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    font-size: .7rem; padding: .42rem .9rem; cursor: pointer;
+    color: var(--muted); white-space: nowrap;
+    border-right: 1px solid var(--border);
+    transition: color .12s, background .12s;
+    user-select: none; flex-shrink: 0;
+  }
+  .tab:hover { color: var(--text); background: #0d0f1a; }
+  .tab.active { color: var(--accent); background: var(--card); box-shadow: inset 0 -2px 0 var(--accent); }
+
+  #editor-container { flex: 1; min-height: 0; }
+
+  .editor-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .45rem 1rem; border-top: 1px solid var(--border); flex-shrink: 0;
+  }
+  .hint { font-size: .68rem; color: var(--muted); }
+  kbd {
+    background: #0e1018; border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; font-size: .62rem;
+    font-family: var(--mono);
+  }
+  .run-btn {
+    background: var(--accent); color: #000;
+    font-weight: 700; font-size: .78rem; font-family: var(--font);
+    border: none; border-radius: 5px; padding: .38rem 1rem;
+    cursor: pointer; transition: opacity .15s; line-height: 1;
+  }
+  .run-btn:hover { opacity: .85; }
+  .run-btn:active { opacity: .65; }
+  .run-btn:disabled { opacity: .35; cursor: default; }
+
+  .output-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .output-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .42rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .output-label { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+  .out-tabs { display: flex; gap: .25rem; align-items: center; }
+  .out-tab {
+    font-size: .68rem; color: var(--muted); background: none;
+    border: 1px solid transparent; cursor: pointer; padding: .18rem .55rem;
+    border-radius: 4px; font-family: var(--font); transition: color .12s;
+  }
+  .out-tab:hover { color: var(--text); }
+  .out-tab.active { color: var(--accent); border-color: var(--accent); background: #54b4c510; }
+  .out-tab.hidden { display: none; }
+  .clear-btn {
+    font-size: .68rem; color: var(--muted); background: none;
+    border: none; cursor: pointer; padding: .18rem .45rem;
+    border-radius: 3px; font-family: var(--font);
+  }
+  .clear-btn:hover { color: var(--text); background: var(--border); }
+  .chart-body {
+    flex: 1; overflow-y: auto; padding: 1.25rem;
+    display: none; align-items: flex-start; flex-wrap: wrap; gap: 1rem;
+  }
+  .chart-body.visible { display: flex; }
+  .chart-item { background: transparent; border-radius: 6px; overflow: hidden; line-height: 0; }
+  .chart-item svg { display: block; max-width: 100%; height: auto; }
+  .output-body {
+    flex: 1; overflow-y: auto; overflow-x: auto;
+    padding: .9rem 1.25rem;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .output-body::-webkit-scrollbar { width: 5px; }
+  .output-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .output-empty { font-size: .78rem; color: var(--muted); font-style: italic; }
+  .out-line {
+    font-family: var(--mono); font-size: .79rem; line-height: 1.65;
+    white-space: pre; color: var(--text); display: block;
+  }
+  .out-line.err { color: var(--red); }
+  .out-line.dim { color: var(--muted); }
+
+  .spinner {
+    display: inline-block; width: 9px; height: 9px;
+    border: 1.5px solid #2a2d3e; border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .55s linear infinite; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 720px) {
+    body { overflow: auto; height: auto; }
+    .workspace { flex-direction: column; overflow: visible; }
+    .editor-pane { width: 100%; border-right: none; border-bottom: 1px solid var(--border); height: 55vh; }
+    #editor-container { min-height: 0; }
+    .output-pane { min-height: 60vh; height: auto; flex: none; }
+    .output-body, .chart-body { min-height: 52vh; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-name">ket</span>
+    <span class="logo-sub">playground · npm i @kirkelliott/ket</span>
+  </div>
+  <div class="header-links">
+    <a href="index.html">home</a>
+    <a href="docs.html">docs</a>
+    <a href="https://github.com/dmvjs/ket" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.npmjs.com/package/@kirkelliott/ket" target="_blank" rel="noopener">npm</a>
+  </div>
+</header>
+
+<div class="workspace">
+  <div class="editor-pane">
+    <div class="tabs" id="tabs"></div>
+    <div id="editor-container"></div>
+    <div class="editor-footer">
+      <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> &nbsp;or&nbsp; <kbd>Ctrl</kbd> <kbd>↵</kbd> to run</span>
+      <button class="run-btn" id="runBtn" onclick="window._run()">Run</button>
+    </div>
+  </div>
+
+  <div class="output-pane">
+    <div class="output-header">
+      <div class="out-tabs">
+        <button class="out-tab active" id="tabText" onclick="window._showTab('text')">Output</button>
+        <button class="out-tab hidden" id="tabChart" onclick="window._showTab('chart')">Chart</button>
+      </div>
+      <button class="clear-btn" onclick="window._clear()">clear</button>
+    </div>
+    <div class="output-body" id="output">
+      <span class="output-empty">Loading…</span>
+    </div>
+    <div class="chart-body" id="chartBody"></div>
+  </div>
+</div>
+
+<!-- Monaco Editor -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.0/min/vs/loader.min.js"></script>
+<script>
+require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.0/min/vs' } })
+window._monacoReady = new Promise(resolve => {
+  require(['vs/editor/editor.main'], () => {
+    monaco.editor.defineTheme('ket-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [
+        { token: 'comment', foreground: '3d4f63', fontStyle: 'italic' },
+        { token: 'keyword', foreground: '54b4c5' },
+        { token: 'string', foreground: 'd4b560' },
+        { token: 'number', foreground: '8bdb78' },
+      ],
+      colors: {
+        'editor.background': '#080a10',
+        'editor.foreground': '#dde4ef',
+        'editor.lineHighlightBackground': '#0c0e1880',
+        'editorLineNumber.foreground': '#2a3040',
+        'editorLineNumber.activeForeground': '#4e5a6b',
+        'editor.selectionBackground': '#54b4c530',
+        'editorCursor.foreground': '#54b4c5',
+        'editorIndentGuide.background1': '#1a1d2e',
+      },
+    })
+
+    window._editor = monaco.editor.create(document.getElementById('editor-container'), {
+      value: '',
+      language: 'javascript',
+      theme: 'ket-dark',
+      minimap: { enabled: false },
+      fontSize: 13,
+      lineHeight: 22,
+      padding: { top: 14, bottom: 14 },
+      scrollBeyondLastLine: false,
+      automaticLayout: true,
+      fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', Menlo, monospace",
+      fontLigatures: true,
+      tabSize: 2,
+      renderLineHighlight: 'line',
+      overviewRulerLanes: 0,
+      hideCursorInOverviewRuler: true,
+      scrollbar: { vertical: 'hidden', horizontal: 'hidden' },
+    })
+
+    window._editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+      () => window._run()
+    )
+
+    resolve()
+  })
+})
+</script>
+
+<script type="module">
+const EXAMPLES = [
+  {
+    name: 'Bell state',
+    code:
+`const { Circuit } = ket
+
+const bell = new Circuit(2).h(0).cnot(0, 1)
+
+console.log(bell.draw())
+console.log()
+console.log('State:', bell.stateAsString())
+console.log()
+console.log('Exact probabilities:')
+const probs = bell.exactProbs()
+for (const [state, p] of Object.entries(probs).sort((a, b) => b[1] - a[1])) {
+  const bar = '█'.repeat(Math.round(p * 40))
+  console.log(\`  |\${state}⟩  \${(p * 100).toFixed(2).padStart(6)}%  \${bar}\`)
+}
+`,
+  },
+  {
+    name: 'GHZ (5q)',
+    code:
+`const { Circuit } = ket
+
+const N = 5
+let c = new Circuit(N).h(0)
+for (let i = 0; i < N - 1; i++) c = c.cnot(i, i + 1)
+
+console.log(c.draw())
+console.log()
+console.log('State:', c.stateAsString())
+console.log()
+const probs = c.exactProbs()
+for (const [s, p] of Object.entries(probs).sort((a, b) => b[1] - a[1])) {
+  const bar = '█'.repeat(Math.round(p * 40))
+  console.log(\`  |\${s}⟩  \${(p * 100).toFixed(2)}%  \${bar}\`)
+}
+`,
+  },
+  {
+    name: "Grover's",
+    code:
+`const { grover } = ket
+
+// Find |101⟩ in a 3-qubit (8-state) search space
+const circ = grover(3, (c) => {
+  c = c.x(1)           // flip q1 → target becomes all-1s
+  c = c.h(2)
+  c = c.ccx(0, 1, 2)  // Toffoli phase kick
+  c = c.h(2)
+  c = c.x(1)
+  return c
+})
+
+console.log(circ.draw())
+console.log()
+const probs = circ.exactProbs()
+for (let i = 0; i < 8; i++) {
+  const s = i.toString(2).padStart(3, '0')
+  const p = probs[s] || 0
+  const bar = '█'.repeat(Math.round(p * 50))
+  const mark = s === '101' ? '  ◀ TARGET' : ''
+  console.log(\`  |\${s}⟩  \${(p * 100).toFixed(2).padStart(6)}%  \${bar}\${mark}\`)
+}
+`,
+  },
+  {
+    name: 'Bernstein-Vazirani',
+    code:
+`const { Circuit } = ket
+
+// Recover a hidden string in a single oracle query
+const secret = [1, 0, 1, 0, 1, 1]
+const n = secret.length
+
+let c = new Circuit(n + 1)
+c = c.x(n).h(n)                         // ancilla → |−⟩
+for (let i = 0; i < n; i++) c = c.h(i)
+for (let i = 0; i < n; i++) {
+  if (secret[i] === 1) c = c.cnot(i, n)
+}
+for (let i = 0; i < n; i++) c = c.h(i)
+
+console.log(c.draw())
+console.log()
+console.log('Secret string:', secret.join(''))
+const probs = c.exactProbs()
+const found = Object.entries(probs)
+  .filter(([s]) => s.startsWith(secret.join('')))
+  .reduce((sum, [, p]) => sum + p, 0)
+console.log(\`P(secret in query register): \${(found * 100).toFixed(4)}%\`)
+console.log(\`Depth: \${c.depth()} — classical needs \${n} queries, quantum needs 1\`)
+`,
+  },
+  {
+    name: 'QFT round-trip',
+    code:
+`const { Circuit } = ket
+
+// QFT then IQFT — should recover the original state exactly
+const N = 4
+let c = new Circuit(N).x(0).x(2)  // |1010⟩
+
+console.log('Initial:', c.stateAsString())
+
+// QFT
+for (let j = N - 1; j >= 0; j--) {
+  c = c.h(j)
+  for (let k = j - 1; k >= 0; k--) c = c.cu1(Math.PI / 2 ** (j - k), k, j)
+}
+for (let i = 0; i < Math.floor(N / 2); i++) c = c.swap(i, N - 1 - i)
+console.log('After QFT:', c.stateAsString())
+
+// IQFT
+for (let i = 0; i < Math.floor(N / 2); i++) c = c.swap(i, N - 1 - i)
+for (let j = 0; j < N; j++) {
+  for (let k = j - 1; k >= 0; k--) c = c.cu1(-Math.PI / 2 ** (j - k), k, j)
+  c = c.h(j)
+}
+
+console.log('After IQFT:', c.stateAsString())
+const p = c.exactProbs()['1010'] || 0
+console.log()
+console.log(\`P(|1010⟩) = \${(p * 100).toFixed(8)}%  (expect 100%)\`)
+console.log('Circuit depth:', c.depth())
+`,
+  },
+  {
+    name: 'Noise models',
+    code:
+`const { Circuit } = ket
+
+const c = new Circuit(2)
+  .h(0).cnot(0, 1)
+  .creg('out', 2)
+  .measure(0, 'out', 0)
+  .measure(1, 'out', 1)
+
+const fmt = (probs) =>
+  Object.entries(probs).sort((a, b) => b[1] - a[1]).map(([s, p]) => {
+    const bar = '█'.repeat(Math.round(p * 40))
+    return \`  |\${s}⟩  \${(p * 100).toFixed(2).padStart(6)}%  \${bar}\`
+  }).join('\\n')
+
+const ideal = c.run({ shots: 4096, seed: 42 })
+console.log('Ideal (4096 shots):')
+console.log(fmt(ideal.probs))
+
+const noisy = c.run({ shots: 4096, seed: 42, noise: 'forte-1' })
+console.log()
+console.log('IonQ Forte-1 noise:')
+console.log(fmt(noisy.probs))
+
+const custom = c.run({ shots: 4096, seed: 42, noise: { p1: 0.005, p2: 0.02, pMeas: 0.01 } })
+console.log()
+console.log('Custom depolarizing (p1=0.5%, p2=2%, pMeas=1%):')
+console.log(fmt(custom.probs))
+
+// T1/T2 relaxation — convert coherence times into per-gate probabilities
+const tGate = 200e-9, T1 = 50e-6, T2 = 30e-6
+const relax = c.run({ shots: 4096, seed: 42, noise: {
+  gamma:  1 - Math.exp(-tGate / T1),                          // amplitude damping
+  lambda: 1 - Math.exp(-2 * tGate * (1 / T2 - 1 / (2 * T1))),  // pure dephasing
+}})
+console.log()
+console.log(\`T1=\${T1 * 1e6}µs T2=\${T2 * 1e6}µs, \${tGate * 1e9}ns gates:\`)
+console.log(fmt(relax.probs))
+
+// Readout error is invertible when you know its rate
+const pMeas = 0.02
+const spam = c.run({ shots: 8192, seed: 42, noise: { pMeas } })
+const fixed = spam.mitigateReadout(pMeas)
+console.log()
+console.log(\`Readout mitigation (pMeas=\${pMeas}):\`)
+console.log(\`  |00⟩ measured \${(spam.probs['00'] * 100).toFixed(2)}%  ->  corrected \${(fixed.probs['00'] * 100).toFixed(2)}%   (ideal 50%)\`)
+`,
+  },
+  {
+    name: 'Backends',
+    code:
+`const { Circuit, qft } = ket
+
+// simulate() inspects the circuit and routes it to the cheapest EXACT backend.
+// Same call every time — only the cost changes, never the answer.
+
+const ghz = (n) => {
+  let c = new Circuit(n).h(0)
+  for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
+  return c
+}
+const phased = (n) => {
+  let c = ghz(n)
+  for (let i = 0; i < n; i++) c = c.rz(0.3, i)   // Rz is non-Clifford
+  return c
+}
+
+const cases = [
+  ['GHZ-8, Clifford gates only', ghz(8)],
+  ['QFT-10, non-Clifford phases', qft(10)],
+  ['GHZ-40 + Rz, too wide for a statevector', phased(40)],
+]
+
+console.log('circuit                                   qubits  backend      time   peak χ')
+for (const [label, c] of cases) {
+  const t0 = Date.now()
+  const d = c.simulate({ shots: 1024, seed: 42 })
+  const ms = Date.now() - t0
+  console.log(
+    label.padEnd(42) +
+    String(c.qubits).padStart(4) +
+    '  ' + d.backend.padEnd(12) +
+    (ms + 'ms').padStart(6) +
+    '  ' + (d.peakChi ?? '—')
+  )
+}
+
+console.log()
+console.log('Clifford → O(n²) tableau. Statevector → exact amplitudes.')
+console.log('MPS → O(n·χ²); 40 qubits would need 2^40 amplitudes otherwise.')
+console.log()
+console.log('Override the crossover with statevectorLimit:')
+const forced = phased(24).simulate({ shots: 256, seed: 1, statevectorLimit: 30 })
+console.log('  phased(24) with statevectorLimit=30 →', forced.backend)
+`,
+  },
+  {
+    name: 'IonQ native',
+    code:
+`const { Circuit, IONQ_DEVICES } = ket
+
+// IonQ's native gate set is first class: gpi, gpi2, ms, vz are real gates,
+// compile() transpiles to them, and toIonQ() emits a submit-ready payload.
+
+const bell = new Circuit(2).h(0).cnot(0, 1)
+console.log('Abstract circuit:')
+console.log(bell.draw())
+
+const native = bell.compile('forte-1')
+console.log()
+console.log("compile('forte-1') → hardware-native:")
+console.log(native.draw())
+console.log()
+console.log('Rz here is a virtual-Z frame change — free on trapped-ion hardware.')
+
+// Identical physics, different gate set
+const a = bell.exactProbs(), b = native.exactProbs()
+const same = Object.keys(a).every(k => Math.abs(a[k] - (b[k] ?? 0)) < 1e-12)
+console.log()
+console.log('Same distribution after transpilation:', same ? 'yes' : 'NO')
+
+console.log()
+console.log('toIonQ() payload:')
+console.log(JSON.stringify(native.toIonQ(), null, 2).split('\\n').slice(0, 12).join('\\n') + '\\n  ... ]')
+
+// Devices carry their native gates and published error rates
+console.log()
+console.log('device     qubits  native gates                 1Q err   2Q err   readout')
+for (const [name, d] of Object.entries(IONQ_DEVICES)) {
+  console.log(
+    name.padEnd(11) + String(d.qubits).padStart(5) + '   ' +
+    d.nativeGates.join(', ').padEnd(28) +
+    (d.noise.p1 * 100).toFixed(3) + '%  ' +
+    (d.noise.p2 * 100).toFixed(2) + '%   ' +
+    (d.noise.pMeas * 100).toFixed(2) + '%'
+  )
+}
+
+// checkDevice throws when a circuit cannot run on the target
+try { new Circuit(40).h(0).checkDevice('forte-1') }
+catch (e) { console.log('\\ncheckDevice(\\'forte-1\\') on 40 qubits →', e.constructor.name + ':', e.message) }
+`,
+  },
+  {
+    name: 'Circuit SVG',
+    code:
+`const { Circuit, grover } = ket
+
+// toSVG() → self-contained SVG string, renders in Chart tab automatically.
+// theme:'dark' matches this playground; omit it for the default light SVG.
+
+const bell = new Circuit(2).h(0).cnot(0, 1)
+console.log('Bell state:')
+console.log(bell.draw())
+bell.toSVG({ theme: 'dark' })
+
+const ghz = new Circuit(4).h(0)
+let c = ghz
+for (let i = 0; i < 3; i++) c = c.cnot(i, i + 1)
+console.log()
+console.log('GHZ (4q):')
+console.log(c.draw())
+c.toSVG({ theme: 'dark' })
+
+const g = grover(3, c => {
+  c = c.x(1); c = c.h(2); c = c.ccx(0, 1, 2); c = c.h(2); c = c.x(1)
+  return c
+})
+console.log()
+console.log("Grover's circuit:")
+console.log(g.draw())
+g.toSVG({ theme: 'dark' })
+`,
+  },
+  {
+    name: 'Bloch sphere',
+    code:
+`const { Circuit } = ket
+
+// blochSphere(q) → 300×300 SVG, renders in Chart tab automatically
+
+const states = [
+  { label: '|0⟩',  c: new Circuit(1) },
+  { label: '|+⟩',  c: new Circuit(1).h(0) },
+  { label: '|1⟩',  c: new Circuit(1).x(0) },
+  { label: '|−⟩',  c: new Circuit(1).h(0).z(0) },
+  { label: '|+i⟩', c: new Circuit(1).h(0).s(0) },
+  { label: '|T⟩',  c: new Circuit(1).h(0).t(0) },
+]
+
+for (const { label, c } of states) {
+  const { theta, phi } = c.blochAngles(0)
+  console.log(\`\${label.padEnd(6)} θ=\${(theta * 180 / Math.PI).toFixed(1).padStart(5)}°  φ=\${(phi * 180 / Math.PI).toFixed(1).padStart(6)}°\`)
+  c.blochSphere(0, { theme: 'dark' })
+}
+`,
+  },
+  {
+    name: 'VQE',
+    code:
+`const { realAmplitudes, vqe, gradient } = ket
+
+// 4-qubit transverse Ising: H = -ΣZᵢZᵢ₊₁ - 0.5·ΣXᵢ
+const H = [
+  { coeff: -1,   ops: 'ZZII' }, { coeff: -1,   ops: 'IZZI' }, { coeff: -1,   ops: 'IIZZ' },
+  { coeff: -0.5, ops: 'XIII' }, { coeff: -0.5, ops: 'IXII' },
+  { coeff: -0.5, ops: 'IIXI' }, { coeff: -0.5, ops: 'IIIX' },
+]
+
+const ansatz = realAmplitudes(4, 2)  // RealAmplitudes(n=4, reps=2) — 12 params
+let params = Array.from({ length: ansatz.paramCount }, (_, i) => 0.1 + (i % 4) * 0.07)
+
+const LR = 0.12, STEPS = 80
+const e0 = vqe(ansatz(params), H)
+for (let step = 0; step < STEPS; step++) {
+  const grad = gradient(ansatz, H, params)
+  params = params.map((p, i) => p - LR * grad[i])
+}
+const energy = vqe(ansatz(params), H)
+
+console.log(\`Ansatz:    RealAmplitudes(n=4, reps=2) · \${ansatz.paramCount} params\`)
+console.log(\`Steps:     \${STEPS}  ·  LR: \${LR}\`)
+console.log(\`E₀ (VQE):  \${energy.toFixed(8)}\`)
+console.log(\`E₀ (exact):-3.42703409\`)
+console.log(\`Error:     \${Math.abs(energy - (-3.42703409)).toExponential(2)}\`)
+console.log(\`Δ energy:  \${((e0 - energy) / Math.abs(e0) * 100).toFixed(1)}% improvement\`)
+`,
+  },
+  {
+    name: "Shor's",
+    code:
+`// Shor's algorithm — real quantum period-finding, then classical factoring.
+//
+// Only N and the base a are given. The period is MEASURED from the counting
+// register, recovered with continued fractions, and then verified against
+// a^r ≡ 1 (mod N) before it is used. Nothing about the answer is precomputed.
+//
+// Classical parts:
+//   • choosing the base a
+//   • building the modular-multiply oracle
+//   • gcd post-processing after measurement
+// Quantum part:
+//   • QPE: superposition → controlled-U^(2^k) → inverse QFT → period
+//
+// TWO HONEST CAVEATS. This shows real period-finding, not an end-to-end speedup:
+//   1. The oracle is an explicit 2^11 x 2^11 permutation matrix, which costs
+//      O(2^n) classical work to build. A real QPU compiles modular arithmetic
+//      down to gates instead — that is what shorBeauregard() does, with nothing
+//      precomputed. Handing a simulator a permutation matrix is the shortcut,
+//      and it is why the total computation here beats nothing.
+//   2. These bases were chosen to have multiplicative order r=4, so three
+//      counting qubits resolve the period. A random base can have a large
+//      order, and t=3 would fail to resolve it.
+
+const { Circuit, modPow, gcd, continuedFractions, applyIqft } = ket
+
+// [N, a] only — 11 work qubits covers N < 2048.
+const TARGETS = [
+  [1763n, 1590n],  // 41 × 43
+  [1927n, 1221n],  // 41 × 47
+  [1961n, 1326n],  // 37 × 53
+  [2041n, 1100n],  // 13 × 157
+  [2047n,  390n],  // 23 × 89
+]
+const [N, a] = TARGETS[Math.floor(Math.random() * TARGETS.length)]
+const n = 11, t = 3
+
+console.log(\`Shor's: factor \${N}   base a=\${a}   circuit: \${t}+\${n}=\${t + n} qubits\`)
+
+// Real Shor's tries the classical shortcut first.
+if (gcd(a, N) > 1n) {
+  const f = gcd(a, N)
+  console.log(\`gcd(\${a}, \${N}) = \${f} — factored classically, no circuit needed\`)
+} else {
+
+// Oracle powers a^(2^k) mod N — computed, not looked up.
+const aPows = Array.from({ length: t }, (_, k) => modPow(a, 1n << BigInt(k), N))
+console.log(\`Oracle powers: \${aPows.map((v, k) => \`a^\${1 << k}=\${v}\`).join('  ')}\`)
+
+// |x⟩ → |a·x mod N⟩ as a permutation matrix. Classical compilation, as on a QPU.
+function mulMatrix(mul) {
+  const dim = 1 << n, m = Number(mul), NN = Number(N)
+  const M = Array.from({ length: dim }, () => new Array(dim).fill(0))
+  for (let x = 0; x < dim; x++) M[x < NN ? (x * m) % NN : x][x] = 1
+  return M
+}
+// Lift to a controlled gate: the first listed qubit is the control.
+function controlled(U) {
+  const dim = 1 << n
+  const C = Array.from({ length: 2 * dim }, (_, i) => {
+    const row = new Array(2 * dim).fill(0)
+    if (i < dim) row[i] = 1
+    return row
+  })
+  for (let i = 0; i < dim; i++) for (let j = 0; j < dim; j++) C[dim + i][dim + j] = U[i][j]
+  return C
+}
+
+let c = new Circuit(t + n).x(t + n - 1)          // work register := |1⟩
+for (let i = 0; i < t; i++) c = c.h(i)           // counting register := |+⟩^t
+
+const workQ = Array.from({ length: n }, (_, i) => t + i)
+for (let k = 0; k < t; k++) {
+  if (aPows[k] === 1n) { console.log(\`  U^\${1 << k} is the identity — skipped\`); continue }
+  console.log(\`  building controlled-U^\${1 << k} (×\${aPows[k]} mod \${N})...\`)
+  c = c.unitary(controlled(mulMatrix(aPows[k])), k, ...workQ)
+}
+
+c = applyIqft(c, t, 0)                           // SDK inverse QFT on the counting register
+
+console.log(\`\\nSimulating \${t + n}-qubit circuit...\`)
+const sv = c.statevector()
+const countProbs = {}
+for (const [idx, amp] of sv) {
+  const p = amp.re * amp.re + amp.im * amp.im
+  if (p < 1e-10) continue
+  // ket bitstrings are q0-leftmost; qubit k carries phase weight 2^k, so the
+  // counting register reads least-significant-first. Reverse it to get m.
+  const bits = idx.toString(2).padStart(t + n, '0').split('').reverse().join('')
+    .slice(0, t).split('').reverse().join('')
+  countProbs[bits] = (countProbs[bits] ?? 0) + p
+}
+
+console.log('\\nQPE — counting register:')
+const maxP = Math.max(...Object.values(countProbs))
+for (const [bits, p] of Object.entries(countProbs).sort((x, y) => parseInt(x[0], 2) - parseInt(y[0], 2))) {
+  const m = parseInt(bits, 2)
+  console.log(\`  m=\${String(m).padStart(2)}  φ=\${m}/\${1 << t}  \${(p * 100).toFixed(1).padStart(5)}%  \${'█'.repeat(Math.round(p / maxP * 28))}\`)
+}
+
+// Period candidates from the measured peaks, via continued fractions — then
+// VERIFIED. An unverified candidate is exactly how a demo ends up "factoring"
+// with a period that isn't one.
+const periods = new Set()
+for (const [bits, p] of Object.entries(countProbs)) {
+  if (p < 0.05) continue
+  const m = parseInt(bits, 2)
+  if (m === 0) continue
+  const r = continuedFractions(m, t, N)
+  if (r > 1n && modPow(a, r, N) === 1n) periods.add(r)
+}
+console.log(\`\\nPeriods recovered: \${[...periods].join(', ') || '(none — retry with another base)'}\`)
+for (const r of periods) console.log(\`  verified: a^\${r} mod \${N} = \${modPow(a, r, N)}\`)
+
+console.log('\\nFactoring:')
+let found = false
+for (const r of [...periods].sort((x, y) => Number(x - y))) {
+  if (r % 2n !== 0n) { console.log(\`  r=\${r} is odd — unusable, need another base\`); continue }
+  const x = modPow(a, r / 2n, N)                 // computed from the measured r
+  if (x === N - 1n) { console.log(\`  a^(r/2) ≡ -1 — degenerate, need another base\`); continue }
+  const f1 = gcd(x - 1n, N), f2 = gcd(x + 1n, N)
+  const f = [f1, f2].find(v => v > 1n && v < N)
+  console.log(\`  r=\${r}   a^(r/2) mod \${N} = \${x}\`)
+  console.log(\`  gcd(\${x}-1, \${N}) = \${f1}    gcd(\${x}+1, \${N}) = \${f2}\`)
+  if (!f) { console.log('  no non-trivial factor from this r'); continue }
+  console.log(\`\\n  \${N} = \${f} × \${N / f}   \${f * (N / f) === N ? '✓' : '✗'}\`)
+  found = true
+  break
+}
+if (!found) console.log('  no factor — Shor\\'s retries with a fresh base a')
+}
+`,
+  },
+]
+
+// ── wait for Monaco, then load ket ───────────────────────────────────────────
+await window._monacoReady
+
+const outputEl = document.getElementById('output')
+let ketModule
+
+try {
+  ketModule = await import('https://unpkg.com/@kirkelliott/ket/dist/ket.min.js')
+  outputEl.innerHTML = '<span class="output-empty">Run a circuit to see output here.</span>'
+} catch (e) {
+  outputEl.innerHTML = `<span class="out-line err">Failed to load ket from CDN.\n${e.message}</span>`
+}
+
+window._ket = ketModule
+
+// ── build tabs ───────────────────────────────────────────────────────────────
+const tabsEl = document.getElementById('tabs')
+
+EXAMPLES.forEach((ex, i) => {
+  const t = document.createElement('div')
+  t.className = 'tab' + (i === 0 ? ' active' : '')
+  t.textContent = ex.name
+  t.addEventListener('click', () => selectTab(i))
+  tabsEl.appendChild(t)
+})
+
+function selectTab(i) {
+  Array.from(tabsEl.children).forEach((t, j) => t.classList.toggle('active', j === i))
+  window._editor.setValue(EXAMPLES[i].code)
+  window._editor.setScrollPosition({ scrollTop: 0 })
+}
+
+selectTab(0)
+
+// ── run ──────────────────────────────────────────────────────────────────────
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+
+window._run = async function () {
+  if (!window._ket) return
+
+  const btn = document.getElementById('runBtn')
+  btn.disabled = true
+  btn.innerHTML = '<span class="spinner"></span>'
+  outputEl.innerHTML = ''
+  outputEl.style.display = ''
+  document.getElementById('chartBody').innerHTML = ''
+  document.getElementById('chartBody').classList.remove('visible')
+  document.getElementById('tabChart').classList.add('hidden')
+  document.getElementById('tabText').classList.add('active')
+  document.getElementById('tabChart').classList.remove('active')
+
+  const logs = []
+  const capturedVisuals = []  // unified: { svg: string }
+
+  // Monkey-patch ket to intercept visual outputs
+  const ket = window._ket
+  const origExactProbs = ket.Circuit?.prototype?.exactProbs
+  const origRun        = ket.Circuit?.prototype?.run
+  const origToSVG      = ket.Circuit?.prototype?.toSVG
+  const origBloch      = ket.Circuit?.prototype?.blochSphere
+  if (origExactProbs) {
+    ket.Circuit.prototype.exactProbs = function(...args) {
+      const result = origExactProbs.apply(this, args)
+      if (result && typeof result === 'object') capturedVisuals.push({ svg: histSVG(result) })
+      return result
+    }
+  }
+  // The playground surface is dark, so SVGs default to the dark theme. An
+  // explicit theme in user code still wins. Options are additive, so this is a
+  // no-op on ket versions that predate the theme option.
+  const withDark = (opts) =>
+    opts && typeof opts === 'object' ? (opts.theme ? opts : { ...opts, theme: 'dark' })
+                                     : { theme: 'dark' }
+
+  if (origRun) {
+    ket.Circuit.prototype.run = function(...args) {
+      const result = origRun.apply(this, args)
+      if (result?.toSVG) capturedVisuals.push({ svg: result.toSVG({ theme: 'dark' }) })
+      return result
+    }
+  }
+  if (origToSVG) {
+    ket.Circuit.prototype.toSVG = function(...args) {
+      const result = origToSVG.call(this, withDark(args[0]))
+      if (result) capturedVisuals.push({ svg: result })
+      return result
+    }
+  }
+  if (origBloch) {
+    ket.Circuit.prototype.blochSphere = function(q, ...rest) {
+      const result = origBloch.call(this, q, withDark(rest[0]))
+      if (result) capturedVisuals.push({ svg: result })
+      return result
+    }
+  }
+
+  const origLog = console.log
+  const origErr = console.error
+  const origWarn = console.warn
+
+  const capture = (type) => (...args) => {
+    origLog(...args)
+    logs.push({
+      type,
+      text: args.map(a =>
+        a === null ? 'null'
+        : a === undefined ? 'undefined'
+        : typeof a === 'object' ? JSON.stringify(a, null, 2)
+        : String(a)
+      ).join(' '),
+    })
+  }
+  console.log = capture('log')
+  console.error = capture('err')
+  console.warn = capture('warn')
+
+  try {
+    const fn = new AsyncFunction(`
+      const ket = window._ket;
+      ${window._editor.getValue()}
+    `)
+    await fn()
+  } catch (e) {
+    logs.push({ type: 'err', text: e.stack || e.message || String(e) })
+  } finally {
+    console.log = origLog
+    console.error = origErr
+    console.warn = origWarn
+    if (origExactProbs) ket.Circuit.prototype.exactProbs = origExactProbs
+    if (origRun)        ket.Circuit.prototype.run        = origRun
+    if (origToSVG)      ket.Circuit.prototype.toSVG      = origToSVG
+    if (origBloch)      ket.Circuit.prototype.blochSphere = origBloch
+    btn.disabled = false
+    btn.textContent = 'Run'
+  }
+
+  if (logs.length === 0) {
+    outputEl.innerHTML = '<span class="output-empty">No output. Use console.log() to display results.</span>'
+  } else {
+    outputEl.innerHTML = logs.map(l => {
+      const cls = l.type === 'err' ? 'err' : l.type === 'warn' ? 'dim' : ''
+      return `<div><span class="out-line ${cls}">${esc(l.text)}</span></div>`
+    }).join('')
+    outputEl.scrollTop = 0
+  }
+
+  // Render charts — skip if spammy (e.g. VQE gradient loop calling exactProbs hundreds of times)
+  const toShow = capturedVisuals.length > 20 ? [] : capturedVisuals
+  if (toShow.length > 0) {
+    const chartBody = document.getElementById('chartBody')
+    chartBody.innerHTML = toShow.map(({ svg }) =>
+      svg ? `<div class="chart-item">${svg}</div>` : ''
+    ).filter(Boolean).join('')
+    if (chartBody.innerHTML) {
+      document.getElementById('tabChart').classList.remove('hidden')
+      window._showTab('chart')
+    }
+  }
+}
+
+window._clear = function () {
+  outputEl.innerHTML = '<span class="output-empty">Run a circuit to see output here.</span>'
+  document.getElementById('chartBody').innerHTML = ''
+  document.getElementById('chartBody').classList.remove('visible')
+  document.getElementById('tabChart').classList.add('hidden')
+  window._showTab('text')
+}
+
+window._showTab = function (which) {
+  const isText = which === 'text'
+  document.getElementById('tabText').classList.toggle('active', isText)
+  document.getElementById('tabChart').classList.toggle('active', !isText)
+  outputEl.style.display = isText ? '' : 'none'
+  document.getElementById('chartBody').style.display = isText ? 'none' : 'flex'
+}
+
+function histSVG(probs, title = '') {
+  const entries = Object.entries(probs).filter(([, p]) => p > 0).sort(([a], [b]) => a.localeCompare(b))
+  if (!entries.length) return ''
+  const n = entries.length
+  const barW = 14, barStep = 20
+  const barsSpan = n * barStep - 6
+  const totalW = Math.max(300, barsSpan + 120)
+  const ml = Math.round((totalW - barsSpan) / 2)
+  const baseline = 170, maxBarH = 115, totalH = 240
+  const maxP = entries.reduce((m, [, p]) => p > m ? p : m, 0)
+  const hi = new Set(entries.filter(([, p]) => p >= maxP * 0.8).map(([bs]) => bs))
+  const possible = 2 ** entries[0][0].length
+  const countLabel = n === possible ? `all ${n}` : `${n} of ${possible}`
+  const sub = title ? `${title} (${countLabel} states)` : `measurement outcomes (${countLabel} states)`
+  const els = [
+    `<rect width="${totalW}" height="${totalH}" fill="#0c0e18"/>`,
+    `<text x="${Math.round(totalW/2)}" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">${sub}</text>`,
+  ]
+  for (let i = 0; i < n; i++) {
+    const [bs, p] = entries[i]
+    const x = ml + i * barStep
+    const cx = x + barW / 2
+    const barH = (p / maxP) * maxBarH
+    const y = baseline - barH
+    const isHi = hi.has(bs)
+    els.push(`<rect x="${x}" y="${y.toFixed(2)}" width="${barW}" height="${barH.toFixed(2)}" rx="2" fill="${isHi ? '#54b4c5' : '#2a2d3e'}"/>`)
+    if (isHi) {
+      els.push(`<text x="${Math.round(cx)}" y="${Math.round(y - 8)}" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">${(p*100).toFixed(0)}%</text>`)
+      els.push(`<text x="${Math.round(cx)}" y="${baseline+18}" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 ${Math.round(cx)} ${baseline+18})">${bs}</text>`)
+    }
+  }
+  els.push(`<line x1="${ml-1}" y1="${baseline}" x2="${ml+barsSpan+2}" y2="${baseline}" stroke="#2a2d3e" stroke-width="1"/>`)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">${els.join('')}</svg>`
+}
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+</script>
+</body>
+</html>

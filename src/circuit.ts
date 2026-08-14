@@ -369,12 +369,52 @@ export interface NoiseParams {
 
 /** Hardware specs and noise parameters for a quantum device. */
 export interface DeviceInfo {
+  /** Operator of the machine. */
+  readonly vendor:       'IonQ' | 'IBM' | 'Quantinuum'
   /** Maximum number of qubits the device supports. */
   readonly qubits:       number
-  /** Hardware-native gate set, if applicable (IonQ devices). */
+  /**
+   * Whether the machine still accepts jobs.
+   *
+   * Retired entries are kept so historical results stay reproducible, but
+   * submitting to one will be rejected by the vendor.
+   */
+  readonly status:       'available' | 'retired'
+  /**
+   * Qubit connectivity. `'all-to-all'` (trapped ion) means any pair can interact
+   * directly; `'heavy-hex'` (IBM superconducting) needs SWAP networks for
+   * non-adjacent pairs, which multiplies two-qubit gate count and error.
+   */
+  readonly connectivity: 'all-to-all' | 'heavy-hex'
+  /**
+   * Hardware-native gate set, as reported by the vendor.
+   *
+   * Informational only — nothing in ket consumes it. IonQ accepts abstract gates
+   * and compiles them itself, so `checkDevice` validates against the gates IonQ's
+   * JSON format can express, not against this list.
+   */
   readonly nativeGates?: readonly string[]
-  /** Published depolarizing + readout noise parameters. */
+  /**
+   * Depolarizing + readout error rates; see `source` for provenance.
+   *
+   * `p1`/`p2` are vendor-published where the `source` says so. **`pMeas` is not
+   * published by any of these vendors** in the material used to build this table
+   * — those values are inherited from earlier revisions and are unattributed.
+   * Treat readout error as indicative.
+   */
   readonly noise:        Readonly<NoiseParams>
+  /**
+   * Whether `noise` came from the vendor or is a representative estimate.
+   *
+   * This is a field rather than a comment because the distinction is load-bearing:
+   * ket previously shipped IonQ rates that were 2.5x optimistic against IonQ's own
+   * published parameters, and nothing in the type made that checkable. Anything
+   * marked `'estimated'` is a plausible profile for hardware of that class, not a
+   * calibration of the named machine.
+   */
+  readonly confidence:   'vendor-published' | 'estimated'
+  /** Where these figures come from, and as of when. */
+  readonly source:       string
 }
 
 /** @deprecated Use `DeviceInfo` instead. */
@@ -396,17 +436,89 @@ export type IonQDeviceInfo = DeviceInfo & { readonly nativeGates: readonly strin
  *   `h1-1`, `h2-1`
  */
 export const DEVICES: Readonly<Record<string, DeviceInfo>> = {
-  // ── IonQ ──────────────────────────────────────────────────────────────────
-  'aria-1':  { qubits:  25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],       noise: { p1: 0.0003, p2: 0.005,  pMeas: 0.004  } },
-  'forte-1': { qubits:  36, nativeGates: ['gpi', 'gpi2', 'ms', 'vz', 'zz'], noise: { p1: 0.0001, p2: 0.002,  pMeas: 0.002  } },
-  'harmony': { qubits:  11, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'],        noise: { p1: 0.001,  p2: 0.015,  pMeas: 0.01   } },
-  // ── IBM Quantum ───────────────────────────────────────────────────────────
-  'ibm_sherbrooke': { qubits: 127, noise: { p1: 2.4e-4, p2: 7.4e-3, pMeas: 1.35e-2 } },
-  'ibm_brisbane':   { qubits: 127, noise: { p1: 2.4e-4, p2: 7.6e-3, pMeas: 1.35e-2 } },
-  'ibm_torino':     { qubits: 133, noise: { p1: 2.0e-4, p2: 3.0e-3, pMeas: 1.0e-2  } },
-  // ── Quantinuum ────────────────────────────────────────────────────────────
-  'h1-1': { qubits:  20, noise: { p1: 1.8e-5, p2: 9.7e-4, pMeas: 2.3e-3 } },
-  'h2-1': { qubits:  56, noise: { p1: 1.9e-5, p2: 1.1e-3, pMeas: 1.0e-3 } },
+  // ── IonQ ───────────────────────────────────────────────────────────────────
+  // Fleet status and native gates from the public GET /v0.3/backends endpoint.
+  // r_1q / r_2q are IonQ's own published depolarizing parameters. Note these are
+  // deliberately *not* experimental error rates — IonQ states the simplified
+  // model's parameters should not be compared directly to measured fidelities.
+  // Refresh with `node scripts/refresh-ionq-devices.ts`.
+  'aria-1': {
+    vendor: 'IonQ', qubits: 25, status: 'retired', connectivity: 'all-to-all',
+    nativeGates: ['gpi', 'gpi2', 'ms'],
+    noise: { p1: 0.0005, p2: 0.0133, pMeas: 0.004 },
+    confidence: 'vendor-published',
+    source: 'IonQ noise-model docs r_1q/r_2q; pMeas estimated. Status via /v0.3/backends, 2026-08',
+  },
+  'aria-2': {
+    vendor: 'IonQ', qubits: 25, status: 'retired', connectivity: 'all-to-all',
+    nativeGates: ['gpi', 'gpi2', 'ms'],
+    noise: { p1: 0.0006573333333333332, p2: 0.01856, pMeas: 0.004 },
+    confidence: 'vendor-published',
+    source: 'IonQ noise-model docs r_1q/r_2q; pMeas estimated. Status via /v0.3/backends, 2026-08',
+  },
+  'forte-1': {
+    vendor: 'IonQ', qubits: 36, status: 'available', connectivity: 'all-to-all',
+    nativeGates: ['gpi', 'gpi2', 'zz'],
+    noise: { p1: 0.0002666666666666667, p2: 0.004949333333333333, pMeas: 0.002 },
+    confidence: 'vendor-published',
+    source: 'IonQ noise-model docs r_1q/r_2q, pre-2025-09 Forte model; pMeas estimated. Status via /v0.3/backends, 2026-08',
+  },
+  'forte-enterprise-1': {
+    vendor: 'IonQ', qubits: 36, status: 'available', connectivity: 'all-to-all',
+    nativeGates: ['gpi', 'gpi2', 'zz'],
+    noise: { p1: 0.0002666666666666667, p2: 0.004949333333333333, pMeas: 0.002 },
+    confidence: 'estimated',
+    source: 'Forte-1 figures as a stand-in — IonQ has not published the 2025-09 Enterprise model',
+  },
+  'harmony': {
+    vendor: 'IonQ', qubits: 11, status: 'retired', connectivity: 'all-to-all',
+    nativeGates: ['gpi', 'gpi2', 'ms'],
+    noise: { p1: 0.001, p2: 0.015, pMeas: 0.01 },
+    confidence: 'estimated',
+    source: 'Legacy IonQ figures; machine retired 2024-09 and its noise model withdrawn 2025-07',
+  },
+  // ── IBM Quantum ────────────────────────────────────────────────────────────
+  // IBM recalibrates daily, so these are published snapshots, not live values —
+  // fetch current calibration from IBM's API if you need precision. IBM's fleet
+  // has moved to Heron r2/r3 (156q) and Nighthawk (120q), which are absent here
+  // because no per-device error rates could be sourced without an IBM account.
+  'ibm_brisbane': {
+    vendor: 'IBM', qubits: 127, status: 'available', connectivity: 'heavy-hex',
+    noise: { p1: 2.4e-4, p2: 7.6e-3, pMeas: 1.35e-2 },
+    confidence: 'estimated',
+    source: 'Representative Eagle-r3 profile. IBM publishes per-device calibration only behind an account, so these are not vendor-attested',
+  },
+  'ibm_sherbrooke': {
+    vendor: 'IBM', qubits: 127, status: 'retired', connectivity: 'heavy-hex',
+    noise: { p1: 2.4e-4, p2: 7.4e-3, pMeas: 1.35e-2 },
+    confidence: 'estimated',
+    source: 'Representative Eagle-r3 profile, not vendor-attested; retired per IBM Quantum announcements',
+  },
+  'ibm_torino': {
+    vendor: 'IBM', qubits: 133, status: 'retired', connectivity: 'heavy-hex',
+    noise: { p1: 2.0e-4, p2: 3.0e-3, pMeas: 1.0e-2 },
+    confidence: 'estimated',
+    source: 'Representative Heron-r1 profile, not vendor-attested; retired ~2026-04 per IBM Quantum announcements',
+  },
+  // ── Quantinuum ─────────────────────────────────────────────────────────────
+  'helios': {
+    vendor: 'Quantinuum', qubits: 98, status: 'available', connectivity: 'all-to-all',
+    noise: { p1: 2.5e-5, p2: 7.9e-4, pMeas: 1.0e-3 },
+    confidence: 'vendor-published',
+    source: 'Quantinuum published fidelities: 1q 99.9975%, 2q 99.921%; pMeas estimated',
+  },
+  'h2-1': {
+    vendor: 'Quantinuum', qubits: 56, status: 'available', connectivity: 'all-to-all',
+    noise: { p1: 1.9e-5, p2: 1.1e-3, pMeas: 1.0e-3 },
+    confidence: 'estimated',
+    source: 'Representative H2 profile, not vendor-attested',
+  },
+  'h1-1': {
+    vendor: 'Quantinuum', qubits: 20, status: 'retired', connectivity: 'all-to-all',
+    noise: { p1: 1.8e-5, p2: 9.7e-4, pMeas: 2.3e-3 },
+    confidence: 'estimated',
+    source: 'Representative H1 profile, not vendor-attested; cloud H1 sunset 2025-10-15 (Reimei, Japan, continues)',
+  },
 }
 
 /** IonQ-specific entries — used by `checkDevice()` and `compile()`. */
@@ -545,6 +657,12 @@ export interface IonQGate {
   target?:  number
   targets?: [number, number]
   control?: number
+  /**
+   * Control qubits for a natively-controlled gate. IonQ names these by the base
+   * gate plus this array — `{gate:'x', controls:[a,b], target:t}` is a Toffoli —
+   * rather than by a compound name such as `ccx`.
+   */
+  controls?: readonly number[]
   rotation?: number
   phase?:   number
   phases?:  [number, number]
@@ -1553,6 +1671,25 @@ function collectParams(ops: readonly Op[]): Set<string> {
 
 // ─── Circuit ──────────────────────────────────────────────────────────────────
 
+/** Result of {@link Circuit.gateCounts}. */
+export interface GateCounts {
+  /** Every gate, counting a Toffoli as one gate. */
+  total: number
+  /** Gates acting on a single qubit. */
+  oneQubit: number
+  /**
+   * Two-qubit-equivalent count: genuine two-qubit gates, plus 6 for each
+   * three-qubit gate, that being the standard Toffoli/Fredkin decomposition.
+   *
+   * This is the number hardware feasibility turns on — two-qubit error rates
+   * exceed single-qubit rates by one to two orders of magnitude on every
+   * device in `DEVICES`, so (1-p2)^twoQubit dominates the success probability.
+   */
+  twoQubit: number
+  /** Occurrences per gate name, for finer accounting such as T-count. */
+  byName: Record<string, number>
+}
+
 /** Options for {@link Circuit.runStabilizerRank}. */
 export interface StabilizerRankRunOptions {
   /** Number of measurement shots. Default 1024. */
@@ -2304,7 +2441,7 @@ export class Circuit {
    * Validate that this circuit can be submitted to the named IonQ device.
    * Throws a `TypeError` listing every issue found:
    *   - qubit count exceeds device capacity
-   *   - gates that have no IonQ JSON representation (use `decompose()` or replace them)
+   *   - gates that have no IonQ JSON representation (use `toIonQBasis()` to expand them)
    *
    * Call this before `toIonQ()` to get a complete error report rather than a
    * first-failure throw.
@@ -2316,19 +2453,36 @@ export class Circuit {
     if (this.qubits > info.qubits)
       issues.push(`circuit uses ${this.qubits} qubits; ${name} supports at most ${info.qubits}`)
 
-    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','t','ti','v','vi','rx','ry','rz','r2','r4','r8','gpi','gpi2','vz','id'])
+    // `sdg`/`tdg`/`srn`/`srndg` are ket aliases for `si`/`ti`/`v`/`vi`. They are
+    // the same gates, so rejecting one spelling and accepting the other would be
+    // an accident of naming rather than a device limitation.
+    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','sdg','t','ti','tdg','v','vi','srn','srndg','rx','ry','rz','r2','r4','r8','gpi','gpi2','vz','id'])
     const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
+    // Must mirror what toIonQ() will actually emit, or a circuit passes
+    // pre-flight and then fails to serialize, or vice versa.
+    const IONQ_ALIAS: Readonly<Record<string, string>> = { sdg: 'si', tdg: 'ti', srn: 'v', srndg: 'vi' }
+    const IONQ_CONTROLLABLE = new Set(['x','y','z','rx','ry','rz','h','s','si','v','vi','t','ti'])
     const seen = new Set<string>()
 
     for (const op of flattenOps(this.#ops)) {
       if (op.kind === 'cnot' || op.kind === 'swap' || op.kind === 'barrier') continue
       if (op.kind === 'single' && op.meta && IONQ_SINGLE.has(op.meta.name)) continue
       if (op.kind === 'two'    && op.meta && IONQ_TWO.has(op.meta.name))    continue
+      if (op.kind === 'toffoli') continue                      // emitted as controlled x
+      if (op.kind === 'controlled' && op.meta?.name.startsWith('c')) {
+        const b = op.meta.name.slice(1)
+        if (IONQ_CONTROLLABLE.has(IONQ_ALIAS[b] ?? b)) continue
+      }
       const label = (op as { meta?: GateMeta }).meta?.name ?? op.kind
       if (!seen.has(label)) { seen.add(label); issues.push(`gate '${label}' is not supported on ${name}`) }
     }
 
-    if (issues.length) throw new TypeError(`Circuit is not compatible with ${name}:\n  - ${issues.join('\n  - ')}`)
+    if (issues.length) {
+      // Most unsupported gates are ones toIonQBasis() expands, so say so here
+      // rather than leaving the caller to discover the method.
+      const hint = seen.size ? '\nCall toIonQBasis() to expand unsupported gates into IonQ ones.' : ''
+      throw new TypeError(`Circuit is not compatible with ${name}:\n  - ${issues.join('\n  - ')}${hint}`)
+    }
   }
 
   // ── IonQ JSON import / export ────────────────────────────────────────────
@@ -2336,16 +2490,49 @@ export class Circuit {
   /**
    * Parse an `ionq.circuit.v0` JSON object into a `Circuit`.
    *
-   * Angle convention: `rotation` fields are in π-radians (1.0 = π rad);
-   * `phase` / `phases` fields are in turns (1.0 = 2π rad).
+   * Angle convention: `rotation` fields are in radians, matching IonQ's QIS
+   * gateset (their example: Rx(π/2) is `rotation: 1.5708`). The `phase` /
+   * `phases` fields of the native gates gpi/gpi2/ms are in turns (1.0 = 2π rad).
+   * The two conventions genuinely differ; do not unify them.
    */
   static fromIonQ({ qubits, circuit }: IonQCircuit): Circuit {
     let c = new Circuit(qubits)
     for (const g of circuit) {
       const t  = g.target  ?? 0
       const [a, b] = g.targets ?? [0, 1]
-      const rot = (g.rotation ?? 0) * Math.PI
+      const rot = g.rotation ?? 0
       const ph  = (g.phase   ?? 0) * 2 * Math.PI
+
+      // A `controls` array turns the base gate into its controlled form; IonQ
+      // has no compound `ccx`/`crz` names. Handled before the switch so every
+      // base gate below can assume it is uncontrolled.
+      const ctrl = g.controls ?? (g.control !== undefined ? [g.control] : [])
+      if (ctrl.length) {
+        const [k0, k1] = ctrl
+        if (ctrl.length === 2 && g.gate === 'x') { c = c.ccx(k0!, k1!, t); continue }
+        if (ctrl.length === 1) {
+          switch (g.gate) {
+            case 'x':
+            case 'not':
+            case 'cnot': c = c.cnot(k0!, t);    continue
+            case 'y':  c = c.cy(k0!, t);        continue
+            case 'z':  c = c.cz(k0!, t);        continue
+            case 'h':  c = c.ch(k0!, t);        continue
+            case 's':  c = c.cs(k0!, t);        continue
+            case 'si': c = c.csdg(k0!, t);      continue
+            case 't':  c = c.ct(k0!, t);        continue
+            case 'ti': c = c.ctdg(k0!, t);      continue
+            case 'v':  c = c.csrn(k0!, t);      continue
+            case 'rx': c = c.crx(rot, k0!, t);  continue
+            case 'ry': c = c.cry(rot, k0!, t);  continue
+            case 'rz': c = c.crz(rot, k0!, t);  continue
+            case 'swap': c = c.cswap(k0!, a!, b!); continue
+          }
+        }
+        throw new TypeError(
+          `IonQ gate '${g.gate}' with ${ctrl.length} control(s) has no ket equivalent`)
+      }
+
       switch (g.gate) {
         case 'h':    c = c.h(t);  break
         case 'x':    c = c.x(t);  break
@@ -2382,14 +2569,78 @@ export class Circuit {
   }
 
   /**
+   * Rewrite gates IonQ has no representation for into ones it does.
+   *
+   * `toIonQ()` is a serializer, not a compiler: it rejects anything outside
+   * IonQ's gate set rather than silently expanding it, so the gate count you
+   * inspect is the gate count you send. This method is the explicit expansion
+   * step, kept separate so that property holds.
+   *
+   * Handles the gates ket's own algorithms emit — `u1`, `cu1`, `cswap`, `ccx`.
+   * QFT and modular-exponentiation circuits are built almost entirely from
+   * `cu1`, so without this they cannot be exported at all. Anything else is
+   * passed through untouched for `checkDevice()` / `toIonQ()` to report.
+   *
+   * Each rule is exact up to global phase; `u1` and `cu1` expand to `rz`, which
+   * differs from `u1` by a phase of e^(-i0/2) that is unobservable.
+   *
+   * Expansion is costly: every `cswap` becomes 17 gates and every `cu1` 5, so
+   * check `gateCounts()` afterwards before submitting.
+   *
+   * @example
+   * const native = shorCircuit(15n, 7n).toIonQBasis()
+   * native.checkDevice('forte-1')
+   * await submitIonQ(native.toIonQ(), { apiKey })
+   */
+  toIonQBasis(): Circuit {
+    // Build replacements with the public builder so gate matrices come from the
+    // same source as everywhere else, then splice the resulting ops inline.
+    const expand = (build: (c: Circuit) => Circuit): readonly FlatOp[] =>
+      flattenOps(build(new Circuit(this.qubits)).#ops)
+
+    const out: FlatOp[] = []
+    for (const op of flattenOps(this.#ops)) {
+      const name = (op as { meta?: GateMeta }).meta?.name
+      if (op.kind === 'single' && name === 'u1') {
+        out.push(...expand(c => c.rz(op.meta!.params![0]!, op.q)))
+      } else if (op.kind === 'controlled' && name === 'cu1') {
+        // cu1 is a controlled *phase*; crz is a controlled *rotation*. They
+        // differ by rz(0/2) on the control, which is a relative phase between
+        // control branches and so cannot be dropped as global.
+        const th = op.meta!.params![0]!, { control: k, target: t } = op
+        out.push(...expand(c => c.rz(th / 2, k).crz(th, k, t)))
+      } else if (op.kind === 'cswap') {
+        // IonQ rejects `swap` carrying a `controls` array, but accepts a
+        // controlled `x`, so route through toffoli rather than to Clifford+T.
+        const { control: k, a, b } = op
+        out.push(...expand(c => c.cnot(b, a).ccx(k, a, b).cnot(b, a)))
+      } else {
+        // toffoli and other controlled gates serialize natively; leave them be.
+        out.push(op)
+      }
+    }
+    return new Circuit(this.qubits, out, this.#cregs, this.#gates)
+  }
+
+  /**
    * Serialize to an `ionq.circuit.v0` JSON object ready for IonQ Cloud or qsim.
    *
    * Throws `TypeError` for any gate that has no IonQ JSON representation
    * (controlled variants, U-gates, XY/iSWAP, mid-circuit measurement, etc.).
+   * Call `toIonQBasis()` first to expand those into supported gates.
    */
   toIonQ(): IonQCircuit {
-    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','t','ti','v','vi','rx','ry','rz','r2','r4','r8','gpi','gpi2'])
+    const IONQ_SINGLE = new Set(['h','x','y','z','s','si','sdg','t','ti','tdg','v','vi','srn','srndg','rx','ry','rz','r2','r4','r8','gpi','gpi2'])
     const IONQ_TWO    = new Set(['xx','yy','zz','ms'])
+    // IonQ names the daggered gates si/ti/vi; ket also spells them sdg/tdg/srndg.
+    // Normalise on export so either spelling produces a payload IonQ accepts.
+    const IONQ_ALIAS: Readonly<Record<string, string>> = { sdg: 'si', tdg: 'ti', srn: 'v', srndg: 'vi' }
+    // Base gates IonQ accepts under a `controls` array, from its own parser's
+    // legal set. Membership is necessary but not sufficient: `swap` is listed
+    // yet the API rejects a controlled swap, so only the single-qubit members
+    // are emitted this way. Controlled `x` and `rz` are verified against the
+    // live API; the rest rest on IonQ's published list.
+    const IONQ_CONTROLLABLE = new Set(['x','y','z','rx','ry','rz','h','s','si','v','vi','t','ti'])
     const circuit: IonQGate[] = []
     for (const op of flattenOps(this.#ops)) {
       switch (op.kind) {
@@ -2406,13 +2657,13 @@ export class Circuit {
             // Identity gate has no IonQ JSON representation; omit (no effect on state)
           } else if (op.meta?.name === 'vz') {
             // VirtualZ = Rz; IonQ has no vz gate, emit as rz
-            circuit.push({ gate: 'rz', target: op.q, rotation: op.meta.params![0]! / Math.PI })
+            circuit.push({ gate: 'rz', target: op.q, rotation: op.meta.params![0]! })
           } else if (op.meta && IONQ_SINGLE.has(op.meta.name)) {
             const { name, params } = op.meta
-            const g: IonQGate = { gate: name, target: op.q }
+            const g: IonQGate = { gate: IONQ_ALIAS[name] ?? name, target: op.q }
             if (params) {
               if (name === 'gpi' || name === 'gpi2') g.phase    = params[0]! / (2 * Math.PI)
-              else                                   g.rotation = params[0]! / Math.PI
+              else                                   g.rotation = params[0]!
             }
             circuit.push(g)
           } else {
@@ -2427,7 +2678,7 @@ export class Circuit {
             const g: IonQGate = { gate: name, targets: [op.a, op.b] }
             if (params) {
               if (name === 'ms') g.phases   = [params[0]! / (2 * Math.PI), params[1]! / (2 * Math.PI)]
-              else               g.rotation = params[0]! / Math.PI
+              else               g.rotation = params[0]!
             }
             circuit.push(g)
           } else {
@@ -2437,11 +2688,24 @@ export class Circuit {
           break
         }
         case 'controlled': {
+          // IonQ expresses a controlled gate as the base gate plus a `controls`
+          // array — `{gate:'rz', controls:[c], target:t}`, not `{gate:'crz'}`.
+          // Verified live: a control that is not satisfied leaves the target
+          // untouched, so the field is honoured rather than ignored.
           const n = op.meta?.name ?? 'controlled'
+          const base = n.startsWith('c') ? IONQ_ALIAS[n.slice(1)] ?? n.slice(1) : ''
+          if (base && IONQ_CONTROLLABLE.has(base)) {
+            const g: IonQGate = { gate: base, controls: [op.control], target: op.target }
+            const params = op.meta?.params
+            if (params) g.rotation = params[0]!
+            circuit.push(g)
+            break
+          }
           throw new TypeError(`Gate '${n}' is not serializable to IonQ JSON`)
         }
         case 'toffoli':
-          throw new TypeError(`Gate 'toffoli' is not serializable to IonQ JSON`)
+          circuit.push({ gate: 'x', controls: [op.c1, op.c2], target: op.target })
+          break
         case 'cswap':
           throw new TypeError(`Gate 'cswap' is not serializable to IonQ JSON`)
         case 'measure':
@@ -4694,6 +4958,46 @@ export class Circuit {
    * Barriers are scheduling hints only and do not increment depth.
    * IfOps recurse into their inner ops.
    */
+  /**
+   * Count the gates in this circuit, by arity and by name.
+   *
+   * Subcircuits are expanded first, so the counts describe what would actually
+   * execute. Barriers, measurements and resets are excluded — they are not
+   * gates and carry no gate error.
+   *
+   * @example
+   * const { twoQubit, byName } = circuit.gateCounts()
+   * const pOk = (1 - DEVICES['forte-1'].noise.p2) ** twoQubit   // survival odds
+   * byName['t']                                                 // T-count
+   */
+  gateCounts(): GateCounts {
+    const byName: Record<string, number> = {}
+    let total = 0, oneQubit = 0, twoQubit = 0
+
+    for (const op of flattenOps(this.#ops)) {
+      let name: string, arity: number
+      switch (op.kind) {
+        case 'barrier': case 'measure': case 'reset': continue
+        case 'cnot':    name = 'cnot';  arity = 2; break
+        case 'swap':    name = 'swap';  arity = 2; break
+        case 'toffoli': name = 'ccx';   arity = 3; break
+        case 'cswap':   name = 'cswap'; arity = 3; break
+        case 'csrswap': name = 'csrswap'; arity = 3; break
+        case 'unitary': name = 'unitary'; arity = op.qubits.length; break
+        case 'if': continue
+        default:
+          name = (op as { meta?: GateMeta }).meta?.name ?? op.kind
+          arity = op.kind === 'single' ? 1 : 2
+      }
+      total++
+      byName[name] = (byName[name] ?? 0) + 1
+      if (arity === 1) oneQubit++
+      else if (arity === 2) twoQubit++
+      else twoQubit += 6 * (arity - 2)   // Toffoli/Fredkin -> 6 two-qubit gates
+    }
+    return { total, oneQubit, twoQubit, byName }
+  }
+
   depth(): number {
     const stepOf = new Array<number>(this.qubits).fill(0)
 

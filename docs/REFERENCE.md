@@ -91,7 +91,7 @@ const result = ghz.runClifford({ shots: 1024, seed: 42 })
 // result.probs → { '00000': ~0.5, '11111': ~0.5 }
 
 // Add noise — same interface as statevector/density matrix
-ghz.runClifford({ shots: 10000, noise: 'aria-1' })
+ghz.runClifford({ shots: 10000, noise: 'forte-1' })
 ghz.runClifford({ shots: 10000, noise: { p1: 0.001, p2: 0.005, pMeas: 0.004 } })
 ```
 
@@ -110,7 +110,7 @@ import { Circuit } from '@kirkelliott/ket'
 const circuit = new Circuit(2).h(0).cnot(0, 1)
 
 // Run with a named device noise profile
-const dm = circuit.dm({ noise: 'aria-1' })
+const dm = circuit.dm({ noise: 'forte-1' })
 
 console.log(dm.purity())     // < 1 under depolarizing noise
 console.log(dm.entropy())    // von Neumann entropy in bits
@@ -336,7 +336,7 @@ import type { DenseOptions } from '@kirkelliott/ket'
 
 circuit.exactProbs({ dense: { maxQubits: 0 } })          // never promote
 circuit.run({ shots: 1024, dense: { maxQubits: 20 } })   // lower the memory ceiling
-circuit.dm({ noise: 'aria-1', dense: { fill: 8 } })      // promote sooner
+circuit.dm({ noise: 'forte-1', dense: { fill: 8 } })     // promote sooner
 ```
 
 | Field | Statevector default | Density matrix default | Meaning |
@@ -474,45 +474,86 @@ ket ships noise profiles for IonQ, IBM, and Quantinuum hardware. All profiles ar
 import { DEVICES, IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
 
 // Query any device
-const aria  = DEVICES['aria-1']       // { qubits: 25, nativeGates: [...], noise: {...} }
-const eagle = DEVICES['ibm_sherbrooke'] // { qubits: 127, noise: {...} }
-const h1    = DEVICES['h1-1']           // { qubits: 20, noise: {...} }
+const forte  = DEVICES['forte-1']       // { vendor, qubits, status, connectivity, nativeGates, noise, source }
+const eagle  = DEVICES['ibm_brisbane']  // { qubits: 127, noise: {...} }
+const helios = DEVICES['helios']        // { qubits: 98, noise: {...} }
+
+// Retired machines stay queryable so old results reproduce; check before submitting
+DEVICES['aria-1'].status                // 'retired'
 
 // Use by name in any simulation method
-circuit.run({ shots: 1000, noise: 'ibm_sherbrooke' })
+circuit.run({ shots: 1000, noise: 'ibm_brisbane' })
 circuit.runClifford({ shots: 10000, noise: 'forte-1' })
 circuit.dm({ noise: 'h2-1' })
 
 // Create a circuit sized for a specific device
-const c = Circuit.device('aria-1')  // new Circuit(25)
+const c = Circuit.device('forte-1')  // new Circuit(36)
 ```
 
 **All devices** (`DEVICES`):
 
-| Device | Vendor | Qubits | p1 (1Q) | p2 (2Q) | pMeas |
-|---|---|---|---|---|---|
-| `aria-1` | IonQ | 25 | 0.03% | 0.50% | 0.40% |
-| `forte-1` | IonQ | 36 | 0.01% | 0.20% | 0.20% |
-| `harmony` | IonQ | 11 | 0.10% | 1.50% | 1.00% |
-| `ibm_sherbrooke` | IBM | 127 | 0.024% | 0.74% | 1.35% |
-| `ibm_brisbane` | IBM | 127 | 0.024% | 0.76% | 1.35% |
-| `ibm_torino` | IBM | 133 | 0.020% | 0.30% | 1.00% |
-| `h1-1` | Quantinuum | 20 | 0.0018% | 0.097% | 0.23% |
-| `h2-1` | Quantinuum | 56 | 0.0019% | 0.11% | 0.10% |
+| Device | Vendor | Status | Qubits | Connectivity | p1 (1Q) | p2 (2Q) | pMeas |
+|---|---|---|---|---|---|---|---|
+| `forte-1` | IonQ | available | 36 | all-to-all | 0.027% | 0.49% | 0.20% |
+| `forte-enterprise-1` | IonQ | available | 36 | all-to-all | 0.027% | 0.49% | 0.20% |
+| `helios` | Quantinuum | available | 98 | all-to-all | 0.0025% | 0.079% | 0.10% |
+| `h2-1` | Quantinuum | available | 56 | all-to-all | 0.0019% | 0.11% | 0.10% |
+| `ibm_brisbane` | IBM | available | 127 | heavy-hex | 0.024% | 0.76% | 1.35% |
+| `aria-1` | IonQ | **retired** | 25 | all-to-all | 0.05% | 1.33% | 0.40% |
+| `aria-2` | IonQ | **retired** | 25 | all-to-all | 0.066% | 1.86% | 0.40% |
+| `harmony` | IonQ | **retired** | 11 | all-to-all | 0.10% | 1.50% | 1.00% |
+| `ibm_sherbrooke` | IBM | **retired** | 127 | heavy-hex | 0.024% | 0.74% | 1.35% |
+| `ibm_torino` | IBM | **retired** | 133 | heavy-hex | 0.020% | 0.30% | 1.00% |
+| `h1-1` | Quantinuum | **retired** | 20 | all-to-all | 0.0018% | 0.097% | 0.23% |
 
-IBM figures from arXiv:2410.00916. Quantinuum figures from docs.quantinuum.com.
+Every entry carries `vendor`, `status`, `connectivity`, a `source` string, and a
+`confidence` field that is either `'vendor-published'` or `'estimated'`:
 
-**IonQ devices** (`IONQ_DEVICES`) additionally expose `nativeGates` for compilation and validation:
+```typescript
+DEVICES['forte-1'].confidence       // 'vendor-published' — IonQ's own r_1q/r_2q
+DEVICES['ibm_brisbane'].confidence  // 'estimated' — representative Eagle-r3 profile
+```
+
+`confidence` is a field rather than a footnote because the distinction is
+load-bearing. An earlier revision of this table carried IonQ rates **2.5× more
+optimistic** than IonQ's published parameters, and nothing in the type made that
+checkable. Only two vendors publish usable figures: IonQ's `r_1q`/`r_2q`, and
+Quantinuum's Helios gate fidelities. IBM publishes per-device calibration only
+behind an account, so **no IBM entry is vendor-attested** — those rows are
+representative profiles for hardware of that class, not calibrations of the named
+machine. Every `pMeas` is estimated; no vendor here publishes readout error. Retired machines are kept so historical
+results stay reproducible — they will not accept new jobs.
+
+**Connectivity is not cosmetic.** Trapped-ion machines (IonQ, Quantinuum) couple
+any pair directly. IBM's heavy-hex lattice does not, so a circuit with distant
+two-qubit gates needs SWAP networks, multiplying both gate count and error beyond
+what the `p2` column alone suggests.
+
+**These are published approximations, not live calibration.** IonQ's figures are
+the `r_1q`/`r_2q` parameters from its noise-model documentation, which IonQ
+explicitly says should not be compared directly to measured fidelities. IBM
+recalibrates daily. Refresh IonQ entries with:
+
+```bash
+IONQ_API_KEY=... node scripts/refresh-ionq-devices.ts
+```
+
+Known gaps: IBM's current Heron r2/r3 and Nighthawk systems are absent — no
+per-device error rates could be sourced without an IBM account. IonQ's post-2025-09
+Forte noise model is unpublished, so `forte-1` carries the earlier parameters and
+`forte-enterprise-1` reuses them as a stand-in.
+
+**IonQ devices** (`IONQ_DEVICES`) additionally expose `nativeGates`, the vendor's native gate set. It is informational — IonQ accepts abstract gates and compiles them itself, so `checkDevice` validates against what IonQ's JSON format can express rather than against this list:
 
 ```typescript
 import { IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
 
-const aria = IONQ_DEVICES['aria-1']
-// { qubits: 25, nativeGates: ['gpi', 'gpi2', 'ms', 'vz'], noise: { p1, p2, pMeas } }
+const forte = IONQ_DEVICES['forte-1']
+// { vendor: 'IonQ', qubits: 36, status: 'available', nativeGates: ['gpi','gpi2','zz'], ... }
 
 // Validate before submitting
 const circuit = new Circuit(2).h(0).cnot(0, 1)
-circuit.checkDevice('aria-1')   // passes
+circuit.checkDevice('forte-1')  // passes
 circuit.toIonQ()                // safe to call
 
 // checkDevice throws with all issues at once
@@ -520,7 +561,141 @@ new Circuit(30).cu1(Math.PI / 4, 0, 1).checkDevice('harmony')
 // TypeError: Circuit is not compatible with harmony:
 //   - circuit uses 30 qubits; harmony supports at most 11
 //   - gate 'cu1' is not supported on harmony
+//   Call toIonQBasis() to expand unsupported gates into IonQ ones.
 ```
+
+### Expanding unsupported gates
+
+`toIonQ()` is a serializer, not a compiler: it rejects any gate outside IonQ's
+set rather than silently expanding it, so the gate count you inspect is the gate
+count you send. `toIonQBasis()` is the explicit expansion step.
+
+This matters for QFT and modular-exponentiation circuits, which are built almost
+entirely from `cu1` and could not previously be exported at all:
+
+```typescript
+const shor = shorCircuit(15n, 7n, 3)
+shor.toIonQ()                       // TypeError: 'cu1' is not serializable
+
+const native = shor.toIonQBasis()   // cu1 -> rz + controlled rz; cswap -> controlled x
+native.toIonQ()                     // 5,798 gates, submit-ready
+```
+
+Controlled gates are emitted natively, as IonQ's format expects: a base gate
+plus a `controls` array, so `ccx` is `{gate:'x', controls:[a,b], target:t}`
+rather than fifteen Clifford+T gates. What remains is still not free — `cu1`
+becomes two gates and `cswap` three — so check `gateCounts()` before submitting.
+It composes with `compile()` for hardware-native output:
+
+```typescript
+shor.toIonQBasis().compile('forte-1').toIonQ()   // rz, gpi2, gpi, ms
+```
+
+Each rule is exact up to global phase; `u1` and `cu1` expand to `rz`, which
+differs by an unobservable phase of e^(−iθ/2).
+
+### Running on IonQ hardware
+
+`toIonQ()` produces the payload; `runIonQ` submits it, waits, and fetches the
+results. No dependency is added — the client uses the global `fetch`.
+
+```typescript
+import { Circuit, runIonQ, countsToProbs } from '@kirkelliott/ket'
+
+const bell = new Circuit(2).h(0).cnot(0, 1)
+bell.checkDevice('forte-1')                      // fail fast, before spending queue time
+
+const { job, counts } = await runIonQ(bell.toIonQ(), {
+  apiKey: process.env.IONQ_API_KEY!,
+  target: 'qpu.forte-1',                         // or 'simulator' — free, no queue
+  shots: 1024,
+  onPoll: j => console.log(j.status),
+})
+
+countsToProbs(counts, 2, 1024)                   // { '00': 0.49, '11': 0.51 }
+```
+
+| Function | Purpose |
+|---|---|
+| `runIonQ(circuit, opts)` | Submit, poll, fetch results, convert. The path that cannot be got wrong. |
+| `submitIonQ(circuit, opts)` | Queue a job. Returns once accepted, not when it finishes. |
+| `getIonQJob(id, opts)` | Fetch current state. **Does not include results.** |
+| `awaitIonQJob(id, opts)` | Poll to a terminal state. **Throws** on `failed`/`canceled`, so a caller who forgets to check `status` cannot read a failure as empty results. |
+| `getIonQResults(job, opts)` | Fetch the histogram, following the job's `results_url`. |
+| `ionqSubmitRequest(circuit, opts)` | Build the request without sending it — for testing, or to route it yourself. |
+| `ionqHistogramToCounts(histogram, shots)` | Probabilities → shot counts keyed by basis index. |
+| `cancelIonQJob(id, opts)` | Cancel a queued or running job and release its slot. |
+
+**State the noise model rather than inheriting it.** Omitting `noise` leaves the
+choice to IonQ's server-side default, which is not guaranteed to be noiseless. At
+any real depth a device model flattens the distribution completely, and a flat
+distribution is indistinguishable from a wrong answer:
+
+```typescript
+await submitIonQ(circuit.toIonQ(), {
+  apiKey, target: 'simulator',
+  noise: { model: 'ideal' },        // or { model: 'forte-1', seed: 100 }
+})
+```
+
+The job record reports the model actually used; check it before concluding a
+circuit is wrong.
+
+**Angle units differ between the two gate sets.** QIS gates (`rx`/`ry`/`rz`/
+`xx`/`yy`/`zz`) take `rotation` in **radians** — IonQ's own example gives Rx(π/2)
+as `rotation: 1.5708`. The native gates (`gpi`/`gpi2`/`ms`) take `phase` in
+**turns**, where 1.0 = 2π. ket handles both, and the distinction is not
+cosmetic: getting it wrong sends a valid circuit that computes something else,
+and Clifford-only circuits such as a Bell pair are blind to the error.
+
+**Results are not on the job object.** `GET /jobs/{id}` returns metadata and a
+`results_url`; the histogram lives behind it. `runIonQ` and `getIonQResults`
+follow that automatically — reading `job.data` will find nothing.
+
+**Bit order matches, and that is verified rather than assumed.** IonQ histogram
+keys are little-endian integers with qubit *i* at 2^*i*, which is exactly ket's
+convention, so no conversion is applied. Submitting `x(0)` on two qubits returns
+`{"1": 1.0}` and `x(0).x(2)` on four returns `{"5": 1.0}` — both the indices ket
+assigns to those states. This is worth stating explicitly
+because published summaries describe the keys as big-endian; they are not, and
+reversing them corrupts every asymmetric result while leaving symmetric ones such
+as a Bell state looking perfectly correct.
+
+### Calling from a browser: use a proxy
+
+`api.ionq.co` sends no `access-control-allow-origin`, so a browser cannot call it
+directly. That is a feature: an IonQ API key buys paid hardware time, and a key
+in a JS bundle is a key anyone can spend. Keep it server-side and forward.
+
+The `endpoint` option exists for this — point it at your own route:
+
+```typescript
+// server — Express, Hono, Next route handler, whatever you already run
+app.post('/api/ionq/jobs', async (req, res) => {
+  const job = await submitIonQ(req.body.input, {
+    apiKey: process.env.IONQ_API_KEY!,           // never leaves the server
+    target: req.body.target,
+    shots: req.body.shots,
+  })
+  res.json(job)
+})
+
+app.get('/api/ionq/jobs/:id', async (req, res) => {
+  res.json(await getIonQJob(req.params.id, { apiKey: process.env.IONQ_API_KEY! }))
+})
+```
+
+```typescript
+// browser — same library, same types, no key
+const { id } = await submitIonQ(circuit.toIonQ(), {
+  endpoint: '/api/ionq', target: 'qpu.forte-1', shots: 1024,   // no apiKey: it lives on the server
+})
+const job = await awaitIonQJob(id, { endpoint: '/api/ionq' })
+```
+
+Both halves import the same `Circuit`, so the browser can simulate a circuit for
+instant feedback and hand the identical object to the server to run on hardware —
+one circuit representation, no serialisation boundary between two languages.
 
 ## Import / Export
 
@@ -778,6 +953,75 @@ runs in seconds; N=77 takes about 15 minutes. Factoring an RSA modulus this way 
 a matter of waiting longer. What ket gives you is the real circuit — every gate, exactly
 simulated — at sizes where you can inspect and learn from it.
 
+### Inspecting the Shor circuit directly
+
+`shorBeauregard` runs the circuit and post-processes the measured phase.
+`shorCircuit` returns the circuit itself, so it can be counted, drawn, or run
+under noise without reimplementing the construction:
+
+```typescript
+import { shorCircuit, DEVICES } from '@kirkelliott/ket'
+
+const c = shorCircuit(33n, 5n)          // modulus, base
+c.qubits                                 // 27
+c.depth()                                // 25868
+
+const { oneQubit, twoQubit, byName } = c.gateCounts()
+// 6163 single-qubit, 31260 two-qubit-equivalent (a Toffoli counts as 6)
+
+// Chance of an error-free run. Two-qubit error dominates, but both terms count:
+// dropping the single-qubit factor here overstates the odds by about 5x.
+const { p1, p2 } = DEVICES['forte-1'].noise
+(1 - p1) ** oneQubit * (1 - p2) ** twoQubit   // 8.45e-69
+```
+
+`gateCounts()` expands subcircuits first and excludes barriers, measurement and
+reset, so the counts describe what would actually execute. `byName` gives finer
+accounting — `byName['t']` is the T-count, which is what the stabilizer-rank
+backend's cost depends on.
+
+### Worked examples: recovering a key end to end
+
+Two example programs use the above to make a complete, self-checking argument.
+Both are written as lab reports: numbered sections, an assertion at every stage,
+and a non-zero exit on any failed check.
+
+```bash
+node examples/node/rsa-shor.js     # 27 qubits, ~57 s
+node examples/node/dlog-shor.js    # 20 qubits, ~16 s
+```
+
+`rsa-shor.js` builds a genuine RSA keypair, encrypts a message, and then recovers
+the private exponent from the public parameters alone. It enumerates every base
+coprime to N and logs each outcome, **discarding runs that terminate classically**
+via `gcd` or an even modulus, so `method === 'quantum'` is asserted rather than
+assumed. It then verifies a^r ≡ 1 mod N, that the factors multiply back, that the
+recovered d matches the generated one, and that decryption returns the plaintext.
+
+`dlog-shor.js` solves the discrete logarithm underlying ECDSA. Given g of known
+order r and h = g^x, it prepares |a⟩|b⟩|1⟩ → |a⟩|b⟩|gᵃhᵇ⟩ and applies an inverse
+QFT to each exponent register; the result is supported entirely on pairs with
+β ≡ xα (mod r), so x = βα⁻¹. The script **measures** the fraction of amplitude
+violating that relation and asserts it is zero, which checks the circuit rather
+than the derivation.
+
+g must have power-of-two order so the transform is exact. That constrains g, not
+p — every group of order 2^k·m contains an element of order 2^k — and if the
+supplied generator is unsuitable the script computes a valid one and reports it.
+Arbitrary orders would need an approximate transform with continued-fraction
+post-processing, which is deliberately out of scope.
+
+Both are parameterised (`RSA_P`, `RSA_Q`, `RSA_E`, `RSA_M`; `DLOG_P`, `DLOG_G`,
+`DLOG_X`) and both close with a hardware-feasibility section: gate counts against
+published per-gate error rates for IonQ systems currently accepting jobs. Setting
+`RSA_NOISY_SHOTS` or `DLOG_NOISY_SHOTS` confirms the estimate by sampling noisy
+trajectories, which takes minutes and is therefore opt-in.
+
+The discrete-log figure is worth stating: noiseless, 100% of outcomes land on the
+predicted support; under `forte-1` depolarizing noise, 6.3% — exactly the uniform
+baseline for a 16-element group. The signal is not degraded but erased, which is
+the concrete form of the error-correction argument.
+
 ## Visualization
 
 ### ASCII diagram
@@ -954,7 +1198,7 @@ All three stochastic backends accept a noise configuration with the same interfa
 
 ```typescript
 // Named device profile (statevector, Clifford, density matrix)
-circuit.run({ noise: 'aria-1' })
+circuit.run({ noise: 'forte-1' })
 circuit.runClifford({ shots: 10000, noise: 'forte-1' })
 circuit.dm({ noise: 'harmony' })
 
@@ -1029,6 +1273,33 @@ All operation types are preserved: gates, measure, reset, if, and named sub-circ
 
 ## Performance
 
+ket matches its representation to the circuit instead of committing to one, so
+the same API is efficient across shapes that usually need different tools.
+
+A statevector starts as a sparse map and promotes itself to a flat
+`Float64Array` once it is more than 1/8 full. A GHZ state holds two non-zero
+amplitudes at any width, so it stays sparse and never touches the other million
+slots; a depth-4 random circuit fills every amplitude in its first layer, so it
+moves to the dense kernel once and runs the rest with no allocation at all. The
+density matrix does the same at 1/32 fill, and MPS bond dimension grows on
+demand rather than being capped up front.
+
+Measured on Node 24 / Apple silicon, best of 5:
+
+| Circuit | Representation | Time |
+|---|---|---|
+| GHZ-20, statevector | sparse | 5us |
+| QFT-16, statevector | dense | 10.5ms |
+| random-16 depth 4, statevector | dense | 15.7ms |
+| GHZ-50, MPS chi=2 | tensor network | milliseconds |
+| GHZ-127, MPS, 1024 shots | tensor network | 186ms |
+| 12-qubit noisy run, 1024 shots | dense | 0.69s |
+
+None of this needs a flag — the thresholds are defaults, adjustable per call via
+the `dense` option when you want to trade memory against speed.
+
+### Continuous benchmarks
+
 <!-- benchmark:start -->
 
 Populated by CI on every push to main — run `node benchmark/run.ts | node benchmark/update-readme.ts` to regenerate locally.
@@ -1090,15 +1361,26 @@ const outcome = sim.measure(0, Math.random())
 
 For threshold curves, pass `noise` to `runClifford` and sweep the error rate:
 
+ket ships no code constructors and no decoder, so a threshold study means building
+the encoding circuit yourself. A three-qubit repetition code, which corrects any
+single bit flip, is short enough to show the shape:
+
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
 
-// Sweep p2 to find the surface code threshold
+// Encode |psi> as |psi psi psi>, then sweep the physical error rate.
+const encoded = new Circuit(3).cnot(0, 1).cnot(0, 2)
+
 for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
-  const result = surfaceCode.runClifford({ shots: 10000, noise: { p2 } })
-  console.log(p2, result.probs['0'])  // logical error rate vs physical error rate
+  const d = encoded.runClifford({ shots: 10000, noise: { p2 } })
+  console.log(p2, d.probs)   // weight away from the codespace is the logical error rate
 }
 ```
+
+A surface-code threshold curve needs the same loop over a stabilizer-measurement
+circuit plus a matching decoder — the decoder being the part ket does not
+provide. `stabilizerGenerators()` supplies the syndrome; pairing it with a
+minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 

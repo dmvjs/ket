@@ -1,6 +1,6 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, five backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
@@ -36,7 +36,8 @@
   "unpkg": "dist/ket.min.js",
   "module": "dist/ket.js",
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js && esbuild src/stabilizer-rank.worker.ts --bundle --format=esm --platform=node --outfile=dist/stabilizer-rank.worker.js",
@@ -44,6 +45,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "dev": "vitest",
+    "deploy:site": "node scripts/check-site-version.ts && aws s3 sync site/ s3://dmvjs.com/ket/ --exclude '.DS_Store' --exclude 'README.md' && aws cloudfront create-invalidation --distribution-id E2NLJQLRPS1ZY5 --paths '/ket/*'",
     "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test"
   },
   "engines": {
