@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ket API reference · dmvjs</title>
+<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, four backends, zero dependencies.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/material-darker.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+  :root {
+    --bg: #080a10; --sidebar: #060810; --card: #0c0e18; --border: #1a1d2e;
+    --accent: #54b4c5; --accent2: #d4b560; --green: #8bdb78;
+    --orange: #f47e5b; --red: #d65c70; --purple: #9f7aea;
+    --text: #dde4ef; --muted: #4e5a6b; --mid: #7a8799;
+    --font: system-ui, sans-serif;
+    --mono: 'Cascadia Code','Fira Code','JetBrains Mono',ui-monospace,'SF Mono',Menlo,Monaco,'Courier New',monospace;
+    --sidebar-w: 240px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); }
+
+  /* ── top bar ── */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: var(--sidebar); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 1.5rem; height: 48px;
+  }
+  .topbar-logo { display: flex; align-items: baseline; gap: .4rem; }
+  .topbar-logo .name {
+    font-size: 1rem; font-weight: 700;
+    background: linear-gradient(135deg, #54b4c5, #d4b560);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .topbar-logo .ver { font-size: .7rem; color: var(--muted); }
+  .topbar-links { display: flex; gap: .5rem; align-items: center; }
+  .topbar-links a {
+    font-size: .72rem; color: var(--muted); text-decoration: none;
+    padding: .22rem .6rem; border: 1px solid var(--border); border-radius: 4px;
+    transition: color .15s, border-color .15s;
+  }
+  .topbar-links a:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── sidebar ── */
+  .sidebar {
+    position: fixed; top: 48px; left: 0; bottom: 0;
+    width: var(--sidebar-w); overflow-y: auto;
+    background: var(--sidebar); border-right: 1px solid var(--border);
+    padding: 1.25rem 0;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); }
+  .nav-group { margin-bottom: .25rem; }
+  .nav-group-label {
+    font-size: .62rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted); padding: .6rem 1.25rem .3rem;
+  }
+  .nav-link {
+    display: block; font-size: .75rem; color: var(--mid); text-decoration: none;
+    padding: .3rem 1.25rem; transition: color .12s, background .12s;
+    border-left: 2px solid transparent;
+  }
+  .nav-link:hover { color: var(--text); background: #0c0e1880; }
+  .nav-link.active { color: var(--accent); border-left-color: var(--accent); background: #54b4c508; }
+  .nav-link code { font-family: var(--mono); font-size: .7rem; }
+
+  /* ── main content ── */
+  .main {
+    margin-left: var(--sidebar-w); padding-top: 48px;
+    min-height: 100vh;
+  }
+  .content { max-width: 860px; padding: 2.5rem 2.5rem 6rem; }
+
+  /* ── sections ── */
+  .section { margin-bottom: 3.5rem; }
+  .section-anchor { display: block; position: relative; top: -72px; visibility: hidden; }
+
+  h1 {
+    font-size: 1.6rem; font-weight: 800; margin-bottom: .4rem;
+    background: linear-gradient(135deg, #54b4c5, #d4b560);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    display: inline-block;
+  }
+  .lead { font-size: .88rem; color: var(--mid); line-height: 1.7; margin-bottom: 2rem; max-width: 600px; }
+
+  h2 {
+    font-size: 1.15rem; font-weight: 700; color: var(--text);
+    margin-bottom: .75rem; padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: .6rem;
+  }
+  h2 .tag {
+    font-size: .62rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .06em; padding: 2px 7px; border-radius: 99px;
+    background: var(--accent); color: #000;
+  }
+  h2 .tag.green { background: var(--green); }
+  h2 .tag.orange { background: var(--orange); }
+  h2 .tag.purple { background: var(--purple); }
+
+  h3 {
+    font-size: .92rem; font-weight: 600; color: var(--accent);
+    margin: 1.5rem 0 .5rem; font-family: var(--mono);
+  }
+
+  p { font-size: .85rem; color: var(--mid); line-height: 1.75; margin-bottom: .75rem; }
+  p strong { color: var(--text); font-weight: 600; }
+  p code, li code {
+    font-family: var(--mono); font-size: .78rem;
+    background: #0d0f1d; border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; color: var(--accent2);
+  }
+
+  /* ── method signature block ── */
+  .sig {
+    background: #060810; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 0 7px 7px 0; padding: .65rem 1rem;
+    font-family: var(--mono); font-size: .8rem; color: var(--text);
+    margin-bottom: .75rem; overflow-x: auto; white-space: pre;
+    line-height: 1.6;
+  }
+  .sig .kw { color: var(--accent); }
+  .sig .cls { color: var(--accent2); }
+  .sig .type { color: var(--green); }
+  .sig .param { color: #c8d8e8; }
+  .sig .comment { color: var(--muted); font-style: italic; }
+
+  /* ── params table ── */
+  .params { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: .8rem; }
+  .params th {
+    text-align: left; font-weight: 600; font-size: .7rem;
+    text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); padding: .35rem .75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .params td { padding: .4rem .75rem; border-bottom: 1px solid #10121f; vertical-align: top; }
+  .params td:first-child { font-family: var(--mono); font-size: .76rem; color: var(--accent2); white-space: nowrap; }
+  .params td:nth-child(2) { color: var(--green); font-family: var(--mono); font-size: .74rem; white-space: nowrap; }
+  .params td:nth-child(3) { color: var(--mid); line-height: 1.55; }
+  .params tr:last-child td { border-bottom: none; }
+
+  /* ── code blocks ── */
+  pre {
+    background: #07090e; border: 1px solid var(--border);
+    border-radius: 7px; overflow-x: auto; margin: .75rem 0 1.25rem;
+    font-size: .78rem; line-height: 1.65;
+  }
+  pre code.hljs { background: transparent; padding: 1rem 1.25rem; font-family: var(--mono); }
+
+  /* ── tables ── */
+  .ref-table { width: 100%; border-collapse: collapse; font-size: .8rem; margin-bottom: 1.25rem; }
+  .ref-table th {
+    text-align: left; font-weight: 600; font-size: .7rem;
+    text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); padding: .4rem .75rem;
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .ref-table td { padding: .38rem .75rem; border-bottom: 1px solid #0d0f18; vertical-align: middle; color: var(--mid); }
+  .ref-table td:first-child { font-family: var(--mono); font-size: .76rem; color: var(--accent2); white-space: nowrap; }
+  .ref-table td:nth-child(2) { color: var(--text); font-family: var(--mono); font-size: .76rem; white-space: nowrap; }
+  .ref-table tr:last-child td { border-bottom: none; }
+  .ref-table tr:hover td { background: #0c0e1860; }
+
+  /* ── info/warning boxes ── */
+  .callout {
+    display: flex; gap: .75rem; padding: .75rem 1rem;
+    border-radius: 7px; margin-bottom: 1rem;
+    font-size: .82rem; line-height: 1.6;
+  }
+  .callout.info { background: #54b4c510; border: 1px solid #54b4c530; color: var(--mid); }
+  .callout.warn { background: #d4b56010; border: 1px solid #d4b56030; color: var(--mid); }
+  .callout-icon { flex-shrink: 0; font-size: .9rem; margin-top: .05rem; }
+  .callout strong { color: var(--text); }
+
+  /* ── backend cards ── */
+  .backend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-bottom: 1.25rem; }
+  .backend-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: .9rem 1rem;
+  }
+  .backend-card h4 { font-size: .85rem; font-weight: 700; color: var(--text); margin-bottom: .2rem; }
+  .backend-card .method { font-family: var(--mono); font-size: .72rem; color: var(--accent); margin-bottom: .35rem; }
+  .backend-card .mem { font-size: .72rem; color: var(--accent2); margin-bottom: .25rem; }
+  .backend-card p { font-size: .76rem; color: var(--muted); margin: 0; }
+
+  /* ── format list ── */
+  .format-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-bottom: 1.25rem; }
+  .format-chip {
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: .45rem .75rem; font-size: .74rem;
+  }
+  .format-chip .fname { color: var(--text); font-weight: 600; margin-bottom: .1rem; }
+  .format-chip .fio { font-size: .66rem; color: var(--muted); font-family: var(--mono); }
+
+  /* ── device table ── */
+  .device-table { width: 100%; border-collapse: collapse; font-size: .78rem; margin-bottom: 1.25rem; }
+  .device-table th {
+    text-align: left; color: var(--muted); font-size: .68rem;
+    text-transform: uppercase; letter-spacing: .07em;
+    padding: .4rem .75rem; border-bottom: 1px solid var(--border);
+  }
+  .device-table td { padding: .38rem .75rem; border-bottom: 1px solid #0d0f18; color: var(--mid); }
+  .device-table td:first-child { font-family: var(--mono); color: var(--accent2); font-size: .75rem; }
+  .device-table td:nth-child(2) { color: var(--text); }
+  .device-table tr:hover td { background: #0c0e1860; }
+
+  ul { padding-left: 1.3rem; margin-bottom: .75rem; }
+  li { font-size: .83rem; color: var(--mid); line-height: 1.75; }
+  li strong { color: var(--text); }
+
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; }
+    .content { padding: 1.5rem 1.25rem 4rem; }
+    .backend-grid, .format-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 1.3rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── top bar ── -->
+<div class="topbar">
+  <div class="topbar-logo">
+    <span class="name">ket</span>
+    <span class="ver">v0.8.0</span>
+  </div>
+  <div class="topbar-links">
+    <a href="index.html">home</a>
+    <a href="demo.html">playground</a>
+    <a href="https://github.com/dmvjs/ket" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.npmjs.com/package/@kirkelliott/ket" target="_blank" rel="noopener">npm</a>
+  </div>
+</div>
+
+<!-- ── sidebar ── -->
+<nav class="sidebar" id="sidebar">
+
+  <div class="nav-group">
+    <div class="nav-group-label">Getting started</div>
+    <a class="nav-link" href="#install">Install</a>
+    <a class="nav-link" href="#quick-start">Quick start</a>
+    <a class="nav-link" href="#conventions">Conventions</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Circuit</div>
+    <a class="nav-link" href="#circuit-constructor"><code>new Circuit(n)</code></a>
+    <a class="nav-link" href="#state-inspection">State inspection</a>
+    <a class="nav-link" href="#circuit-composition">Composition</a>
+    <a class="nav-link" href="#parametric">Parametric circuits</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Gates</div>
+    <a class="nav-link" href="#gates-single">Single-qubit</a>
+    <a class="nav-link" href="#gates-two">Two-qubit</a>
+    <a class="nav-link" href="#gates-three">Three-qubit</a>
+    <a class="nav-link" href="#gates-custom">Custom unitary</a>
+    <a class="nav-link" href="#gates-ionq">IonQ native</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Simulation</div>
+    <a class="nav-link" href="#backends">Backends</a>
+    <a class="nav-link" href="#distribution"><code>Distribution</code></a>
+    <a class="nav-link" href="#measurements">Measurements</a>
+    <a class="nav-link" href="#noise">Noise models</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Algorithms</div>
+    <a class="nav-link" href="#algorithms">Built-in algorithms</a>
+    <a class="nav-link" href="#shor">Shor's algorithm</a>
+    <a class="nav-link" href="#vqe">VQE &amp; optimization</a>
+    <a class="nav-link" href="#pauli">Pauli algebra</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Interop</div>
+    <a class="nav-link" href="#import-export">Import / Export</a>
+    <a class="nav-link" href="#devices">Devices</a>
+    <a class="nav-link" href="#ionq-hardware">IonQ hardware</a>
+    <a class="nav-link" href="#visualization">Visualization</a>
+    <a class="nav-link" href="#serialization">Serialization</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Advanced</div>
+    <a class="nav-link" href="#density-matrix"><code>DensityMatrix</code></a>
+    <a class="nav-link" href="#clifford-sim"><code>CliffordSim</code></a>
+    <a class="nav-link" href="#qec">Error correction</a>
+  </div>
+
+</nav>
+
+<!-- ── main ── -->
+<main class="main">
+<div class="content">
+
+<!-- ─────────────────── HEADER ─────────────────── -->
+<div class="section" style="margin-bottom:2.5rem">
+  <h1>ket</h1>
+  <p class="lead">
+    TypeScript quantum circuit simulator. Immutable API, four backends (statevector, MPS, density matrix, Clifford), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
+  </p>
+</div>
+
+<!-- ─────────────────── INSTALL ─────────────────── -->
+<span class="section-anchor" id="install"></span>
+<div class="section">
+  <h2>Install</h2>
+  <pre><code class="language-bash">npm install @kirkelliott/ket</code></pre>
+
+  <p>Or load directly in a browser via CDN (no bundler needed):</p>
+  <pre><code class="language-html">&lt;script type="module"&gt;
+  import { Circuit } from 'https://unpkg.com/@kirkelliott/ket/dist/ket.min.js'
+
+  const bell = new Circuit(2).h(0).cnot(0, 1)
+  console.log(bell.stateAsString())  // 0.7071|00⟩ + 0.7071|11⟩
+&lt;/script&gt;</code></pre>
+
+  <p>Two bundle flavors ship in the package: <code>ket.js</code> (341 kB unminified, for bundlers that tree-shake) and <code>ket.min.js</code> (154 kB, for direct CDN use). The <code>unpkg</code> field points to the minified build. No dependencies either way.</p>
+</div>
+
+<!-- ─────────────────── QUICK START ─────────────────── -->
+<span class="section-anchor" id="quick-start"></span>
+<div class="section">
+  <h2>Quick start</h2>
+  <pre><code class="language-typescript">import { Circuit } from '@kirkelliott/ket'
+
+// Build a Bell state
+const bell = new Circuit(2).h(0).cnot(0, 1)
+
+bell.draw()           // ASCII diagram
+bell.stateAsString()  // '0.7071|00⟩ + 0.7071|11⟩'
+bell.exactProbs()     // { '00': 0.5, '11': 0.5 }
+
+// Shot-based sampling
+const result = bell
+  .creg('out', 2)
+  .measure(0, 'out', 0)
+  .measure(1, 'out', 1)
+  .run({ shots: 1000, seed: 42 })
+// result.probs → { '00': ~0.5, '11': ~0.5 }</code></pre>
+</div>
+
+<!-- ─────────────────── CONVENTIONS ─────────────────── -->
+<span class="section-anchor" id="conventions"></span>
+<div class="section">
+  <h2>Conventions</h2>
+  <p>All bitstrings use <strong>q0 leftmost</strong> throughout the entire API — matching Qiskit, Cirq, and textbooks.</p>
+  <ul>
+    <li><code>'10'</code> → q0=1, q1=0</li>
+    <li><code>amplitude('10')</code>, <code>exactProbs()['10']</code>, <code>initialState: '10'</code> all follow q0-left</li>
+  </ul>
+  <div class="callout info">
+    <span class="callout-icon">ℹ</span>
+    <div>Every gate method is <strong>immutable</strong> — it returns a new <code>Circuit</code> and leaves the original unchanged. Safe to compose, branch, and reuse without copying.</div>
+  </div>
+</div>
+
+<!-- ─────────────────── CIRCUIT CONSTRUCTOR ─────────────────── -->
+<span class="section-anchor" id="circuit-constructor"></span>
+<div class="section">
+  <h2>Circuit constructor</h2>
+
+  <div class="sig"><span class="kw">new</span> <span class="cls">Circuit</span>(<span class="param">n</span>: <span class="type">number</span>)
+<span class="cls">Circuit</span>.<span class="kw">device</span>(<span class="param">name</span>: <span class="type">DeviceName</span>) <span class="comment">// new Circuit(device.qubits)</span></div>
+
+  <table class="params">
+    <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
+    <tr><td>n</td><td>number</td><td>Number of qubits. All qubits start in |0⟩.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const c = new Circuit(3)
+const aria = Circuit.device('aria-1')  // new Circuit(25)</code></pre>
+</div>
+
+<!-- ─────────────────── STATE INSPECTION ─────────────────── -->
+<span class="section-anchor" id="state-inspection"></span>
+<div class="section">
+  <h2>State inspection</h2>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+    <tr><td>statevector(opts?)</td><td>Map&lt;bigint, Complex&gt;</td><td>Full sparse amplitude map. All basis states with |a|² ≥ 1e-10.</td></tr>
+    <tr><td>amplitude(bitstring)</td><td>Complex</td><td>Single amplitude ⟨bitstring|ψ⟩.</td></tr>
+    <tr><td>probability(bitstring)</td><td>number</td><td>|amplitude|².</td></tr>
+    <tr><td>exactProbs()</td><td>Record&lt;string, number&gt;</td><td>All non-negligible probabilities. No sampling variance.</td></tr>
+    <tr><td>stateAsString()</td><td>string</td><td>Human-readable superposition: <code>'0.7071|00⟩ + 0.7071|11⟩'</code>.</td></tr>
+    <tr><td>stateAsArray()</td><td>StateEntry[]</td><td>Sorted by prob desc. Each entry: <code>{ bitstring, re, im, prob, phase }</code>.</td></tr>
+    <tr><td>marginals()</td><td>number[]</td><td>P(qᵢ=1) for each qubit.</td></tr>
+    <tr><td>blochAngles(q)</td><td>{ theta, phi }</td><td>Single-qubit Bloch sphere angles via partial trace.</td></tr>
+    <tr><td>expectation(pauli)</td><td>number</td><td>⟨ψ|P|ψ⟩ for a Pauli string (e.g. <code>'ZZ'</code>, <code>'XX'</code>).</td></tr>
+    <tr><td>depth()</td><td>number</td><td>Circuit depth (longest gate-layer path).</td></tr>
+    <tr><td>circuitMatrix()</td><td>Complex[][]</td><td>The circuit's full 2ⁿ×2ⁿ unitary. Pure circuits only — throws on measure/reset/if.</td></tr>
+    <tr><td>bondEntropies(opts?)</td><td>number[]</td><td>Von Neumann entropy at each MPS bond — the entanglement profile.</td></tr>
+    <tr><td>expectMps(H, opts?)</td><td>{ energy, truncated }</td><td>Pauli expectation value evaluated on the MPS backend.</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-icon">⚠</span>
+    <div><code>statevector()</code>, <code>exactProbs()</code>, and friends throw on circuits with measurements or unbound parameters. Add a <code>.creg</code> and <code>.run()</code> for measurement-based sampling.</div>
+  </div>
+</div>
+
+<!-- ─────────────────── COMPOSITION ─────────────────── -->
+<span class="section-anchor" id="circuit-composition"></span>
+<div class="section">
+  <h2>Circuit composition</h2>
+
+  <div class="sig"><span class="param">circuit</span>.<span class="kw">compose</span>(<span class="param">other</span>: <span class="type">Circuit</span>): <span class="type">Circuit</span></div>
+
+  <p>Concatenates two circuits of the same width. Classical registers are merged; custom gate definitions merged (<code>this</code> wins on name conflicts). Mismatched qubit counts throw <code>TypeError</code>.</p>
+
+  <pre><code class="language-typescript">const prep = new Circuit(2).h(0).cnot(0, 1)
+const rot  = new Circuit(2).rz(Math.PI / 4, 0).rz(Math.PI / 4, 1)
+const full = prep.compose(rot)</code></pre>
+</div>
+
+<!-- ─────────────────── PARAMETRIC ─────────────────── -->
+<span class="section-anchor" id="parametric"></span>
+<div class="section">
+  <h2>Parametric circuits</h2>
+  <p>Gate angles can be symbolic strings. Use <code>.bind()</code> to substitute values. Calling <code>statevector()</code> or any export on a circuit with unbound parameters throws a <code>TypeError</code> listing the missing names.</p>
+
+  <div class="sig"><span class="param">circuit</span>.<span class="kw">bind</span>(<span class="param">values</span>: <span class="type">Record&lt;string, number&gt;</span>): <span class="type">Circuit</span>
+<span class="param">circuit</span>.<span class="kw">params</span>  <span class="comment">// string[] — sorted unbound parameter names</span></div>
+
+  <pre><code class="language-typescript">const ansatz = new Circuit(2)
+  .ry('theta', 0)
+  .rz('phi', 0)
+  .cnot(0, 1)
+
+ansatz.params  // ['phi', 'theta']
+
+const bound = ansatz.bind({ theta: Math.PI / 4, phi: 0.1 })
+bound.statevector()  // runs normally</code></pre>
+
+  <p>Gates that accept symbolic angles: <code>rx</code>, <code>ry</code>, <code>rz</code>, <code>vz</code>, <code>u1</code>, <code>p</code>, <code>u2</code>, <code>u3</code>, <code>gpi</code>, <code>gpi2</code>, <code>xx</code>, <code>yy</code>, <code>zz</code>, <code>xy</code>, <code>ms</code>, <code>crx</code>, <code>cry</code>, <code>crz</code>, <code>cu1</code>, <code>cu2</code>, <code>cu3</code>.</p>
+</div>
+
+<!-- ─────────────────── GATES: SINGLE ─────────────────── -->
+<span class="section-anchor" id="gates-single"></span>
+<div class="section">
+  <h2>Single-qubit gates</h2>
+
+  <table class="ref-table">
+    <tr><th>Gate</th><th>Method</th><th>Description</th></tr>
+    <tr><td>H</td><td>h(q)</td><td>Hadamard</td></tr>
+    <tr><td>X</td><td>x(q)</td><td>Pauli-X (NOT)</td></tr>
+    <tr><td>Y</td><td>y(q)</td><td>Pauli-Y</td></tr>
+    <tr><td>Z</td><td>z(q)</td><td>Pauli-Z</td></tr>
+    <tr><td>S</td><td>s(q)</td><td>Phase — Rz(π/2)</td></tr>
+    <tr><td>S†</td><td>si(q) / sdg(q)</td><td>S-inverse</td></tr>
+    <tr><td>T</td><td>t(q)</td><td>T gate — Rz(π/4)</td></tr>
+    <tr><td>T†</td><td>ti(q) / tdg(q)</td><td>T-inverse</td></tr>
+    <tr><td>√X</td><td>v(q) / srn(q)</td><td>Square-root NOT</td></tr>
+    <tr><td>√X†</td><td>vi(q) / srndg(q)</td><td>√X-inverse</td></tr>
+    <tr><td>Rx</td><td>rx(θ, q)</td><td>X-axis rotation</td></tr>
+    <tr><td>Ry</td><td>ry(θ, q)</td><td>Y-axis rotation</td></tr>
+    <tr><td>Rz</td><td>rz(θ, q)</td><td>Z-axis rotation</td></tr>
+    <tr><td>U1 / P</td><td>u1(λ, q) / p(λ, q)</td><td>Phase gate. <code>p</code> = Qiskit 1.0+ name</td></tr>
+    <tr><td>U2</td><td>u2(φ, λ, q)</td><td>Two-parameter single-qubit unitary</td></tr>
+    <tr><td>U3</td><td>u3(θ, φ, λ, q)</td><td>General single-qubit unitary</td></tr>
+    <tr><td>VZ</td><td>vz(θ, q)</td><td>VirtualZ — Rz alias</td></tr>
+    <tr><td>I</td><td>id(q)</td><td>Identity</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── GATES: TWO ─────────────────── -->
+<span class="section-anchor" id="gates-two"></span>
+<div class="section">
+  <h2>Two-qubit gates</h2>
+
+  <table class="ref-table">
+    <tr><th>Gate</th><th>Method</th><th>Description</th></tr>
+    <tr><td>CNOT / CX</td><td>cnot(c, t) / cx(c, t)</td><td>Controlled-X</td></tr>
+    <tr><td>SWAP</td><td>swap(q0, q1)</td><td>SWAP</td></tr>
+    <tr><td>CY</td><td>cy(c, t)</td><td>Controlled-Y</td></tr>
+    <tr><td>CZ</td><td>cz(c, t)</td><td>Controlled-Z</td></tr>
+    <tr><td>CH</td><td>ch(c, t)</td><td>Controlled-H</td></tr>
+    <tr><td>CRx / CRy / CRz</td><td>crx(θ, c, t)</td><td>Controlled rotations</td></tr>
+    <tr><td>CU1</td><td>cu1(λ, c, t)</td><td>Controlled-U1</td></tr>
+    <tr><td>CU2 / CU3</td><td>cu2(φ, λ, c, t)</td><td>Controlled-U2 / U3</td></tr>
+    <tr><td>CS / CT</td><td>cs(c, t) / ct(c, t)</td><td>Controlled-S / T</td></tr>
+    <tr><td>XX</td><td>xx(θ, q0, q1)</td><td>Ising XX interaction</td></tr>
+    <tr><td>YY</td><td>yy(θ, q0, q1)</td><td>Ising YY interaction</td></tr>
+    <tr><td>ZZ</td><td>zz(θ, q0, q1)</td><td>Ising ZZ interaction</td></tr>
+    <tr><td>XY</td><td>xy(θ, q0, q1)</td><td>XY interaction</td></tr>
+    <tr><td>iSWAP</td><td>iswap(q0, q1)</td><td>iSWAP</td></tr>
+    <tr><td>√iSWAP</td><td>srswap(q0, q1)</td><td>Square-root iSWAP</td></tr>
+    <tr><td>C√X</td><td>csrn(c, t)</td><td>Controlled-√NOT (C-V)</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── GATES: THREE ─────────────────── -->
+<span class="section-anchor" id="gates-three"></span>
+<div class="section">
+  <h2>Three-qubit gates</h2>
+
+  <table class="ref-table">
+    <tr><th>Gate</th><th>Method</th><th>Description</th></tr>
+    <tr><td>CCX</td><td>ccx(c0, c1, t)</td><td>Toffoli</td></tr>
+    <tr><td>CSWAP</td><td>cswap(c, q0, q1)</td><td>Fredkin</td></tr>
+    <tr><td>C√SWAP</td><td>csrswap(c, q0, q1)</td><td>Controlled-√SWAP</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── CUSTOM UNITARY ─────────────────── -->
+<span class="section-anchor" id="gates-custom"></span>
+<div class="section">
+  <h2>Custom unitary gate</h2>
+
+  <div class="sig"><span class="param">circuit</span>.<span class="kw">unitary</span>(<span class="param">matrix</span>: <span class="type">number[][] | Complex[][]</span>, ...<span class="param">qubits</span>): <span class="type">Circuit</span></div>
+
+  <p>Matrix must be 2ᴺ × 2ᴺ where N is the number of qubits. Entries can be plain <code>number</code> (real) or <code>{ re, im }</code> complex objects. Supported in statevector, density matrix, and MPS (1 and 2-qubit only). Throws in <code>runClifford</code>.</p>
+
+  <pre><code class="language-typescript">const SWAP = [[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+circuit.unitary(SWAP, 0, 1)
+
+const S = [
+  [{ re: 1, im: 0 }, { re: 0, im: 0 }],
+  [{ re: 0, im: 0 }, { re: 0, im: 1 }],
+]
+circuit.unitary(S, 0)</code></pre>
+
+  <h3>Complex numbers and gate matrices</h3>
+
+  <p>Rather than writing <code>{ re, im }</code> by hand, use the exported helpers. <code>c(re, im?)</code> builds a <code>Complex</code>; <code>ZERO</code>, <code>ONE</code>, and <code>I</code> are the constants:</p>
+
+  <pre><code class="language-typescript">import { c, ZERO, ONE, I, add, mul, scale, conj, norm2 } from '@kirkelliott/ket'
+
+const S = [[ONE, ZERO], [ZERO, I]]
+circuit.unitary(S, 0)
+
+mul(I, I)      // { re: -1, im: 0 }
+norm2(c(3, 4)) // 25</code></pre>
+
+  <p>Every built-in gate's matrix is exported too, so you can compose or inspect them directly — useful for building Kraus operators and custom channels:</p>
+
+  <pre><code class="language-typescript">import { H, X, Y, Z, S, Si, T, Ti, V, Vi, Rx, Ry, Rz, U1, U2, U3,
+         Xx, Yy, Zz, Xy, ISwap, SrSwap, Gpi, Gpi2, Ms, Id } from '@kirkelliott/ket'
+
+H                  // fixed gates are matrix values: 2×2
+Rx(Math.PI)        // parameterised gates are functions returning a matrix
+Ms(0, 0)           // IonQ native Mølmer–Sørensen, 4×4
+Gpi(0), Gpi2(0)    // IonQ native single-qubit, 2×2</code></pre>
+</div>
+
+<!-- ─────────────────── IONQ NATIVE ─────────────────── -->
+<span class="section-anchor" id="gates-ionq"></span>
+<div class="section">
+  <h2>IonQ native gates</h2>
+
+  <table class="ref-table">
+    <tr><th>Gate</th><th>Method</th><th>Description</th></tr>
+    <tr><td>GPI</td><td>gpi(φ, q)</td><td>Single-qubit rotation on Bloch equator</td></tr>
+    <tr><td>GPI2</td><td>gpi2(φ, q)</td><td>Half-angle GPI</td></tr>
+    <tr><td>MS</td><td>ms(φ₀, φ₁, q0, q1)</td><td>Mølmer-Sørensen entangling gate</td></tr>
+  </table>
+
+  <p>Use <code>circuit.checkDevice('aria-1')</code> to validate a circuit against a device's native gate set before calling <code>circuit.toIonQ()</code>.</p>
+</div>
+
+<!-- ─────────────────── BACKENDS ─────────────────── -->
+<span class="section-anchor" id="backends"></span>
+<div class="section">
+  <h2>Simulation backends</h2>
+
+  <p>If you don't want to choose, don't. <code>simulate()</code> inspects the circuit and routes it to the cheapest <em>exact</em> backend — Clifford if every gate is Clifford, statevector below <code>statevectorLimit</code> qubits (default 20), MPS above it:</p>
+
+  <pre><code class="language-typescript">circuit.simulate({ shots: 1024 })
+
+// Which one ran?
+const d = circuit.simulate({ shots: 1024 })
+d.backend   // 'clifford' | 'statevector' | 'mps'
+d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
+
+  <table class="params">
+    <tr><th>Option</th><th>Type</th><th>Description</th></tr>
+    <tr><td>shots</td><td>number</td><td>Shot count (default 1024).</td></tr>
+    <tr><td>seed</td><td>number</td><td>Seed the RNG for reproducible sampling.</td></tr>
+    <tr><td>noise</td><td>NoiseParams | string</td><td>Explicit parameters or a named device profile.</td></tr>
+    <tr><td>initialState</td><td>string</td><td>Starting basis state, q0 leftmost. Forces the statevector path.</td></tr>
+    <tr><td>statevectorLimit</td><td>number</td><td>Qubit count below which statevector is always used (default 20). Raise to force MPS sooner.</td></tr>
+    <tr><td>maxBond</td><td>number</td><td>Initial χ allocation if this routes to MPS (default 64). Not a cap.</td></tr>
+    <tr><td>truncErr</td><td>number</td><td>Relative singular-value cutoff (default 0 — exact). Above zero the run becomes approximate.</td></tr>
+    <tr><td>maxChi</td><td>number</td><td>Hard ceiling on χ. Unlike <code>maxBond</code> this binds, and sets <code>Distribution.truncated</code>.</td></tr>
+    <tr><td>dense</td><td>DenseOptions</td><td>Tune the sparse → dense statevector promotion threshold.</td></tr>
+  </table>
+
+  <p>Or pick a backend yourself:</p>
+
+  <div class="backend-grid">
+    <div class="backend-card">
+      <h4>Statevector</h4>
+      <div class="method">circuit.run() / circuit.statevector()</div>
+      <div class="mem">sparse map → dense Float64Array</div>
+      <p>Exact amplitudes. Starts as a sparse BigInt-keyed map and promotes itself to a contiguous <code>Float64Array</code> past ⅛ fill, so sparse circuits (Bell, GHZ) stay cheap at any width and dense ones stop paying for a hash map. Practical to ~20 qubits dense.</p>
+    </div>
+    <div class="backend-card">
+      <h4>MPS / Tensor Network</h4>
+      <div class="method">circuit.runMps({ shots, maxBond? })</div>
+      <div class="mem">O(n·χ²)</div>
+      <p>Low-entanglement circuits, 50+ qubits. Exact by default — <code>maxBond</code> is an initial allocation, not a cap, and χ grows as the circuit demands. GHZ-50 runs in milliseconds at χ=2; GHZ-127 samples 1024 shots in 186 ms. Supports mid-circuit measure/reset/if, and spreads work across cores with <code>workers</code>.</p>
+    </div>
+    <div class="backend-card">
+      <h4>Density Matrix</h4>
+      <div class="method">circuit.dm({ noise? })</div>
+      <div class="mem">O(4ⁿ) sparse</div>
+      <p>Mixed-state and noisy simulation. Exact per-gate depolarizing channels, no Monte Carlo. Practical up to n=12.</p>
+    </div>
+    <div class="backend-card">
+      <h4>Clifford Stabilizer</h4>
+      <div class="method">circuit.runClifford({ shots, noise? })</div>
+      <div class="mem">O(n²) tableau</div>
+      <p>Clifford-only circuits. H, S, X, Y, Z, CNOT, CZ, CY, SWAP. Non-Clifford gates throw at runtime. 1,024 qubits in milliseconds.</p>
+    </div>
+    <div class="backend-card">
+      <h4>Stabilizer Rank</h4>
+      <div class="method">circuit.runStabilizerRank({ shots, targetError? })</div>
+      <div class="mem">O(2<sup>0.228t</sup> · n²/8)</div>
+      <p>Clifford+T at 100+ qubits. Cost is exponential in the <i>non-Clifford</i> count <i>t</i>, not the width, so it goes where a statevector cannot. Exact runs stop near t=18; setting <code>targetError</code> derives a term budget from the circuit&rsquo;s stabilizer extent and reaches t=50 in seconds. <code>maxTGates({ qubits, targetError, memoryBytes })</code> gives the memory bound; runtime binds sooner. Approximate runs set <code>Distribution.truncated</code>, and <code>estimateNorm()</code> measures the damage &mdash; an exact decomposition of a unitary circuit has &#8214;&psi;&#8214;&sup2; = 1, so drift from 1 is the cost.</p>
+    </div>
+  </div>
+
+  <p>All backends accept an <code>initialState</code> option to start from an arbitrary computational basis state:</p>
+  <pre><code class="language-typescript">circuit.run({ initialState: '110' })
+circuit.runMps({ shots: 1000, initialState: '110' })
+circuit.statevector({ initialState: '110' })</code></pre>
+</div>
+
+<!-- ─────────────────── DISTRIBUTION ─────────────────── -->
+<span class="section-anchor" id="distribution"></span>
+<div class="section">
+  <h2><code>Distribution</code></h2>
+
+  <p>Every shot-based method — <code>simulate()</code>, <code>run()</code>, <code>runMps()</code>, <code>runClifford()</code> — returns a <code>Distribution</code>.</p>
+
+  <table class="ref-table">
+    <tr><th>Member</th><th>Description</th></tr>
+    <tr><td>probs</td><td>Bitstring → probability, q0 leftmost.</td></tr>
+    <tr><td>shots</td><td>Shot count the distribution was sampled from.</td></tr>
+    <tr><td>qubits</td><td>Number of qubits measured.</td></tr>
+    <tr><td>backend</td><td>Which backend actually ran: <code>'clifford'</code>, <code>'statevector'</code>, or <code>'mps'</code>.</td></tr>
+    <tr><td>representation</td><td>Statevector runs only — whether the run finished <code>'sparse'</code> or <code>'dense'</code>. Undefined for MPS and Clifford.</td></tr>
+    <tr><td>peakChi</td><td>MPS only — peak bond dimension reached, not the allocation size. Useful for profiling entanglement.</td></tr>
+    <tr><td>truncated</td><td>True when <code>truncErr</code> or <code>maxChi</code> discarded amplitude, i.e. the result is approximate.</td></tr>
+    <tr><td>cregs</td><td><code>cregs[name][bit]</code> — fraction of shots in which that classical bit read 1.</td></tr>
+    <tr><td>histogram</td><td>Decimal-integer key → probability, e.g. <code>{ '0': 0.5, '3': 0.5 }</code> (IonQ API convention). Not a method.</td></tr>
+    <tr><td>render()</td><td>ASCII bar chart of the outcomes.</td></tr>
+    <tr><td>toSVG()</td><td>Styled SVG histogram — self-contained, no external fonts.</td></tr>
+    <tr><td>mitigateReadout(p)</td><td>Correct symmetric readout error, returning a new <code>Distribution</code>. See below.</td></tr>
+  </table>
+
+  <h3>Readout error mitigation</h3>
+
+  <p>Given a known symmetric bit-flip probability, <code>mitigateReadout()</code> inverts the readout confusion matrix and returns corrected probabilities:</p>
+
+  <pre><code class="language-typescript">const noisy = circuit.run({ shots: 8192, noise: { pMeas: 0.02 } })
+const fixed = noisy.mitigateReadout(0.02)
+
+noisy.probs['00']  // biased by SPAM error
+fixed.probs['00']  // corrected</code></pre>
+</div>
+
+<!-- ─────────────────── MEASUREMENTS ─────────────────── -->
+<span class="section-anchor" id="measurements"></span>
+<div class="section">
+  <h2>Measurements &amp; classical control</h2>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Description</th></tr>
+    <tr><td>creg(name, size)</td><td>Add a classical register.</td></tr>
+    <tr><td>measure(q, reg, bit)</td><td>Measure qubit q into classical register bit.</td></tr>
+    <tr><td>reset(q)</td><td>Reset qubit to |0⟩.</td></tr>
+    <tr><td>if(reg, val, fn)</td><td>Apply gates conditionally on classical register value.</td></tr>
+    <tr><td>barrier(...qubits)</td><td>Scheduling hint — no-op in simulation, emits <code>barrier</code> in QASM.</td></tr>
+    <tr><td>defineGate(name, circ)</td><td>Register a named sub-circuit gate.</td></tr>
+    <tr><td>gate(name, ...qubits)</td><td>Apply a registered named gate.</td></tr>
+    <tr><td>decompose()</td><td>Inline all named gates back to primitives.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const c = new Circuit(2)
+  .creg('out', 2)
+  .h(0).cnot(0, 1)
+  .measure(0, 'out', 0)
+  .measure(1, 'out', 1)
+
+const result = c.run({ shots: 1000, seed: 42 })
+// result.probs → { '00': ~0.5, '11': ~0.5 }
+
+// Conditional gate
+const teleport = new Circuit(3)
+  .if('out', 1, q => q.x(2))
+  .if('out', 2, q => q.z(2))</code></pre>
+</div>
+
+<!-- ─────────────────── NOISE ─────────────────── -->
+<span class="section-anchor" id="noise"></span>
+<div class="section">
+  <h2>Noise models</h2>
+
+  <p>All three stochastic backends accept a <code>noise</code> option — either a named device or explicit parameters:</p>
+
+  <pre><code class="language-typescript">// Named device profile
+circuit.run({ noise: 'forte-1' })
+circuit.runClifford({ shots: 10000, noise: 'aria-1' })
+circuit.dm({ noise: 'h2-1' })
+
+// Custom depolarizing parameters
+circuit.run({ noise: { p1: 0.001, p2: 0.005, pMeas: 0.004 } })</code></pre>
+
+  <table class="params">
+    <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
+    <tr><td>p1</td><td>number</td><td>Single-qubit depolarizing error probability per gate.</td></tr>
+    <tr><td>p2</td><td>number</td><td>Two-qubit depolarizing error probability.</td></tr>
+    <tr><td>pMeas</td><td>number</td><td>Bit-flip probability per measured bit (SPAM error).</td></tr>
+    <tr><td>gamma</td><td>number</td><td>Amplitude damping (T1 relaxation) per gate: γ = 1 − exp(−t<sub>gate</sub>/T1). Applied to every qubit after every gate.</td></tr>
+    <tr><td>lambda</td><td>number</td><td>Pure dephasing (T2 beyond T1) per gate: λ = 1 − exp(−2 t<sub>gate</sub>(1/T2 − 1/2T1)).</td></tr>
+    <tr><td>kraus1</td><td>Gate2x2[]</td><td>Custom Kraus operators applied after each single-qubit gate.</td></tr>
+    <tr><td>kraus2</td><td>Gate4x4[]</td><td>Custom Kraus operators applied after each two-qubit gate.</td></tr>
+  </table>
+
+  <h3>T1 / T2 relaxation</h3>
+
+  <p>Convert hardware coherence times into per-gate probabilities:</p>
+
+  <pre><code class="language-typescript">const tGate = 200e-9, T1 = 50e-6, T2 = 30e-6
+
+circuit.run({ shots: 4096, noise: {
+  gamma:  1 - Math.exp(-tGate / T1),
+  lambda: 1 - Math.exp(-2 * tGate * (1 / T2 - 1 / (2 * T1))),
+}})</code></pre>
+
+  <h3>Custom Kraus channels</h3>
+
+  <p>Supply your own channel as a set of Kraus operators. They must be trace-preserving — Σ<sub>k</sub> K<sub>k</sub><sup>†</sup>K<sub>k</sub> = I — and one is sampled per shot per gate:</p>
+
+  <pre><code class="language-typescript">import { c } from '@kirkelliott/ket'
+
+// Amplitude damping written out by hand, γ = 0.01
+const g = 0.01
+const K0 = [[c(1), c(0)], [c(0), c(Math.sqrt(1 - g))]]
+const K1 = [[c(0), c(Math.sqrt(g))], [c(0), c(0)]]
+
+circuit.run({ shots: 4096, noise: { kraus1: [K0, K1] } })</code></pre>
+
+  <p><code>kraus1</code> applies after single-qubit gates only and <code>kraus2</code> after two-qubit gates only — neither leaks into the other. Both are supported by <code>run()</code> and <code>dm()</code>, but <strong>not</strong> by <code>runMps()</code>.</p>
+
+  <p>Noiseless circuits take the fast path — zero overhead. The density matrix backend applies exact per-gate depolarizing channels (no sampling).</p>
+</div>
+
+<!-- ─────────────────── ALGORITHMS ─────────────────── -->
+<span class="section-anchor" id="algorithms"></span>
+<div class="section">
+  <h2>Built-in algorithms</h2>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>qft</td><td>qft(n)</td><td>Quantum Fourier Transform circuit on n qubits.</td></tr>
+    <tr><td>iqft</td><td>iqft(n)</td><td>Inverse QFT.</td></tr>
+    <tr><td>grover</td><td>grover(n, oracle)</td><td>Grover's search. Oracle receives a Circuit and returns it with the phase-kick applied.</td></tr>
+    <tr><td>groverAncilla</td><td>groverAncilla(n, oracle)</td><td>Grover's with an explicit ancilla qubit for the oracle, rather than a phase kick.</td></tr>
+    <tr><td>phaseEstimation</td><td>phaseEstimation(precision, U, nTargets)</td><td>QPE. Returns a circuit with precision+nTargets qubits.</td></tr>
+    <tr><td>trotter</td><td>trotter(n, H, t, steps?, order?)</td><td>Trotterized Hamiltonian simulation. order=1 (Lie-Trotter) or order=2 (Suzuki).</td></tr>
+    <tr><td>qaoa</td><td>qaoa(n, edges, gamma, beta)</td><td>QAOA Max-Cut circuit.</td></tr>
+    <tr><td>maxCutHamiltonian</td><td>maxCutHamiltonian(n, edges)</td><td>Max-Cut Hamiltonian as PauliTerms[] for vqe.</td></tr>
+    <tr><td>realAmplitudes</td><td>realAmplitudes(n, reps)</td><td>Ry + CNOT ansatz. Real amplitudes. Has <code>.paramCount</code>.</td></tr>
+    <tr><td>efficientSU2</td><td>efficientSU2(n, reps)</td><td>Ry·Rz + CNOT ansatz. Full SU(2). Has <code>.paramCount</code>.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">// Grover's search — find |101⟩ in 3 qubits
+const circ = grover(3, (c) => {
+  c = c.x(1)
+  c = c.h(2)
+  c = c.ccx(0, 1, 2)
+  c = c.h(2)
+  c = c.x(1)
+  return c
+})
+circ.exactProbs()  // { '101': ~0.945, ... }
+
+// QPE — estimate phase of T gate (φ = 1/8)
+const qpe = phaseEstimation(3,
+  (c, ctrl, pow, tgts) => c.cu1(Math.PI * pow / 4, ctrl, tgts[0]), 1)
+qpe.run({ shots: 1000, seed: 42, initialState: '0001' })</code></pre>
+</div>
+
+<!-- ─────────────────── SHOR ─────────────────── -->
+<span class="section-anchor" id="shor"></span>
+<div class="section">
+  <h2>Shor's algorithm</h2>
+
+  <p>Not an oracle mock-up. The full Beauregard (2003) circuit, with modular exponentiation decomposed into primitive gates, simulated exactly — O(n³) gates, 2n+1 counting qubits, period recovered by continued fractions.</p>
+
+  <pre><code class="language-typescript">import { shorBeauregard } from '@kirkelliott/ket'
+
+const r = shorBeauregard(15n, { a: 7n })
+
+r.factors  // [5n, 3n]
+r.period   // 4n        — 7⁴ ≡ 1 (mod 15), from phase estimation
+r.method   // 'quantum' — the circuit really ran
+r.qubits   // 19</code></pre>
+
+  <p>Shor's tries classical shortcuts first, and at these sizes they hit often — an even N, or a base sharing a factor with N, is resolved by <code>gcd</code> without building a circuit. <code>method</code> tells you which path ran, so a demo can prove the quantum one did:</p>
+
+  <pre><code class="language-typescript">shorBeauregard(15n, { a: 3n }).method  // 'classical-gcd' — no circuit
+shorBeauregard(15n, { a: 7n }).method  // 'quantum'</code></pre>
+
+  <table class="ref-table">
+    <tr><th>N</th><th>qubits</th><th>time</th></tr>
+    <tr><td>15</td><td>19</td><td>0.4s</td></tr>
+    <tr><td>21</td><td>23</td><td>3.0s</td></tr>
+    <tr><td>33</td><td>27</td><td>22.4s</td></tr>
+    <tr><td>35</td><td>27</td><td>29.0s</td></tr>
+  </table>
+
+  <p>This does not reach cryptographic sizes — no classical simulator does. What you get is the real circuit, exactly simulated, at sizes you can inspect.</p>
+
+  <p>The building blocks are exported too, so you can assemble the circuit yourself or reuse the number theory:</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>factor</td><td>factor(N, opts?)</td><td>Factor N, choosing a base automatically.</td></tr>
+    <tr><td>shorBeauregard</td><td>shorBeauregard(N, opts?)</td><td>Full run. Returns <code>ShorResult</code>: <code>{ factors, period, method, qubits }</code>.</td></tr>
+    <tr><td>phiAdd</td><td>phiAdd(circuit, a, qubits)</td><td>Draper QFT adder — the innermost Beauregard layer.</td></tr>
+    <tr><td>applyQft / applyIqft</td><td>applyQft(circuit, qubits)</td><td>In-place (I)QFT over a qubit subset.</td></tr>
+    <tr><td>modPow</td><td>modPow(base, exp, mod)</td><td>Modular exponentiation on BigInt.</td></tr>
+    <tr><td>modInverse</td><td>modInverse(a, mod)</td><td>Modular multiplicative inverse.</td></tr>
+    <tr><td>gcd</td><td>gcd(a, b)</td><td>Greatest common divisor.</td></tr>
+    <tr><td>continuedFractions</td><td>continuedFractions(x, qmax)</td><td>Convergents of x — recovers the period from a QPE measurement.</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── VQE ─────────────────── -->
+<span class="section-anchor" id="vqe"></span>
+<div class="section">
+  <h2>VQE &amp; optimization</h2>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>vqe</td><td>vqe(circuit, hamiltonian)</td><td>⟨ψ(θ)|H|ψ(θ)⟩ — exact statevector, no sampling noise.</td></tr>
+    <tr><td>gradient</td><td>gradient(ansatz, H, params)</td><td>Analytic gradient via parameter-shift rule. 2N vqe() calls for N params.</td></tr>
+    <tr><td>minimize</td><td>minimize(ansatz, H, initParams, opts?)</td><td>Gradient descent. Returns <code>{ params, energy, steps, converged }</code>.</td></tr>
+    <tr><td>gradientMps</td><td>gradientMps(ansatz, H, params, opts?)</td><td>Parameter-shift gradient evaluated on the MPS backend instead of a statevector.</td></tr>
+    <tr><td>minimizeMps</td><td>minimizeMps(ansatz, H, initParams, opts?)</td><td>Gradient descent on MPS. Reaches ansatz widths a statevector can't hold.</td></tr>
+  </table>
+
+  <table class="params">
+    <tr><th>minimize option</th><th>Type</th><th>Description</th></tr>
+    <tr><td>lr</td><td>number</td><td>Learning rate. Default 0.1.</td></tr>
+    <tr><td>steps</td><td>number</td><td>Max gradient steps. Default 500.</td></tr>
+    <tr><td>tol</td><td>number</td><td>Convergence tolerance (gradient L2 norm). Default 1e-6.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const H = [{ coeff: 0.5, ops: 'ZI' }, { coeff: 0.5, ops: 'IZ' }]
+const ansatz = realAmplitudes(2, 2)  // paramCount = 6
+
+const { energy, params, converged } = minimize(
+  ansatz, H, Array(ansatz.paramCount).fill(0.1), { lr: 0.2, steps: 500 }
+)</code></pre>
+
+  <h3>VQE beyond statevector width</h3>
+
+  <p>Ground states obeying an area law stay at low bond dimension, so the MPS variants run ansätze far wider than 2ⁿ amplitudes would allow — a 12-qubit Heisenberg chain costs about what a 12-qubit statevector does, but the same code keeps going into the hundreds:</p>
+
+  <pre><code class="language-typescript">import { efficientSU2, minimizeMps } from '@kirkelliott/ket'
+
+const ansatz = efficientSU2(12, 2)
+const { energy, params } = minimizeMps(
+  ansatz, heisenbergH, Array(ansatz.paramCount).fill(0.1),
+  { lr: 0.12, steps: 80 }
+)</code></pre>
+
+  <p>Two circuit methods support this workflow directly:</p>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Description</th></tr>
+    <tr><td>expectMps(H, opts?)</td><td>Expectation value of a Pauli Hamiltonian on the MPS backend. Returns <code>{ energy, truncated }</code>.</td></tr>
+    <tr><td>bondEntropies(opts?)</td><td>Von Neumann entropy at every bond — the entanglement profile across the chain. A product state is flat at zero; GHZ is flat at exactly 1 bit, since any cut splits a single shared bit.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const s = ansatz.bind(params).bondEntropies()
+// s[i] = entropy across the cut between qubit i and i+1</code></pre>
+</div>
+
+<!-- ─────────────────── PAULI ─────────────────── -->
+<span class="section-anchor" id="pauli"></span>
+<div class="section">
+  <h2>Pauli algebra</h2>
+
+  <div class="sig"><span class="cls">PauliOp</span>.<span class="kw">from</span>(<span class="param">terms</span>: <span class="type">PauliTerm[]</span>): <span class="type">PauliOp</span></div>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+    <tr><td>.add(other)</td><td>PauliOp</td><td>Operator addition.</td></tr>
+    <tr><td>.scale(c)</td><td>PauliOp</td><td>Scalar multiplication.</td></tr>
+    <tr><td>.mul(other)</td><td>PauliOp</td><td>Operator product with phase tracking.</td></tr>
+    <tr><td>.commutator(other)</td><td>PauliOp</td><td>[A, B] = AB − BA.</td></tr>
+    <tr><td>.toTerms()</td><td>PauliTerm[]</td><td>Convert back to terms array. Throws if not Hermitian.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const X = PauliOp.from([{ coeff: 1, ops: 'X' }])
+const Y = PauliOp.from([{ coeff: 1, ops: 'Y' }])
+X.mul(Y)           // iZ
+X.commutator(Y)    // 2iZ
+
+const H1 = PauliOp.from([{ coeff: 1, ops: 'ZI' }, { coeff: 1, ops: 'IZ' }])
+const H2 = PauliOp.from([{ coeff: 0.5, ops: 'XX' }])
+vqe(circuit, H1.add(H2).toTerms())</code></pre>
+</div>
+
+<!-- ─────────────────── IMPORT / EXPORT ─────────────────── -->
+<span class="section-anchor" id="import-export"></span>
+<div class="section">
+  <h2>Import / Export</h2>
+
+  <div class="format-grid">
+    <div class="format-chip">
+      <div class="fname">OpenQASM 2 / 3</div>
+      <div class="fio">fromQASM · toQASM</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">IonQ JSON</div>
+      <div class="fio">fromIonQ · toIonQ</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Quil 2.0</div>
+      <div class="fio">fromQuil · toQuil</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Qiskit (Python)</div>
+      <div class="fio">fromQiskit · toQiskit</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Cirq (Python)</div>
+      <div class="fio">fromCirq · toCirq</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">ket JSON</div>
+      <div class="fio">fromJSON · toJSON</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Qiskit Qobj JSON</div>
+      <div class="fio">fromQobj</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Q#</div>
+      <div class="fio">toQSharp</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">pyQuil</div>
+      <div class="fio">toPyQuil</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Amazon Braket</div>
+      <div class="fio">toBraket</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">CUDA-Q</div>
+      <div class="fio">toCudaQ</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">TensorFlow Quantum</div>
+      <div class="fio">toTFQ</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">Quirk JSON</div>
+      <div class="fio">toQuirk</div>
+    </div>
+    <div class="format-chip">
+      <div class="fname">LaTeX (quantikz)</div>
+      <div class="fio">toLatex</div>
+    </div>
+  </div>
+
+  <pre><code class="language-typescript">// Import
+const c = Circuit.fromQASM(`
+  OPENQASM 2.0;
+  qreg q[2];
+  h q[0];
+  cx q[0],q[1];
+`)
+
+// Export
+c.toQASM()     // OpenQASM 2.0 string
+c.toIonQ()     // IonQ JSON for hardware submission
+c.toCirq()     // Cirq Python code
+c.toLatex()    // quantikz LaTeX environment</code></pre>
+</div>
+
+<!-- ─────────────────── DEVICES ─────────────────── -->
+<span class="section-anchor" id="devices"></span>
+<div class="section">
+  <h2>Devices</h2>
+
+  <pre><code class="language-typescript">import { DEVICES, IONQ_DEVICES, Circuit } from '@kirkelliott/ket'
+
+const forte = DEVICES['forte-1']  // { qubits: 36, noise: { p1, p2, pMeas } }
+
+// Validate before submitting
+circuit.checkDevice('aria-1')   // throws if incompatible
+circuit.toIonQ()                // safe to call after check</code></pre>
+
+  <table class="device-table">
+    <tr><th>Device</th><th>Vendor</th><th>Qubits</th><th>p1 (1Q)</th><th>p2 (2Q)</th><th>pMeas</th><th>Status</th><th>Source</th></tr>
+    <tr><td>forte-1</td><td>IonQ</td><td>36</td><td>0.0267%</td><td>0.49%</td><td>0.20%</td><td>available</td><td>vendor-published</td></tr>
+    <tr><td>forte-enterprise-1</td><td>IonQ</td><td>36</td><td>0.0267%</td><td>0.49%</td><td>0.20%</td><td>available</td><td>estimated</td></tr>
+    <tr><td>h2-1</td><td>Quantinuum</td><td>56</td><td>0.0019%</td><td>0.11%</td><td>0.10%</td><td>available</td><td>estimated</td></tr>
+    <tr><td>helios</td><td>Quantinuum</td><td>98</td><td>0.0025%</td><td>0.079%</td><td>0.10%</td><td>available</td><td>vendor-published</td></tr>
+    <tr><td>ibm_brisbane</td><td>IBM</td><td>127</td><td>0.024%</td><td>0.76%</td><td>1.35%</td><td>available</td><td>estimated</td></tr>
+    <tr><td>aria-1</td><td>IonQ</td><td>25</td><td>0.05%</td><td>1.33%</td><td>0.40%</td><td>retired</td><td>vendor-published</td></tr>
+    <tr><td>aria-2</td><td>IonQ</td><td>25</td><td>0.0657%</td><td>1.86%</td><td>0.40%</td><td>retired</td><td>vendor-published</td></tr>
+    <tr><td>h1-1</td><td>Quantinuum</td><td>20</td><td>0.0018%</td><td>0.097%</td><td>0.23%</td><td>retired</td><td>estimated</td></tr>
+    <tr><td>harmony</td><td>IonQ</td><td>11</td><td>0.10%</td><td>1.50%</td><td>1.00%</td><td>retired</td><td>estimated</td></tr>
+    <tr><td>ibm_sherbrooke</td><td>IBM</td><td>127</td><td>0.024%</td><td>0.74%</td><td>1.35%</td><td>retired</td><td>estimated</td></tr>
+    <tr><td>ibm_torino</td><td>IBM</td><td>133</td><td>0.02%</td><td>0.30%</td><td>1.00%</td><td>retired</td><td>estimated</td></tr>
+  </table>
+  <p>Retired devices are kept in the table so a circuit written against one still
+  reports honestly, rather than silently matching nothing. Rows marked
+  <code>estimated</code> are not vendor-published figures — treat them as
+  order-of-magnitude. Regenerate from IonQ’s API with
+  <code>scripts/refresh-ionq-devices.ts</code>.</p>
+
+  <p><code>IONQ_DEVICES</code> is the subset of <code>DEVICES</code> that declares <code>nativeGates</code>, so it is keyed only by IonQ machines.</p>
+
+  <h3>Expanding unsupported gates</h3>
+
+  <p><code>toIonQ()</code> is a serializer, not a compiler: it rejects any gate outside IonQ&rsquo;s set rather than silently expanding it, so the gate count you inspect is the gate count you send. <code>toIonQBasis()</code> is the explicit expansion step. QFT and modular-exponentiation circuits are built almost entirely from <code>cu1</code> and could not previously be exported at all:</p>
+
+  <pre><code class="language-typescript">const shor = shorCircuit(15n, 7n, 3)
+shor.toIonQ()                       // TypeError: 'cu1' is not serializable
+
+const native = shor.toIonQBasis()   // cu1 -> rz + controlled rz; cswap -> controlled x
+native.toIonQ()                     // 5,798 gates, submit-ready
+
+shor.toIonQBasis().compile('forte-1')   // and on to gpi/gpi2/ms</code></pre>
+
+  <p>Controlled gates are emitted natively, as IonQ&rsquo;s format expects: a base gate plus a <code>controls</code> array, so <code>ccx</code> is <code>{gate:'x', controls:[a,b], target:t}</code> rather than fifteen Clifford+T gates. What remains is still not free &mdash; <code>cu1</code> becomes two gates and <code>cswap</code> three &mdash; so check <code>gateCounts()</code> before submitting. Each rule is exact up to global phase.</p>
+
+  <h3>Transpiling to native gates</h3>
+
+  <p><code>compile(device)</code> rewrites a circuit into the target's hardware-native gate set, returning a new <code>Circuit</code>. For IonQ that means GPI, GPI2, and MS, plus virtual-Z frame rotations that cost nothing on hardware:</p>
+
+  <pre><code class="language-typescript">const native = new Circuit(2).h(0).cnot(0, 1).compile('forte-1')
+
+native.draw()
+// q0: ─Rz(π/2)──GPI2(0)──Rz(π/2)──GPI2(π/2)──MS(0,0)──GPI2(-π/2)──Rz(-π/2)─
+//                                               │
+// q1: ─GPI2(π)───────────────────────────────MS(0,0)───────────────────────
+
+native.toIonQ()   // submit-ready</code></pre>
+
+  <p>Barriers pass through. Gates with no native translation throw <code>TypeError</code>, as do unknown device names — so a failed compile is loud rather than silently approximate.</p>
+</div>
+
+<!-- ─────────────────── IONQ HARDWARE ─────────────────── -->
+<span class="section-anchor" id="ionq-hardware"></span>
+<div class="section">
+  <h2>Running on IonQ hardware</h2>
+
+  <p><code>toIonQ()</code> produces the payload; <code>runIonQ</code> submits it, waits and fetches the results. No dependency is added &mdash; the client uses the global <code>fetch</code>, so it runs anywhere ket does.</p>
+
+  <pre><code class="language-typescript">import { Circuit, runIonQ, countsToProbs } from '@kirkelliott/ket'
+
+const bell = new Circuit(2).h(0).cnot(0, 1)
+bell.checkDevice('forte-1')            // fail fast, before spending queue time
+
+const { job, counts } = await runIonQ(bell.toIonQ(), {
+  apiKey: process.env.IONQ_API_KEY,
+  target: 'qpu.forte-1',               // or 'simulator' — free
+  shots: 1024,
+  noise: { model: 'ideal' },
+  onPoll: j =&gt; console.log(j.status),
+})
+
+countsToProbs(counts, 2, 1024)         // { '00': 0.49, '11': 0.51 }</code></pre>
+
+  <table class="device-table">
+    <tr><th>Function</th><th>Purpose</th></tr>
+    <tr><td><code>runIonQ(circuit, opts)</code></td><td>Submit, poll, fetch, convert. The path that cannot be got wrong.</td></tr>
+    <tr><td><code>submitIonQ(circuit, opts)</code></td><td>Queue a job. Returns once accepted, not when it finishes.</td></tr>
+    <tr><td><code>getIonQJob(id, opts)</code></td><td>Fetch current state. <b>Does not include results.</b></td></tr>
+    <tr><td><code>awaitIonQJob(id, opts)</code></td><td>Poll to a terminal state. <b>Throws</b> on <code>failed</code>/<code>canceled</code>.</td></tr>
+    <tr><td><code>getIonQResults(job, opts)</code></td><td>Fetch the histogram, following the job&rsquo;s <code>results_url</code>.</td></tr>
+    <tr><td><code>cancelIonQJob(id, opts)</code></td><td>Cancel a queued or running job and release its slot.</td></tr>
+    <tr><td><code>ionqSubmitRequest(circuit, opts)</code></td><td>Build the request without sending it &mdash; for testing, or to route it yourself.</td></tr>
+    <tr><td><code>ionqHistogramToCounts(hist, shots)</code></td><td>Probabilities &rarr; shot counts keyed by basis index.</td></tr>
+  </table>
+
+  <p><b>Results are not on the job object.</b> <code>GET /jobs/{id}</code> returns metadata and a <code>results_url</code>; the histogram lives behind it. <code>runIonQ</code> and <code>getIonQResults</code> follow that automatically &mdash; reading <code>job.data</code> will find nothing.</p>
+
+  <p><b>State the noise model rather than inheriting it.</b> Omitting <code>noise</code> leaves the choice to IonQ&rsquo;s server-side default, which is not guaranteed to be noiseless. At any real depth a device model flattens the distribution completely, and a flat distribution is indistinguishable from a wrong answer. Pass <code>{ model: 'ideal' }</code>, or <code>{ model: 'forte-1', seed: 100 }</code> to sample a device profile.</p>
+
+  <p><b>Angle units differ between the two gate sets.</b> QIS gates (<code>rx</code>/<code>ry</code>/<code>rz</code>/<code>xx</code>/<code>yy</code>/<code>zz</code>) take <code>rotation</code> in <b>radians</b> &mdash; IonQ&rsquo;s own example gives Rx(&pi;/2) as <code>rotation: 1.5708</code>. The native gates (<code>gpi</code>/<code>gpi2</code>/<code>ms</code>) take <code>phase</code> in <b>turns</b>, where 1.0 = 2&pi;. ket handles both. The distinction is not cosmetic: getting it wrong submits a valid circuit that computes something else, and Clifford-only circuits such as a Bell pair are blind to the error.</p>
+
+  <p><b>Bit order matches, and that is verified rather than assumed.</b> IonQ histogram keys are little-endian integers with qubit <i>i</i> at 2<sup><i>i</i></sup>, which is exactly ket&rsquo;s convention, so no conversion is applied. Submitting <code>x(0)</code> on two qubits returns <code>{"1": 1.0}</code>.</p>
+
+  <h3>Calling from a browser: use a proxy</h3>
+
+  <p><code>api.ionq.co</code> sends no <code>access-control-allow-origin</code>, so a browser cannot call it directly. That is a feature: an IonQ API key buys paid hardware time, and a key in a JS bundle is a key anyone can spend. Keep it server-side and forward.</p>
+
+  <pre><code class="language-typescript">// server — the key never leaves this process
+app.post('/api/ionq/jobs', async (req, res) =&gt; {
+  res.json(await submitIonQ(req.body.input, { apiKey: process.env.IONQ_API_KEY }))
+})
+
+// browser — same library, same types, no key
+const { id } = await submitIonQ(circuit.toIonQ(), {
+  endpoint: '/api/ionq', target: 'qpu.forte-1', shots: 1024,
+})</code></pre>
+
+  <p>Both halves import the same <code>Circuit</code>, so the browser can simulate for instant feedback and hand the identical object to the server to run on hardware &mdash; one representation, no serialisation boundary between two languages.</p>
+</div>
+
+<!-- ─────────────────── VISUALIZATION ─────────────────── -->
+<span class="section-anchor" id="visualization"></span>
+<div class="section">
+  <h2>Visualization</h2>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+    <tr><td>draw()</td><td>string</td><td>ASCII diagram. Gates on non-conflicting qubits share a column.</td></tr>
+    <tr><td>toSVG(opts?)</td><td>string</td><td>Self-contained SVG. No external fonts or stylesheets. Accepts <code>{ theme }</code>.</td></tr>
+    <tr><td>blochSphere(q, opts?)</td><td>string</td><td>SVG Bloch sphere for qubit q via partial trace. Accepts <code>{ theme }</code>.</td></tr>
+    <tr><td>blochAngles(q)</td><td>{ theta, phi }</td><td>Bloch sphere angles for qubit q.</td></tr>
+    <tr><td>toLatex()</td><td>string</td><td>quantikz LaTeX environment with proper \ctrl{}, \targ{}, etc.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const bell = new Circuit(2).h(0).cnot(0, 1)
+
+console.log(bell.draw())
+// q0: ─H──●─
+//          │
+// q1: ─────⊕─
+
+// Write SVG files
+import fs from 'fs'
+fs.writeFileSync('bell.svg', bell.toSVG())
+fs.writeFileSync('state.svg', bell.blochSphere(0))</code></pre>
+
+  <h3>Light and dark themes <span class="tag">0.6.1</span></h3>
+
+  <p>All three SVG exporters take a <code>theme</code> of <code>'light'</code> (the default) or <code>'dark'</code>. The colours are baked into the SVG, so the output stays self-contained — it does not depend on the host page's stylesheet or on <code>prefers-color-scheme</code>:</p>
+
+  <pre><code class="language-typescript">bell.toSVG({ theme: 'dark' })
+bell.blochSphere(0, { theme: 'dark' })
+
+const d = bell.run({ shots: 1024 })
+d.toSVG({ theme: 'dark', title: 'bell state' })</code></pre>
+
+  <p>Dark swaps the surface for <code>#0c0e18</code> with light ink and a teal accent; the geometry is identical between themes. An unrecognised theme name throws <code>TypeError</code> rather than silently falling back. Every chart and diagram on this site is generated with <code>theme: 'dark'</code>.</p>
+</div>
+
+<!-- ─────────────────── SERIALIZATION ─────────────────── -->
+<span class="section-anchor" id="serialization"></span>
+<div class="section">
+  <h2>Serialization</h2>
+
+  <p>Lossless round-trip through JSON. All operation types preserved: gates, measure, reset, if, named sub-circuits.</p>
+
+  <pre><code class="language-typescript">const json    = circuit.toJSON()
+const restored = Circuit.fromJSON(json)
+
+// Or pass a parsed object
+const restored2 = Circuit.fromJSON(JSON.parse(json))</code></pre>
+</div>
+
+<!-- ─────────────────── CLIFFORD SIM ─────────────────── -->
+<span class="section-anchor" id="density-matrix"></span>
+<div class="section">
+  <h2><code>DensityMatrix</code></h2>
+
+  <p><code>circuit.dm()</code> returns a <code>DensityMatrix</code> — the exact mixed state, with per-gate channels applied analytically rather than sampled. Use it when you want the state itself rather than shot statistics.</p>
+
+  <table class="ref-table">
+    <tr><th>Member</th><th>Description</th></tr>
+    <tr><td>probabilities()</td><td>Bitstring → probability, q0 leftmost.</td></tr>
+    <tr><td>purity()</td><td>Tr(ρ²). Exactly 1 for a pure state, 1/2ⁿ for the maximally mixed one.</td></tr>
+    <tr><td>entropy()</td><td>Von Neumann entropy −Tr(ρ log ρ), in bits. Zero for a pure state.</td></tr>
+    <tr><td>blochAngles(q)</td><td>Reduced single-qubit state of q as <code>{ theta, phi }</code>.</td></tr>
+    <tr><td>get(i, j)</td><td>Matrix element ρ<sub>ij</sub> as a <code>Complex</code>.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">const rho = new Circuit(2).h(0).cnot(0, 1).dm({ noise: { p1: 0.01 } })
+
+rho.purity()         // 0.986756 — decoherence has pulled it off 1
+rho.entropy()        // 0.057778 bits of mixedness
+rho.probabilities()  // { '00': 0.5, '11': 0.5 }
+rho.get(0, 0)        // { re: 0.5, im: 0 }</code></pre>
+
+  <p>Accepts <code>DmNoiseParams</code> or a named device, and a <code>dense</code> option that tunes the sparse → dense promotion (default 1/32 fill). Practical to about 12 qubits, since ρ is 4ⁿ.</p>
+</div>
+
+<!-- ─────────────────── CLIFFORD SIM ─────────────────── -->
+<span class="section-anchor" id="clifford-sim"></span>
+<div class="section">
+  <h2><code>CliffordSim</code></h2>
+
+  <p><code>CliffordSim</code> is exported directly for researchers who need more control than <code>runClifford</code> — custom decoders, syndrome extraction, mid-circuit readout.</p>
+
+  <div class="sig"><span class="kw">new</span> <span class="cls">CliffordSim</span>(<span class="param">n</span>: <span class="type">number</span>)</div>
+
+  <table class="ref-table">
+    <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+    <tr><td>h(q), s(q), x(q), cnot(c, t) …</td><td>void</td><td>Apply Clifford gates. Mutates in place (unlike Circuit).</td></tr>
+    <tr><td>measure(q, rand)</td><td>0 | 1</td><td>Measure qubit. <code>rand</code> is a uniform random in [0, 1).</td></tr>
+    <tr><td>stabilizerGenerators()</td><td>string[]</td><td>Current generators as signed Pauli strings, e.g. <code>'+XX'</code>, <code>'-ZZ'</code>.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { CliffordSim } from '@kirkelliott/ket'
+
+const sim = new CliffordSim(2)
+sim.h(0); sim.cnot(0, 1)
+
+sim.stabilizerGenerators()  // ['+XX', '+ZZ']
+
+// Inject error
+sim.x(0)
+sim.stabilizerGenerators()  // ['+XX', '-ZZ']  ← syndrome bit flipped
+
+const outcome = sim.measure(0, Math.random())</code></pre>
+</div>
+
+<!-- ─────────────────── QEC ─────────────────── -->
+<span class="section-anchor" id="qec"></span>
+<div class="section">
+  <h2>Quantum error correction</h2>
+
+  <p>Sweep physical error rate to find the logical threshold:</p>
+
+  <pre><code class="language-typescript">// Surface code threshold curve
+for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
+  const result = surfaceCode.runClifford({ shots: 10000, noise: { p2 } })
+  console.log(p2, result.probs['0'])  // logical error rate vs physical
+}</code></pre>
+
+  <p>For detailed threshold analysis, use <code>CliffordSim</code> directly to extract stabilizer syndromes after each noise injection step without going through the full circuit runner.</p>
+</div>
+
+<!-- ── FOOTER ── -->
+<div style="border-top:1px solid var(--border);padding-top:2rem;margin-top:2rem;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:1rem">
+  <div>
+    <div style="font-size:.85rem;font-weight:700;margin-bottom:.2rem">
+      <span style="color:#54b4c5">ket</span>
+      <span style="color:var(--muted);font-weight:400;font-size:.78rem"> — quantum circuits in JavaScript</span>
+    </div>
+    <div style="font-size:.74rem;color:var(--muted)">
+      Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a>
+      · MIT License · 1,301 tests
+    </div>
+  </div>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <a href="https://dmvjs.com/ket/demo.html"
+       style="background:#54b4c5;color:#000;font-weight:700;font-size:.8rem;padding:.4rem .9rem;border-radius:6px;text-decoration:none">
+      Open playground →
+    </a>
+    <a href="https://github.com/dmvjs/ket" target="_blank" rel="noopener"
+       style="background:var(--card);border:1px solid var(--border);color:var(--text);font-size:.8rem;padding:.4rem .9rem;border-radius:6px;text-decoration:none">
+      GitHub
+    </a>
+  </div>
+</div>
+
+</div>
+</main>
+
+<script>
+// Syntax highlighting
+document.addEventListener('DOMContentLoaded', () => hljs.highlightAll())
+
+// Active nav link on scroll
+const anchors = document.querySelectorAll('.section-anchor')
+const links   = document.querySelectorAll('.nav-link')
+
+const linkMap = {}
+links.forEach(l => {
+  const id = l.getAttribute('href').replace('#', '')
+  linkMap[id] = l
+})
+
+function onScroll() {
+  let active = null
+  anchors.forEach(a => {
+    if (window.scrollY + 80 >= a.offsetTop) active = a.id
+  })
+  links.forEach(l => l.classList.remove('active'))
+  if (active && linkMap[active]) linkMap[active].classList.add('active')
+}
+
+window.addEventListener('scroll', onScroll, { passive: true })
+onScroll()
+</script>
+</body>
+</html>

@@ -360,6 +360,44 @@ export function beauregardU(
 // ── Full Shor's QPE circuit ───────────────────────────────────────────────────
 
 /**
+ * Build the phase-estimation circuit Shor's algorithm runs for base `a`.
+ *
+ * Layout: counting register on qubits `[0, precision)`, then the x register
+ * (`n` qubits, initialised to |1⟩), the Beauregard accumulator (`n+1`), and one
+ * ancilla — `precision + 2n + 2` qubits in total.
+ *
+ * `shorBeauregard` runs this and post-processes the measured phase. It is
+ * exported separately so the circuit can be counted, drawn, or run under noise
+ * without reimplementing the construction, which is the only way to keep an
+ * external copy from drifting from this one.
+ *
+ * @example
+ * const c = shorCircuit(33n, 5n)
+ * c.qubits            // 27
+ * c.depth()           // gate depth of the real construction
+ * c.run({ shots: 8, noise: 'forte-1' })
+ */
+export function shorCircuit(N: bigint, a: bigint, precision?: number): Circuit {
+  const n    = Math.ceil(Math.log2(Number(N)))
+  const prec = precision ?? 2 * n + 1
+  const xOff = prec, bOff = prec + n, ancilla = prec + 2 * n + 1
+
+  let c = new Circuit(prec + 2 * n + 2)
+  for (let k = 0; k < prec; k++) c = c.h(k)   // counting register to |+>^prec
+  c = c.x(xOff)                               // x register to |1>
+
+  // Controlled-U_a^(2^k); a^(2^k) mod N is computed classically, so the circuit
+  // carries only the modular multiplication.
+  let ak = a % N
+  for (let k = 0; k < prec; k++) {
+    c = beauregardU(c, n, ak, modInverse(ak, N), N, k, xOff, bOff, ancilla)
+    ak = ak * ak % N
+  }
+  return applyIqft(c, prec, 0)
+}
+
+
+/**
  * How a factor was obtained.
  *
  * Only `'quantum'` means the QPE circuit actually ran and period-finding
@@ -474,11 +512,6 @@ export function shorBeauregard(
   const truncErr   = opts.truncErr   ?? 0
   const totalQ     = precision + 2 * n + 2
 
-  // Qubit offsets
-  const xOff    = precision
-  const bOff    = precision + n
-  const ancilla = precision + 2 * n + 1
-
   // Quick classical checks
   if (N < 4n) throw new RangeError('N must be ≥ 4')
   if (N % 2n === 0n) return { factor: 2n, factors: [2n, N / 2n], a: 0n, period: undefined, attempts: 0, qubits: totalQ, method: 'classical-even' }
@@ -501,26 +534,7 @@ export function shorBeauregard(
 
     const a    = aCand
 
-    // Build QPE circuit
-    let c = new Circuit(totalQ)
-
-    // Initialise counting register to |+⟩^precision
-    for (let k = 0; k < precision; k++) c = c.h(k)
-
-    // Initialise x register to |1⟩ (qubit xOff = |1⟩, rest |0⟩)
-    c = c.x(xOff)
-
-    // Apply controlled-U_a^(2^k) for each counting qubit k
-    // a^(2^k) mod N is computed classically; the circuit only uses phase rotations
-    let ak = a % N
-    for (let k = 0; k < precision; k++) {
-      const akInv = modInverse(ak, N)
-      c = beauregardU(c, n, ak, akInv, N, k, xOff, bOff, ancilla)
-      ak = ak * ak % N  // a^(2^(k+1)) = (a^(2^k))^2
-    }
-
-    // Inverse QFT on counting register
-    c = applyIqft(c, precision, 0)
+    const c = shorCircuit(N, a, precision)
 
     // Run via MPS (handles the entanglement efficiently).
     // Vary the seed per attempt — otherwise every retry rebuilds an identical
