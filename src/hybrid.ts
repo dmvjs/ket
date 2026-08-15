@@ -72,8 +72,16 @@ export const simZero = (n: number, policy: DensePolicy = DEFAULT_SV_POLICY): Sim
   ({ kind: 'sparse', sv: new Map([[0n, { re: 1, im: 0 }]]), n, policy })
 
 /** Wrap an existing sparse state. */
+/**
+ * Adopt a sparse state, copying it first.
+ *
+ * Sparse gates mutate the map they are given, matching what the dense kernel has
+ * always done. The copy is what makes that safe: it draws the ownership line at
+ * the point the simulation takes the state, so a caller-supplied initial state is
+ * never written through.
+ */
 export const simFromSparse = (sv: StateVector, n: number, policy: DensePolicy = DEFAULT_SV_POLICY): SimState =>
-  ({ kind: 'sparse', sv, n, policy })
+  ({ kind: 'sparse', sv: new Map(sv), n, policy })
 
 /** True once the state has densified enough to be worth moving. */
 function shouldPromote(sv: StateVector, n: number, policy: DensePolicy): boolean {
