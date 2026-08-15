@@ -361,12 +361,12 @@ import type { DenseOptions } from '@kirkelliott/ket'
 
 circuit.exactProbs({ dense: { maxQubits: 0 } })          // never promote
 circuit.run({ shots: 1024, dense: { maxQubits: 20 } })   // lower the memory ceiling
-circuit.dm({ noise: 'forte-1', dense: { fill: 8 } })     // promote sooner
+circuit.dm({ noise: 'forte-1', dense: { fill: 64 } })    // promote sooner
 ```
 
 | Field | Statevector default | Density matrix default | Meaning |
 |---|---|---|---|
-| `fill` | 8 | 32 | Promote once the state exceeds `1 / fill` of full occupancy. Lower values promote sooner. |
+| `fill` | 64 | 32 | Promote once the state exceeds `1 / fill` of full occupancy. **Higher** values promote sooner. |
 | `maxQubits` | 24 | 12 | Largest qubit count for which a dense buffer is allocated at all. Beyond it the sparse path is used however full the state gets. Both defaults correspond to a 256 MiB buffer. |
 
 Accepted by `run()`, `simulate()`, `statevector()`, `exactProbs()` and `dm()`.

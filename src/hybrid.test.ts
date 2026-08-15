@@ -485,7 +485,10 @@ describe('hybrid — configurable promotion thresholds', () => {
   })
 
   it('omitting the option leaves the documented defaults in place', () => {
-    expect(DEFAULT_SV_POLICY).toEqual({ fill: 8, maxQubits: MAX_DENSE_QUBITS })
+    // fill 64 sits just short of the ~2^n/100 break-even between the sparse and
+    // dense kernels. It was 8 — twelve times later than break-even — which cost
+    // up to 4x on states that end up dense anyway.
+    expect(DEFAULT_SV_POLICY).toEqual({ fill: 64, maxQubits: MAX_DENSE_QUBITS })
     expect(svPolicy()).toEqual(DEFAULT_SV_POLICY)
     expect(svPolicy({ fill: 4 })).toEqual({ fill: 4, maxQubits: MAX_DENSE_QUBITS })
   })

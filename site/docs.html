@@ -621,7 +621,7 @@ d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
       <h4>Statevector</h4>
       <div class="method">circuit.run() / circuit.statevector()</div>
       <div class="mem">sparse map → dense Float64Array</div>
-      <p>Exact amplitudes. Starts as a sparse BigInt-keyed map and promotes itself to a contiguous <code>Float64Array</code> past ⅛ fill, so sparse circuits (Bell, GHZ) stay cheap at any width and dense ones stop paying for a hash map. Practical to ~20 qubits dense.</p>
+      <p>Exact amplitudes. Starts as a sparse BigInt-keyed map and promotes itself to a contiguous <code>Float64Array</code> past 1/64 fill, so sparse circuits (Bell, GHZ) stay cheap at any width and dense ones stop paying for a hash map. Practical to ~20 qubits dense.</p>
     </div>
     <div class="backend-card">
       <h4>MPS / Tensor Network</h4>
