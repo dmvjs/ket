@@ -47,12 +47,28 @@ export type Gate4x4 = [
 export function applySingle(sv: StateVector, q: number, [[a, b], [c, d]]: Gate2x2): StateVector {
   const next: StateVector = new Map()
   const mask = 1n << BigInt(q)
-  const seen = new Set<bigint>()
+
+  // Diagonal gates — b = c = 0 — move no amplitude between basis states and so
+  // cannot change the support: every entry is simply scaled by a or d. Taking
+  // that path avoids the pairing machinery entirely, which per entry is a Set
+  // insert and lookup, three BigInt allocations and two extra Map gets. Worth a
+  // special case because diagonal gates are most of what QFT and the standard
+  // VQE ansatze are built from: z, s, sdg, t, tdg, rz, u1, p, r2/r4/r8, vz.
+  if (isNegligible(b) && isNegligible(c)) {
+    for (const [idx, amp] of sv) {
+      const scaled = mul((idx & mask) === 0n ? a : d, amp)
+      if (!isNegligible(scaled)) next.set(idx, scaled)
+    }
+    return next
+  }
 
   for (const idx of sv.keys()) {
-    const base = idx & ~mask // idx with bit q = 0
-    if (seen.has(base)) continue
-    seen.add(base)
+    // Each pair {base, base|mask} must be handled once. The bit-0 member claims
+    // it; a bit-1 key only proceeds when its partner is absent. That replaces the
+    // `seen` set with one Map.has on half the keys.
+    const isLow = (idx & mask) === 0n
+    const base = isLow ? idx : idx ^ mask
+    if (!isLow && sv.has(base)) continue
 
     const amp0 = sv.get(base) ?? ZERO
     const amp1 = sv.get(base | mask) ?? ZERO
@@ -214,16 +230,33 @@ export function applyControlled(sv: StateVector, control: number, target: number
   const next: StateVector = new Map()
   const cmask = 1n << BigInt(control)
   const tmask = 1n << BigInt(target)
-  const seen  = new Set<bigint>()
+
+  // Diagonal target — b = c = 0 — scales each amplitude in place and leaves the
+  // support alone, so no pairing is needed. `cu1` is this case, and QFT is built
+  // almost entirely from `cu1`. Keys are unique across the iteration, so entries
+  // can be set directly rather than accumulated.
+  if (isNegligible(b) && isNegligible(c)) {
+    for (const [idx, amp] of sv) {
+      // Still prune negligible amplitudes on the way through: `accumulate` did
+      // that, and keeping them would grow the support and delay promotion.
+      if ((idx & cmask) === 0n) { if (!isNegligible(amp)) next.set(idx, amp); continue }
+      const scaled = mul((idx & tmask) === 0n ? a : d, amp)
+      if (!isNegligible(scaled)) next.set(idx, scaled)
+    }
+    return next
+  }
 
   for (const [idx, amp] of sv) {
     if ((idx & cmask) === 0n) {
       accumulate(next, idx, amp)
       continue
     }
-    const base = idx & ~tmask
-    if (seen.has(base)) continue
-    seen.add(base)
+    // As in applySingle: the target-bit-0 member of each pair claims it, so the
+    // `seen` set collapses to one Map.has on the bit-1 keys.
+    const isLow = (idx & tmask) === 0n
+    const base = isLow ? idx : idx ^ tmask
+    if (!isLow && sv.has(base)) continue
+
     const amp0 = sv.get(base)         ?? ZERO
     const amp1 = sv.get(base | tmask) ?? ZERO
     accumulate(next, base,         add(mul(a, amp0), mul(b, amp1)))

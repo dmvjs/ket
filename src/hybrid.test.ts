@@ -814,3 +814,61 @@ describe('maxChi and the entanglement router interact predictably', () => {
     expect(m.truncated).toBe(true)
   }, 60_000)
 })
+
+describe('sparse kernel — diagonal fast path', () => {
+  // applySingle and applyControlled take a shortcut when the gate is diagonal
+  // (b = c = 0): amplitudes are scaled where they sit, with no pairing, no
+  // support change and no `seen` set. That is most of QFT and every standard
+  // ansatz, but it is a second code path, so it must agree with the general one
+  // exactly — including global phase.
+  const diagonal: [string, (c: Circuit, q: number) => Circuit][] = [
+    ['z',  (c, q) => c.z(q)],   ['s',  (c, q) => c.s(q)],   ['sdg', (c, q) => c.sdg(q)],
+    ['t',  (c, q) => c.t(q)],   ['tdg', (c, q) => c.tdg(q)],
+    ['rz', (c, q) => c.rz(0.7, q)], ['u1', (c, q) => c.u1(0.4, q)], ['p', (c, q) => c.p(1.1, q)],
+  ]
+
+  for (const [name, apply] of diagonal) {
+    it(`${name}: sparse path matches dense, amplitude for amplitude`, () => {
+      let c = new Circuit(5)
+      for (let i = 0; i < 5; i++) c = c.h(i)
+      c = apply(c, 2)
+      c = apply(c.cnot(0, 1), 3)
+      const sparse = c.statevector({ dense: { fill: 2 } })    // never promotes
+      const dense  = c.statevector({ dense: { fill: 1e9 } })  // promotes at once
+      expect(sparse.size).toBe(dense.size)
+      for (const [idx, z] of dense) {
+        const got = sparse.get(idx)
+        expect(got, `missing |${idx.toString(2)}>`).toBeDefined()
+        expect(got!.re).toBeCloseTo(z.re, 12)
+        expect(got!.im).toBeCloseTo(z.im, 12)
+      }
+    })
+  }
+
+  it('cu1: controlled-diagonal sparse path matches dense', () => {
+    let c = new Circuit(5)
+    for (let i = 0; i < 5; i++) c = c.h(i)
+    c = c.cu1(0.9, 0, 3).cu1(-0.4, 2, 1).cnot(1, 4).cu1(2.1, 4, 0)
+    const sparse = c.statevector({ dense: { fill: 2 } })
+    const dense  = c.statevector({ dense: { fill: 1e9 } })
+    expect(sparse.size).toBe(dense.size)
+    for (const [idx, z] of dense) {
+      expect(sparse.get(idx)!.re).toBeCloseTo(z.re, 12)
+      expect(sparse.get(idx)!.im).toBeCloseTo(z.im, 12)
+    }
+  })
+
+  it('a gate that is diagonal only up to rounding still takes the general path', () => {
+    // b and c are non-zero but tiny; the result must still be correct.
+    const eps = 1e-9
+    const g: [[{ re: number; im: number }, { re: number; im: number }],
+              [{ re: number; im: number }, { re: number; im: number }]] =
+      [[{ re: 1, im: 0 }, { re: eps, im: 0 }], [{ re: eps, im: 0 }, { re: -1, im: 0 }]]
+    const c = new Circuit(4).h(0).h(1).unitary(g, 2)
+    const sparse = c.statevector({ dense: { fill: 2 } })
+    const dense  = c.statevector({ dense: { fill: 1e9 } })
+    for (const [idx, z] of dense) {
+      expect(sparse.get(idx)?.re ?? 0).toBeCloseTo(z.re, 10)
+    }
+  })
+})
