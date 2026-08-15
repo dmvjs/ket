@@ -1,6 +1,6 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, five backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
@@ -30,23 +30,29 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/ket.js",
       "default": "./dist/ket.js"
+    },
+    "./compat": {
+      "types": "./dist/compat.d.ts",
+      "import": "./dist/compat.js",
+      "default": "./dist/compat.js"
     }
   },
   "types": "dist/index.d.ts",
-  "unpkg": "dist/ket.min.js",
+  "unpkg": "./dist/ket.global.js",
   "module": "dist/ket.js",
   "files": [
     "dist",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js && esbuild src/stabilizer-rank.worker.ts --bundle --format=esm --platform=node --outfile=dist/stabilizer-rank.worker.js",
+    "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/index.ts --bundle --minify --format=iife --global-name=ket --log-override:empty-import-meta=silent --outfile=dist/ket.global.js && node scripts/build-compat-shim.ts && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js && esbuild src/stabilizer-rank.worker.ts --bundle --format=esm --platform=node --outfile=dist/stabilizer-rank.worker.js",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "lint": "oxlint",
     "test": "vitest run",
     "dev": "vitest",
-    "deploy:site": "node scripts/check-site-version.ts && aws s3 sync site/ s3://dmvjs.com/ket/ --exclude '.DS_Store' --exclude 'README.md' && aws cloudfront create-invalidation --distribution-id E2NLJQLRPS1ZY5 --paths '/ket/*'",
-    "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test"
+    "deploy:site": "node scripts/check-site-version.ts && node scripts/check-docs.ts && aws s3 sync site/ s3://dmvjs.com/ket/ --exclude '.DS_Store' --exclude 'README.md' && aws cloudfront create-invalidation --distribution-id E2NLJQLRPS1ZY5 --paths '/ket/*'",
+    "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test",
+    "check:docs": "node scripts/check-site-version.ts && node scripts/check-docs.ts"
   },
   "engines": {
     "node": ">=22"
@@ -57,5 +63,6 @@
     "oxlint": "^1.76.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
-  }
+  },
+  "jsdelivr": "./dist/ket.global.js"
 }

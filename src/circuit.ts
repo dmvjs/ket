@@ -701,23 +701,68 @@ function fmtAngle(r: number, piToken: string): string {
 function qasmAngle(r: number): string { return fmtAngle(r, 'pi') }
 function pyAngle(r: number):   string { return fmtAngle(r, 'math.pi') }
 
-/** Parse a QASM angle expression (supports `pi`, `*`, `/`, `+`, `-`, parentheses). */
-function parseAngle(expr: string): number {
+/** Evaluate a QASM built-in unary function. */
+function qasmFunction(name: string, arg: number, expr: string): number {
+  switch (name) {
+    case 'sin':  return Math.sin(arg)
+    case 'cos':  return Math.cos(arg)
+    case 'tan':  return Math.tan(arg)
+    case 'exp':  return Math.exp(arg)
+    case 'ln':   return Math.log(arg)
+    case 'sqrt': return Math.sqrt(arg)
+    default: throw new TypeError(`Invalid angle expression: "${expr}" (unknown function '${name}')`)
+  }
+}
+
+/**
+ * Parse a QASM angle expression: numbers (including `1e-3`), `pi`, the operators
+ * `+ - * / ^`, parentheses, and the functions `sin cos tan exp ln sqrt`.
+ *
+ * `env` binds the formal parameters of an enclosing `gate` definition, so a body
+ * like `rz(theta/2) a;` resolves `theta` to the value supplied at the call site.
+ */
+export function parseAngle(expr: string, env?: ReadonlyMap<string, number>): number {
   const s = expr.replace(/\s/g, '')
   let i = 0
   function parseFactor(): number {
     if (s[i] === '-') { i++; return -parseFactor() }
     if (s[i] === '+') { i++; return parseFactor() }
     if (s[i] === '(') { i++; const v = parseExpr(); if (s[i] === ')') i++; return v }
-    if (s.startsWith('pi', i)) { i += 2; return Math.PI }
+    const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(s.slice(i))
+    if (id) {
+      const name = id[0]
+      i += name.length
+      if (s[i] === '(') {
+        i++
+        const arg = parseExpr()
+        if (s[i] === ')') i++
+        return qasmFunction(name, arg, expr)
+      }
+      if (name === 'pi') return Math.PI
+      const bound = env?.get(name)
+      if (bound === undefined)
+        throw new TypeError(`Invalid angle expression: "${expr}" (unknown symbol '${name}')`)
+      return bound
+    }
     const j = i
     while (i < s.length && /[0-9.]/.test(s[i]!)) i++
+    if (i > j && (s[i] === 'e' || s[i] === 'E')) {          // scientific notation: 1e-3
+      const mark = i++
+      if (s[i] === '+' || s[i] === '-') i++
+      if (/[0-9]/.test(s[i] ?? '')) { while (i < s.length && /[0-9]/.test(s[i]!)) i++ }
+      else i = mark
+    }
     return parseFloat(s.slice(j, i))
   }
+  function parsePower(): number {
+    const base = parseFactor()
+    if (s[i] === '^') { i++; return base ** parsePower() }   // right-associative
+    return base
+  }
   function parseTerm(): number {
-    let v = parseFactor()
+    let v = parsePower()
     while (i < s.length && (s[i] === '*' || s[i] === '/')) {
-      const op = s[i++]!; v = op === '*' ? v * parseFactor() : v / parseFactor()
+      const op = s[i++]!; v = op === '*' ? v * parsePower() : v / parsePower()
     }
     return v
   }
@@ -800,6 +845,262 @@ function applyQASMGate(c: Circuit, name: string, params: number[], qs: number[])
     case 'csrn':  return c.csrn(a!, b!)
     default: throw new TypeError(`Unknown QASM gate: '${name}'`)
   }
+}
+
+// ─── OpenQASM parser ──────────────────────────────────────────────────────────
+
+/** Spellings that mean the same gate as one of `applyQASMGate`'s cases. */
+const QASM_GATE_ALIASES: Readonly<Record<string, string>> = {
+  U: 'u3', u: 'u3', CX: 'cx', cnot: 'cx', phase: 'p', cphase: 'cu1', cp: 'cu1', toffoli: 'ccx',
+}
+
+/** A reference to a whole register (`q`) or one of its elements (`q[3]`). */
+type QASMRef = { reg: string; index: number | null }
+
+/** One executable QASM statement. Declarations are consumed before this stage. */
+type QASMStmt =
+  | { kind: 'call';    name: string; params: string[]; args: QASMRef[] }
+  | { kind: 'measure'; source: QASMRef; target: QASMRef }
+  | { kind: 'reset';   target: QASMRef }
+  | { kind: 'barrier'; args: QASMRef[] }
+  | { kind: 'if';      creg: string; value: number; body: QASMStmt }
+
+/** A `gate name(params) qargs { body }` definition. */
+type QASMGateDef = { params: readonly string[]; qargs: readonly string[]; body: readonly QASMStmt[] }
+
+/** Everything the executor needs to resolve names. */
+type QASMScope = {
+  qregs:    ReadonlyMap<string, { offset: number; size: number }>
+  cregs:    ReadonlyMap<string, number>
+  gateDefs: ReadonlyMap<string, QASMGateDef>
+  opaque:   ReadonlySet<string>
+}
+
+/**
+ * Strip comments and split into statements. `{…}` bodies are kept intact — the
+ * `;` separating statements inside a `gate` definition must not split it — and a
+ * definition ends at the `}` that closes it, whether or not a `;` follows.
+ */
+function splitQASM(source: string): string[] {
+  const src = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const out: string[] = []
+  let buf = '', depth = 0
+  for (const ch of src) {
+    if (ch === '{') { depth++; buf += ch; continue }
+    if (ch === '}') {
+      depth--
+      buf += ch
+      if (depth <= 0) { depth = 0; const s = buf.trim(); if (s) out.push(s); buf = '' }
+      continue
+    }
+    if (ch === ';' && depth === 0) { const s = buf.trim(); if (s) out.push(s); buf = ''; continue }
+    buf += ch
+  }
+  const tail = buf.trim()
+  if (tail) out.push(tail)
+  return out
+}
+
+/** Split a parameter list on top-level commas, so `pow(a,b)` stays one parameter. */
+function splitQASMParams(text: string): string[] {
+  const out: string[] = []
+  let buf = '', depth = 0
+  for (const ch of text) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ',' && depth === 0) { out.push(buf.trim()); buf = ''; continue }
+    buf += ch
+  }
+  if (buf.trim()) out.push(buf.trim())
+  return out
+}
+
+/** Parse a comma-separated register argument list: `a[0], b, c[2]`. */
+function parseQASMRefs(text: string, stmt: string): QASMRef[] {
+  return text.split(',').map(t => t.trim()).filter(Boolean).map(t => {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[\s*(\d+)\s*\])?$/.exec(t)
+    if (!m) throw new TypeError(`fromQASM: cannot parse register reference '${t}' in '${stmt}'`)
+    return { reg: m[1]!, index: m[2] === undefined ? null : parseInt(m[2]!, 10) }
+  })
+}
+
+/** Split `name(params) args` into its three parts, respecting nested parens. */
+function parseQASMCall(stmt: string): { name: string; params: string[]; rest: string } {
+  const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*/.exec(stmt)
+  if (!m) throw new TypeError(`fromQASM: unsupported statement '${stmt}'`)
+  const name = m[1]!
+  let i = m[0].length
+  let params: string[] = []
+  if (stmt[i] === '(') {
+    let depth = 0, j = i
+    for (; j < stmt.length; j++) {
+      if (stmt[j] === '(') depth++
+      else if (stmt[j] === ')' && --depth === 0) break
+    }
+    if (depth !== 0) throw new TypeError(`fromQASM: unbalanced parentheses in '${stmt}'`)
+    params = splitQASMParams(stmt.slice(i + 1, j))
+    i = j + 1
+  }
+  return { name, params, rest: stmt.slice(i).trim() }
+}
+
+/** QASM 3 constructs this parser does not implement — rejected by name, not by accident. */
+const QASM_UNSUPPORTED: Readonly<Record<string, string>> = {
+  for:    'loops', while: 'loops', def: 'subroutines', defcal: 'calibration', cal: 'calibration',
+  let:    'register aliasing', gphase: 'global phase', pragma: 'pragmas', extern: 'extern declarations',
+  input:  'i/o declarations', output: 'i/o declarations', const: 'classical variables',
+  int:    'classical variables', uint: 'classical variables', float: 'classical variables',
+  angle:  'classical variables', bool: 'classical variables', complex: 'classical variables',
+  array:  'classical variables', duration: 'timing', stretch: 'timing', delay: 'timing', box: 'timing',
+}
+
+/** Parse one executable statement. Throws on anything this parser cannot honour. */
+function parseQASMStatement(stmt: string): QASMStmt {
+  const head = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(stmt)?.[1]
+  if (head && head in QASM_UNSUPPORTED)
+    throw new TypeError(`fromQASM: unsupported OpenQASM 3 construct '${head}' (${QASM_UNSUPPORTED[head]}): '${stmt}'`)
+
+  const cond = /^if\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*==\s*(\d+)\s*\)\s*([\s\S]+)$/.exec(stmt)
+  if (cond) return { kind: 'if', creg: cond[1]!, value: parseInt(cond[2]!, 10), body: parseQASMStatement(cond[3]!.trim()) }
+  if (head === 'if')
+    throw new TypeError(`fromQASM: only 'if (creg == N) <statement>' is supported, got '${stmt}'`)
+  if (head === 'else')
+    throw new TypeError(`fromQASM: 'else' is not supported: '${stmt}'`)
+
+  const meas2 = /^measure\s+([\s\S]+?)\s*->\s*([\s\S]+)$/.exec(stmt)          // QASM 2.0
+  if (meas2) {
+    const [source] = parseQASMRefs(meas2[1]!, stmt)
+    const [target] = parseQASMRefs(meas2[2]!, stmt)
+    return { kind: 'measure', source: source!, target: target! }
+  }
+  const meas3 = /^([\s\S]+?)\s*=\s*measure\s+([\s\S]+)$/.exec(stmt)           // QASM 3.0
+  if (meas3) {
+    const [target] = parseQASMRefs(meas3[1]!, stmt)
+    const [source] = parseQASMRefs(meas3[2]!, stmt)
+    return { kind: 'measure', source: source!, target: target! }
+  }
+
+  if (/^reset\b/.test(stmt))   return { kind: 'reset',   target: parseQASMRefs(stmt.slice(5), stmt)[0]! }
+  if (/^barrier\b/.test(stmt)) return { kind: 'barrier', args: parseQASMRefs(stmt.slice(7), stmt) }
+
+  if (/^(ctrl|negctrl|inv|pow)\s*@/.test(stmt))
+    throw new TypeError(`fromQASM: gate modifiers ('ctrl @', 'inv @', …) are not supported: '${stmt}'`)
+
+  const { name, params, rest } = parseQASMCall(stmt)
+  if (!rest) throw new TypeError(`fromQASM: unsupported statement '${stmt}'`)
+  return { kind: 'call', name, params, args: parseQASMRefs(rest, stmt) }
+}
+
+/**
+ * Resolve a register reference to absolute qubit indices. Inside a `gate` body
+ * `qmap` holds the definition's formal qubit arguments, which shadow the
+ * top-level registers and may not be subscripted.
+ */
+function resolveQASMQubits(ref: QASMRef, scope: QASMScope, qmap?: ReadonlyMap<string, number>): number[] {
+  const bound = qmap?.get(ref.reg)
+  if (bound !== undefined) {
+    if (ref.index !== null) throw new TypeError(`fromQASM: '${ref.reg}' is a single qubit inside a gate body and cannot be indexed`)
+    return [bound]
+  }
+  if (qmap) throw new TypeError(`fromQASM: '${ref.reg}' is not a parameter of the enclosing gate definition`)
+  const reg = scope.qregs.get(ref.reg)
+  if (!reg) throw new TypeError(`fromQASM: undeclared quantum register '${ref.reg}'`)
+  if (ref.index === null) return Array.from({ length: reg.size }, (_, i) => reg.offset + i)
+  if (ref.index >= reg.size)
+    throw new TypeError(`fromQASM: index ${ref.index} out of range for register '${ref.reg}[${reg.size}]'`)
+  return [reg.offset + ref.index]
+}
+
+/** Resolve a classical reference to a register name and the bits it names. */
+function resolveQASMBits(ref: QASMRef, scope: QASMScope): { creg: string; bits: number[] } {
+  const size = scope.cregs.get(ref.reg)
+  if (size === undefined) throw new TypeError(`fromQASM: undeclared classical register '${ref.reg}'`)
+  if (ref.index === null) return { creg: ref.reg, bits: Array.from({ length: size }, (_, i) => i) }
+  if (ref.index >= size) throw new TypeError(`fromQASM: index ${ref.index} out of range for register '${ref.reg}[${size}]'`)
+  return { creg: ref.reg, bits: [ref.index] }
+}
+
+/**
+ * Apply QASM's broadcast rule: a statement naming whole registers is repeated
+ * once per element, with single-qubit arguments held fixed. All whole-register
+ * arguments must have the same length.
+ */
+function broadcastQASM(lists: number[][], stmt: string): number[][] {
+  const width = Math.max(1, ...lists.map(l => l.length))
+  for (const l of lists)
+    if (l.length !== 1 && l.length !== width)
+      throw new TypeError(`fromQASM: cannot broadcast registers of differing sizes in '${stmt}'`)
+  return Array.from({ length: width }, (_, i) => lists.map(l => (l.length === 1 ? l[0]! : l[i]!)))
+}
+
+/** Execute one statement against a circuit. */
+function execQASM(
+  c: Circuit,
+  stmt: QASMStmt,
+  scope: QASMScope,
+  env: ReadonlyMap<string, number>,
+  qmap?: ReadonlyMap<string, number>,
+  depth = 0,
+): Circuit {
+  switch (stmt.kind) {
+    case 'call': {
+      const tuples = broadcastQASM(stmt.args.map(a => resolveQASMQubits(a, scope, qmap)), stmt.name)
+      const params = stmt.params.map(p => parseAngle(p, env))
+      for (const qs of tuples) c = applyQASMCall(c, stmt.name, params, qs, scope, depth)
+      return c
+    }
+    case 'measure': {
+      if (qmap) throw new TypeError("fromQASM: 'measure' is not allowed inside a gate definition")
+      const qs = resolveQASMQubits(stmt.source, scope)
+      const { creg, bits } = resolveQASMBits(stmt.target, scope)
+      if (qs.length !== bits.length)
+        throw new TypeError(`fromQASM: measure maps ${qs.length} qubit(s) onto ${bits.length} bit(s)`)
+      qs.forEach((q, i) => { c = c.measure(q, creg, bits[i]!) })
+      return c
+    }
+    case 'reset': {
+      if (qmap) throw new TypeError("fromQASM: 'reset' is not allowed inside a gate definition")
+      for (const q of resolveQASMQubits(stmt.target, scope)) c = c.reset(q)
+      return c
+    }
+    case 'barrier': {
+      const qs = stmt.args.flatMap(a => resolveQASMQubits(a, scope, qmap))
+      return qs.length ? c.barrier(...qs) : c.barrier()
+    }
+    case 'if': {
+      if (qmap) throw new TypeError("fromQASM: 'if' is not allowed inside a gate definition")
+      if (!scope.cregs.has(stmt.creg)) throw new TypeError(`fromQASM: undeclared classical register '${stmt.creg}'`)
+      return c.if(stmt.creg, stmt.value, inner => execQASM(inner, stmt.body, scope, env, qmap, depth))
+    }
+    default: { const _exhaustive: never = stmt; void _exhaustive; return c }
+  }
+}
+
+/** Apply one gate call — a user-defined gate is expanded inline, recursively. */
+function applyQASMCall(
+  c: Circuit,
+  name: string,
+  params: number[],
+  qs: number[],
+  scope: QASMScope,
+  depth: number,
+): Circuit {
+  const def = scope.gateDefs.get(name)
+  if (!def) {
+    if (scope.opaque.has(name))
+      throw new TypeError(`fromQASM: gate '${name}' is declared opaque and has no definition to simulate`)
+    return applyQASMGate(c, QASM_GATE_ALIASES[name] ?? name, params, qs)
+  }
+  if (depth > 64) throw new TypeError(`fromQASM: gate definitions nest too deeply at '${name}' (recursive?)`)
+  if (params.length !== def.params.length)
+    throw new TypeError(`fromQASM: gate '${name}' takes ${def.params.length} parameter(s), got ${params.length}`)
+  if (qs.length !== def.qargs.length)
+    throw new TypeError(`fromQASM: gate '${name}' takes ${def.qargs.length} qubit(s), got ${qs.length}`)
+
+  const innerEnv  = new Map(def.params.map((p, i) => [p, params[i]!]))
+  const innerQmap = new Map(def.qargs.map((a, i) => [a, qs[i]!]))
+  for (const s of def.body) c = execQASM(c, s, scope, innerEnv, innerQmap, depth + 1)
+  return c
 }
 
 // ─── JSON serialization helpers ───────────────────────────────────────────────
@@ -1146,18 +1447,70 @@ function opLabel(op: Op, q: number): string {
  * Thread spawn takes ~20ms on Linux/macOS, which dominates for any circuit
  * under ~500ms total. Keeping workers alive amortises that cost to near-zero.
  * Rebuilt only when pool size or worker URL changes.
+ *
+ * Two details keep a persistent pool from stranding the host process:
+ *
+ * - **unref.** A live worker keeps Node's event loop alive, so a pool that
+ *   outlives the call would stop the process from ever exiting — the run
+ *   finishes, and then the program hangs at the end of `main`. Unreffed workers
+ *   still run and still answer; they just stop voting on when to exit.
+ * - **execArgv: [].** Workers inherit the parent's CLI flags by default, and
+ *   some are invalid for a file-backed worker: under `node --input-type=module
+ *   -e '…'` the worker dies at boot with ERR_INPUT_TYPE_NOT_ALLOWED, which
+ *   surfaces as a five-minute wait on a flag nothing will ever set. The worker
+ *   is a self-contained bundle and needs none of the parent's flags.
  */
 // Worker instances are typed as `any` — the WorkerJob protocol enforced at postMessage call sites.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _pool: { ws: any[]; size: number; url: string } | null = null
 
-function acquirePool(size: number, workerUrl: URL, WorkerClass: new (u: URL) => unknown): unknown[] {
+/** Options accepted by `node:worker_threads`.Worker that this pool relies on. */
+type WorkerCtor = new (u: URL, o?: { execArgv?: string[] }) => unknown
+
+function acquirePool(size: number, workerUrl: URL, WorkerClass: WorkerCtor): unknown[] {
   const href = workerUrl.href
   if (_pool !== null && _pool.size === size && _pool.url === href) return _pool.ws
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   _pool?.ws.forEach((w: any) => void w.terminate())
-  _pool = { ws: Array.from({ length: size }, () => new WorkerClass(workerUrl)), size, url: href }
+  _pool = {
+    ws: Array.from({ length: size }, () => {
+      const w = new WorkerClass(workerUrl, { execArgv: [] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const worker = w as any
+      worker.unref()
+      // Without a listener an early exit is silent, and the main thread blocks on
+      // Atomics.wait until the timeout. Record it so the wait can say what happened.
+      worker.on('error', (e: Error) => { worker.__ketError = e })
+      worker.on('exit', (code: number) => { worker.__ketExit = code })
+      return w
+    }),
+    size,
+    url: href,
+  }
   return _pool.ws
+}
+
+/** Drop the pool so its threads stop and a rebuilt one picks up fresh state. */
+function releasePool(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _pool?.ws.forEach((w: any) => void w.terminate())
+  _pool = null
+}
+
+/**
+ * Explain a worker that never reported back. The `error` event cannot be
+ * delivered while the main thread is parked in `Atomics.wait`, so read whatever
+ * the listener managed to record and fall back to the generic case.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function workerFailure(worker: any, index: number, label: string): Error {
+  const cause = worker?.__ketError as Error | undefined
+  releasePool()
+  if (cause) return new Error(`[ket] ${label}: worker ${index} failed to start — ${cause.message}`)
+  return new Error(
+    `[ket] ${label}: worker ${index} did not respond within 5 minutes. ` +
+    `Re-run with workers: 1 to fall back to the single-threaded path.`,
+  )
 }
 
 // ─── MPS trajectory helpers ───────────────────────────────────────────────────
@@ -2780,75 +3133,86 @@ export class Circuit {
   /**
    * Parse an OpenQASM 2.0 or 3.0 string into a `Circuit`. Auto-detects the version.
    *
-   * **2.0 syntax supported:** `qreg`/`creg`, `measure q[i] -> c[j]`, `//` comments,
-   * all qelib1.inc gates (h, x, cx, rz, u1, u2, u3, ccx, cswap, …).
+   * **2.0 syntax supported:** `qreg`/`creg` (any number of registers, laid out in
+   * declaration order), `gate` definitions (expanded inline, including nested and
+   * parameterised ones), `opaque` declarations, `measure q[i] -> c[j]`, `reset`,
+   * `barrier`, `if (c == N) …`, register-wide broadcast (`h q;`, `measure q -> c;`),
+   * `//` comments, and all qelib1.inc gates (h, x, cx, rz, u1, u2, u3, ccx, cswap, …).
    *
-   * **3.0 syntax supported:** qubit[N]/bit[N] declarations, "c[j] = measure q[i]"
-   * assignment form, block comments, stdgates.inc, p/sx/sdg/tdg gate names.
+   * **3.0 syntax supported:** `qubit[N]`/`bit[N]` declarations, the
+   * `c[j] = measure q[i]` assignment form, block comments, stdgates.inc, and the
+   * `p`/`sx`/`sdg`/`tdg`/`U`/`CX`/`cp` gate names.
    *
-   * Not supported: gate definitions (`gate foo …`), gate modifiers (`ctrl @`, `inv @`),
-   * `if`/`else` blocks, `gphase`, multi-register qubit indexing.
+   * Angle expressions accept `pi`, `+ - * / ^`, parentheses, scientific notation,
+   * `sin cos tan exp ln sqrt`, and — inside a gate body — that gate's parameters.
+   *
+   * Not supported, and rejected with a `TypeError` rather than silently mis-parsed:
+   * gate modifiers (`ctrl @`, `inv @`, `pow @`), `gphase`, `for`/`while`/`def`, and
+   * QASM 3 classical types beyond `bit`.
+   *
+   * @throws {TypeError} on undeclared registers, out-of-range indices, arity
+   *   mismatches, unbroadcastable register sizes, or any unsupported statement.
    */
   static fromQASM(source: string): Circuit {
-    // Strip block comments then single-line comments; split into statements
-    const stmts = source
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\/\/[^\n]*/g, '')
-      .split(';')
-      .map(s => s.trim())
-      .filter(Boolean)
+    const stmts = splitQASM(source)
 
+    const qregs    = new Map<string, { offset: number; size: number }>()
+    const cregs    = new Map<string, number>()
+    const gateDefs = new Map<string, QASMGateDef>()
+    const opaque   = new Set<string>()
+    const body: string[] = []
     let qubits = 0
-    const cregSizes = new Map<string, number>()
 
-    // First pass: collect register declarations (both 2.0 and 3.0 syntax)
+    // First pass: declarations, in source order, so register offsets are stable.
     for (const stmt of stmts) {
-      // QASM 2.0: qreg q[N]
-      const qr2 = stmt.match(/^qreg\s+\w+\[(\d+)\]$/)
-      if (qr2) { qubits += parseInt(qr2[1]!); continue }
+      if (/^(OPENQASM|include)\b/.test(stmt)) continue
 
-      // QASM 3.0: qubit[N] q  |  qubit q  (single qubit)
-      const qr3 = stmt.match(/^qubit(?:\[(\d+)\])?\s+\w+$/)
-      if (qr3) { qubits += parseInt(qr3[1] ?? '1'); continue }
+      const def = /^gate\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?\s*([^{]*)\{([\s\S]*)\}$/.exec(stmt)
+      if (def) {
+        gateDefs.set(def[1]!, {
+          params: def[2] ? splitQASMParams(def[2]) : [],
+          qargs:  def[3]!.split(',').map(s => s.trim()).filter(Boolean),
+          body:   splitQASM(def[4]!).map(parseQASMStatement),
+        })
+        continue
+      }
 
-      // QASM 2.0: creg name[N]
-      const cr2 = stmt.match(/^creg\s+(\w+)\[(\d+)\]$/)
-      if (cr2) { cregSizes.set(cr2[1]!, parseInt(cr2[2]!)); continue }
+      const op = /^opaque\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(stmt)
+      if (op) { opaque.add(op[1]!); continue }
 
-      // QASM 3.0: bit[N] name  |  bit name
-      const cr3 = stmt.match(/^bit(?:\[(\d+)\])?\s+(\w+)$/)
-      if (cr3) { cregSizes.set(cr3[2]!, parseInt(cr3[1] ?? '1')); continue }
+      const qr2 = /^qreg\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]$/.exec(stmt)            // 2.0
+      const qr3 = /^qubit(?:\s*\[\s*(\d+)\s*\])?\s+([A-Za-z_][A-Za-z0-9_]*)$/.exec(stmt)      // 3.0
+      const qr  = qr2 ? { name: qr2[1]!, size: parseInt(qr2[2]!, 10) }
+                : qr3 ? { name: qr3[2]!, size: parseInt(qr3[1] ?? '1', 10) }
+                : null
+      if (qr) {
+        if (qregs.has(qr.name)) throw new TypeError(`fromQASM: quantum register '${qr.name}' declared twice`)
+        qregs.set(qr.name, { offset: qubits, size: qr.size })
+        qubits += qr.size
+        continue
+      }
+
+      const cr2 = /^creg\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]$/.exec(stmt)            // 2.0
+      const cr3 = /^bit(?:\s*\[\s*(\d+)\s*\])?\s+([A-Za-z_][A-Za-z0-9_]*)$/.exec(stmt)        // 3.0
+      const cr  = cr2 ? { name: cr2[1]!, size: parseInt(cr2[2]!, 10) }
+                : cr3 ? { name: cr3[2]!, size: parseInt(cr3[1] ?? '1', 10) }
+                : null
+      if (cr) {
+        if (cregs.has(cr.name)) throw new TypeError(`fromQASM: classical register '${cr.name}' declared twice`)
+        cregs.set(cr.name, cr.size)
+        continue
+      }
+
+      body.push(stmt)
     }
 
     let c = new Circuit(qubits)
-    for (const [name, size] of cregSizes) c = c.creg(name, size)
+    for (const [name, size] of cregs) c = c.creg(name, size)
 
-    // Second pass: apply gates and operations
-    for (const stmt of stmts) {
-      // Skip header / declaration lines
-      if (/^(OPENQASM|include|qreg|creg|qubit|bit)\b/.test(stmt)) continue
-
-      // QASM 2.0: measure q[i] -> c[j]
-      const meas2 = stmt.match(/^measure\s+\w+\[(\d+)\]\s*->\s*(\w+)\[(\d+)\]$/)
-      if (meas2) { c = c.measure(parseInt(meas2[1]!), meas2[2]!, parseInt(meas2[3]!)); continue }
-
-      // QASM 3.0: c[j] = measure q[i]
-      const meas3 = stmt.match(/^(\w+)\[(\d+)\]\s*=\s*measure\s+\w+\[(\d+)\]$/)
-      if (meas3) { c = c.measure(parseInt(meas3[3]!), meas3[1]!, parseInt(meas3[2]!)); continue }
-
-      // reset q[i]
-      const rst = stmt.match(/^reset\s+\w+\[(\d+)\]$/)
-      if (rst) { c = c.reset(parseInt(rst[1]!)); continue }
-
-      // gatename[(params)] q[i](,q[j])*
-      const gate = stmt.match(/^(\w+)(?:\(([^)]*)\))?\s+([\w[\],\s]+)$/)
-      if (gate) {
-        const name   = gate[1]!
-        const params = gate[2] ? gate[2].split(',').map(p => parseAngle(p)) : []
-        const qs     = [...gate[3]!.matchAll(/\[(\d+)\]/g)].map(m => parseInt(m[1]!))
-        c = applyQASMGate(c, name, params, qs)
-      }
-    }
+    // Second pass: apply gates and operations.
+    const scope: QASMScope = { qregs, cregs, gateDefs, opaque }
+    const env = new Map<string, number>()
+    for (const stmt of body) c = execQASM(c, parseQASMStatement(stmt), scope, env)
     return c
   }
 
@@ -2910,7 +3274,7 @@ export class Circuit {
       const ctrlLine = line.match(/^CONTROLLED\s+(\w+)(?:\(([^)]*)\))?\s+(\d+)\s+(\d+)$/)
       if (ctrlLine) {
         const [, gName, paramStr, ctrlStr, tgtStr] = ctrlLine
-        const p = paramStr ? paramStr.split(',').map(parseAngle) : []
+        const p = paramStr ? paramStr.split(',').map(e => parseAngle(e)) : []
         const [con, tgt] = [parseInt(ctrlStr!), parseInt(tgtStr!)]
         switch (gName!.toUpperCase()) {
           case 'H':     c = c.ch(con, tgt);             break
@@ -2942,7 +3306,7 @@ export class Circuit {
       const gate = line.match(/^(\w+)(?:\(([^)]*)\))?\s+([\d\s]+)$/)
       if (gate) {
         const [, gName, paramStr, qStr] = gate
-        const p  = paramStr ? paramStr.split(',').map(parseAngle) : []
+        const p  = paramStr ? paramStr.split(',').map(e => parseAngle(e)) : []
         const qs = qStr!.trim().split(/\s+/).map(Number)
         const [q0, q1, q2] = qs
         switch (gName!.toUpperCase()) {
@@ -4346,7 +4710,10 @@ export class Circuit {
     // Parallel path: workers handle the noisy+clean-mid-circuit case.
     // Mid-circuit circuits require per-shot creg state and can't be parallelised yet.
     const wtLocal = wt
-    const isBuilt = !import.meta.url.endsWith('.ts')
+    // `import.meta` is empty in a non-ESM bundle (the IIFE global build), so this
+    // must tolerate an undefined url — reading `.endsWith` off it would throw on
+    // every runMps call in the browser. Undefined means bundled, hence built.
+    const isBuilt = !import.meta.url?.endsWith('.ts')
     if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
       console.warn('[ket] runMps: workers option ignored — build the bundle first (npm run build) to enable parallel trajectories')
     }
@@ -4377,7 +4744,7 @@ export class Circuit {
 
       for (let i = 0; i < ws.length; i++) {
         const waitResult = Atomics.wait(flags[i]!, 0, 0, 300_000)
-        if (waitResult === 'timed-out') throw new Error(`[ket] runMps worker ${i} timed out after 5 minutes`)
+        if (waitResult === 'timed-out') throw workerFailure(ws[i], i, 'runMps')
         const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
         for (const [k, v] of message.counts as [bigint, number][]) {
           counts.set(k, (counts.get(k) ?? 0) + v)
@@ -5325,7 +5692,7 @@ export class Circuit {
     const blocked =
       numWorkers <= 1                                   ? ''
       : budget !== Infinity                             ? 'sparsification resamples the decomposition globally and cannot be sliced'
-      : import.meta.url.endsWith('.ts') || wtLocal === null ? 'build the bundle first (npm run build) to enable parallel terms'
+      : import.meta.url?.endsWith('.ts') || wtLocal === null ? 'build the bundle first (npm run build) to enable parallel terms'
       : ''
     if (blocked) console.warn(`[ket] runStabilizerRank: workers option ignored — ${blocked}`)
     if (numWorkers > 1 && !blocked && wtLocal !== null) {
@@ -5384,7 +5751,7 @@ export class Circuit {
 
     const collect = (i: number): { re: Float64Array; im: Float64Array; built?: number } => {
       if (Atomics.wait(flags[i]!, 0, 0, 300_000) === 'timed-out')
-        throw new Error(`[ket] runStabilizerRank worker ${i} timed out after 5 minutes`)
+        throw workerFailure(ws[i], i, 'runStabilizerRank')
       return wtLocal.receiveMessageOnPort(channels[i]!.port1)!.message
     }
 
