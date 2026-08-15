@@ -160,7 +160,11 @@
   }
   .ref-table td { padding: .38rem .75rem; border-bottom: 1px solid #0d0f18; vertical-align: middle; color: var(--mid); }
   .ref-table td:first-child { font-family: var(--mono); font-size: .76rem; color: var(--accent2); white-space: nowrap; }
-  .ref-table td:nth-child(2) { color: var(--text); font-family: var(--mono); font-size: .76rem; white-space: nowrap; }
+  .ref-table td:nth-child(2) { color: var(--text); font-family: var(--mono); font-size: .76rem; }
+  /* Pin column 2 only when a third column carries the prose. In a two-column
+     table column 2 *is* the prose, and nowrap there widens the table past the
+     viewport and scrolls the whole page sideways. */
+  .ref-table tr:has(td:nth-child(3)) td:nth-child(2) { white-space: nowrap; }
   .ref-table tr:last-child td { border-bottom: none; }
   .ref-table tr:hover td { background: #0c0e1860; }
 
@@ -226,7 +230,7 @@
 <div class="topbar">
   <div class="topbar-logo">
     <span class="name">ket</span>
-    <span class="ver">v0.8.0</span>
+    <span class="ver">v0.9.0</span>
   </div>
   <div class="topbar-links">
     <a href="index.html">home</a>
@@ -286,6 +290,7 @@
     <a class="nav-link" href="#ionq-hardware">IonQ hardware</a>
     <a class="nav-link" href="#visualization">Visualization</a>
     <a class="nav-link" href="#serialization">Serialization</a>
+    <a class="nav-link" href="#compat">Mutable adapter</a>
   </div>
 
   <div class="nav-group">
@@ -323,7 +328,44 @@
   console.log(bell.stateAsString())  // 0.7071|00⟩ + 0.7071|11⟩
 &lt;/script&gt;</code></pre>
 
-  <p>Two bundle flavors ship in the package: <code>ket.js</code> (341 kB unminified, for bundlers that tree-shake) and <code>ket.min.js</code> (154 kB, for direct CDN use). The <code>unpkg</code> field points to the minified build. No dependencies either way.</p>
+  <p>Or as a plain script tag &mdash; no module setup, works in any page:</p>
+  <pre><code class="language-html">&lt;script src="https://unpkg.com/@kirkelliott/ket"&gt;&lt;/script&gt;
+&lt;script&gt;
+  const bell = new ket.Circuit(2).h(0).cnot(0, 1)
+&lt;/script&gt;</code></pre>
+
+  <table>
+    <tr><th>File</th><th>Size</th><th>Format</th><th>For</th></tr>
+    <tr><td><code>dist/ket.js</code></td><td>429 kB</td><td>ESM</td><td>bundlers that tree-shake and minify</td></tr>
+    <tr><td><code>dist/ket.min.js</code></td><td>195 kB</td><td>ESM</td><td><code>import</code> from a CDN</td></tr>
+    <tr><td><code>dist/ket.global.js</code></td><td>196 kB</td><td>IIFE, <code>ket</code> global</td><td><code>&lt;script src&gt;</code> &mdash; what <code>unpkg</code> and <code>jsdelivr</code> serve</td></tr>
+    <tr><td><code>dist/compat.js</code></td><td>69 B</td><td>ESM</td><td><code>@kirkelliott/ket/compat</code>, a re-export of <code>ket.js</code></td></tr>
+  </table>
+
+  <p>The global build is a second format, not a second copy &mdash; the compat entry re-exports the main bundle, so a <code>Circuit</code> from either entry point is the same class. No dependencies in any of them. Node.js ≥ 22; worker parallelism (<code>workers: N</code>) needs ≥ 22.3 and otherwise falls back to single-threaded, as it does in a browser.</p>
+</div>
+
+<!-- ─────────────────── COMPAT ─────────────────── -->
+<span class="section-anchor" id="compat"></span>
+<div class="section">
+  <h2>Mutable adapter <span class="tag">/compat</span></h2>
+  <p><code>@kirkelliott/ket/compat</code> exports a <code>QuantumCircuit</code> class with a mutable, column-indexed API: gates are placed at an explicit column, the circuit grows to fit any wire named, and <code>run()</code> stores state on the instance. It matches the API shape used by the <code>quantum-circuit</code> package, so code written against that shape runs unmodified.</p>
+
+  <pre><code class="language-javascript">import { QuantumCircuit } from '@kirkelliott/ket/compat'
+
+const circuit = new QuantumCircuit(2)
+circuit.addGate('h', 0, 0)
+circuit.addGate('cx', 1, [0, 1])
+circuit.addMeasure(0, 'c', 0)
+circuit.run()
+
+circuit.getCregValue('c')          // 0 or 1
+circuit.measureAllMultishot(1024)  // { '00': 517, '11': 507 }
+circuit.toKet()                    // → Circuit, for the rest of the library</code></pre>
+
+  <p>It is an adapter, not a second API to build on. <code>toKet()</code> returns the equivalent immutable <code>Circuit</code>, which is where everything else on this page applies.</p>
+
+  <p><b>Bit order</b> is converted at the boundary: strings from <code>stateAsString</code> and <code>measureAllMultishot</code> put the highest wire leftmost, the opposite of ket's native order. <code>probabilities()</code> and <code>measureAll()</code> are indexed by wire. <b>Measurement is non-destructive</b> &mdash; a <code>measure</code> gate writes to its register but leaves the state alone, unless the circuit also has a classically-controlled gate or a reset. <b>Seeding</b> is the one addition: <code>run(initialValues, { seed })</code> is reproducible, and unseeded runs draw fresh entropy each time.</p>
 </div>
 
 <!-- ─────────────────── QUICK START ─────────────────── -->
@@ -994,6 +1036,12 @@ c.toQASM()     // OpenQASM 2.0 string
 c.toIonQ()     // IonQ JSON for hardware submission
 c.toCirq()     // Cirq Python code
 c.toLatex()    // quantikz LaTeX environment</code></pre>
+
+  <h3>OpenQASM coverage</h3>
+  <p><code>fromQASM</code> parses OpenQASM 2.0 and the 3.0 subset that maps onto it, auto-detecting the version.</p>
+  <p><b>Supported:</b> any number of <code>qreg</code>/<code>creg</code> (or <code>qubit</code>/<code>bit</code>) declarations, laid out in declaration order &mdash; <code>qreg a[2]; qreg b[2];</code> puts <code>b[0]</code> at qubit 2; <code>gate</code> definitions expanded inline, including parameterised and nested ones; <code>opaque</code>; <code>measure</code> in both the <code>-&gt;</code> and assignment forms; <code>reset</code>; <code>barrier</code>; <code>if (c == N)</code>; register-wide broadcast (<code>h q;</code>, <code>measure q -&gt; c;</code>); and all of qelib1.inc plus the <code>U</code>/<code>CX</code> builtins.</p>
+  <p>Angle expressions accept <code>pi</code>, <code>+ - * / ^</code>, parentheses, scientific notation, <code>sin cos tan exp ln sqrt</code>, and &mdash; inside a gate body &mdash; that gate's own parameters.</p>
+  <p><b>Rejected with a <code>TypeError</code></b> rather than silently mis-parsed: undeclared registers, out-of-range indices, gate arity mismatches, registers that cannot broadcast together, gate modifiers (<code>ctrl @</code>, <code>inv @</code>, <code>pow @</code>), <code>gphase</code>, <code>for</code>/<code>while</code>/<code>def</code>, <code>else</code>, <code>let</code>, and QASM 3 classical types beyond <code>bit</code>.</p>
 </div>
 
 <!-- ─────────────────── DEVICES ─────────────────── -->

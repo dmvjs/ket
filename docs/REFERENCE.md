@@ -32,7 +32,7 @@ This matches the convention used by every major quantum computing library and pa
 npm install @kirkelliott/ket
 ```
 
-Or load directly in a browser:
+Or load directly in a browser, as a module:
 
 ```html
 <script type="module">
@@ -43,9 +43,32 @@ Or load directly in a browser:
 </script>
 ```
 
-The ESM bundle ships in two flavours — `ket.js` (341kb, unminified, for bundlers that tree-shake and minify) and `ket.min.js` (154kb, for direct CDN use). The `unpkg` field points to the minified build. No external dependencies.
+…or as a plain script tag, which needs no module setup and works in any page:
 
-Requires Node.js ≥ 22 for server-side use.
+```html
+<script src="https://unpkg.com/@kirkelliott/ket"></script>
+<script>
+  const bell = new ket.Circuit(2).h(0).cnot(0, 1)
+</script>
+```
+
+### Which bundle
+
+| File | Size | Format | For |
+|---|---|---|---|
+| `dist/ket.js` | 429 KB | ESM | bundlers that tree-shake and minify |
+| `dist/ket.min.js` | 195 KB | ESM | `import` from a CDN |
+| `dist/ket.global.js` | 196 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
+| `dist/compat.js` | 69 B | ESM | `@kirkelliott/ket/compat`, a re-export of `ket.js` |
+
+The global build is a second format, not a second copy: `@kirkelliott/ket/compat`
+re-exports the main bundle rather than bundling its own, so a `Circuit` from one
+entry point is the same class as a `Circuit` from the other. No external
+dependencies in any of them.
+
+Requires Node.js ≥ 22 for server-side use. Worker-backed parallelism
+(`workers: N`) additionally needs Node ≥ 22.3; below that it falls back to the
+single-threaded path, as it does in a browser.
 
 ## Quick start
 
