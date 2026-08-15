@@ -2022,3 +2022,61 @@ describe('Distribution.truncated — maxBond cap signal', () => {
     expect(d.truncated).toBe(true)
   })
 })
+
+describe('MpsTrajectory.reset — clears only what was used', () => {
+  // reset() used to zero the entire preallocated workspace every shot. The
+  // workspace is sized for maxChi, so at the default maxChi = 64 a 50-qubit
+  // low-entanglement circuit paid 13 MB of memset per shot for a state occupying
+  // 128 bytes per site. That was a ~4x single-threaded tax, and because every
+  // worker streams it at once it capped trajectory scaling at ~2.4x on 16 cores.
+  //
+  // Asserted directly rather than by wall-clock: a timing threshold is not
+  // sensitive enough to catch a regression here, but untouched memory is exact.
+  it('leaves memory outside the used extent alone', () => {
+    const traj = new MpsTrajectory(4, 64, 0)
+    traj.reset()
+    traj.apply1(0, [[{ re: 1, im: 0 }, { re: 0, im: 0 }], [{ re: 0, im: 0 }, { re: 1, im: 0 }]])
+
+    // Sentinel far past the region a chi = 1 state occupies, but inside the
+    // workspace reserved for chi = 64.
+    const site = traj.data[0]!
+    const far = site.length - 1
+    expect(far).toBeGreaterThan(1000)
+    site[far] = 12345
+
+    traj.reset()
+    expect(site[far], 'reset cleared workspace it never used').toBe(12345)
+    expect(site[0], 'reset must still restore |0> on the used extent').toBe(1)
+  })
+
+  it('still clears everything the previous shot actually wrote', () => {
+    // Two shots through one instance: the second must not see the first's state.
+    let c = new Circuit(6).h(0)
+    for (let i = 0; i < 5; i++) c = c.cnot(i, i + 1)
+    const a = c.runMps({ shots: 3000, seed: 11 }).probs
+    const b = c.runMps({ shots: 3000, seed: 11 }).probs
+    expect(b).toEqual(a)
+  })
+  it('does not leave stale amplitudes behind when chi shrinks', () => {
+    // A shot that grows chi and collapses it again ends with small bond
+    // dimensions, so the narrowed clear covers less than the shot touched. A
+    // later low-chi shot must not read anything left over.
+    let grow = new Circuit(8)
+    for (let i = 0; i < 8; i++) grow = grow.h(i)
+    for (let i = 0; i < 7; i++) grow = grow.cnot(i, i + 1)
+    for (let i = 6; i >= 0; i--) grow = grow.cnot(i, i + 1)
+
+    const plain = new Circuit(8).h(0).cnot(0, 1)
+    const before = plain.runMps({ shots: 4000, seed: 7 }).probs
+    grow.runMps({ shots: 200, seed: 7 })
+    const after = plain.runMps({ shots: 4000, seed: 7 }).probs
+    expect(after).toEqual(before)
+
+    // and the grow/collapse circuit itself still matches the exact distribution
+    const exact = grow.exactProbs()
+    const got = grow.runMps({ shots: 40_000, seed: 3 }).probs
+    for (const [bits, p] of Object.entries(exact)) {
+      if (p > 0.01) expect(got[bits] ?? 0, `outcome ${bits}`).toBeCloseTo(p, 1)
+    }
+  }, 120_000)
+})

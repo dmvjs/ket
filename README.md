@@ -160,7 +160,7 @@ circuit.simulate({ shots: 1024 })   // picks a backend; d.backend says which
 | Backend | Cost | Reaches |
 |---|---|---|
 | Statevector | sparse → dense, automatic | ~20 qubits exactly |
-| MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 186ms |
+| MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 10ms |
 | Density matrix | O(4ⁿ) sparse | mixed states and noise, n≈12 |
 | Clifford stabilizer | O(n²) | 1,024 qubits in milliseconds |
 | Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s |
@@ -177,7 +177,7 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,152 tests.** Analytic correctness against known amplitudes — gate
+- **2,155 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.

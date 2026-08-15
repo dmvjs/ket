@@ -6,7 +6,7 @@
 <title>ket — Quantum Computing in JavaScript · dmvjs</title>
 <meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Five exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
 <meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
-<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,152 tests.">
+<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,155 tests.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
@@ -148,7 +148,7 @@
   </a>
 </div>
 <h1>ket</h1>
-<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,152 tests · v0.9.0</p>
+<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,155 tests · v0.9.0</p>
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════ -->
 <div class="hero">
@@ -180,7 +180,7 @@ q1: ────⊕──</div>
   <div class="why-chip"><b>Types are the source</b>Strict TypeScript, not JS with a <code>.d.ts</code> bolted on.</div>
   <div class="why-chip"><b>Bounds-checked</b>Bad qubit index throws <code>RangeError</code> at construction, not 200 gates later.</div>
   <div class="why-chip"><b>BigInt indices</b>No 32-bit overflow at qubit 31 — the failure mode that silently corrupts.</div>
-  <div class="why-chip"><b>2,152 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
+  <div class="why-chip"><b>2,155 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
   <div class="why-chip"><b>Zero dependencies</b>154 KB minified, total. Nothing to audit but ket.</div>
 </div>
 
@@ -850,21 +850,21 @@ const result = c.runMps({
       <p class="desc">256 shots, IonQ Forte-1 error rates as the depolarizing model, single-threaded. Time scales linearly with n because χ = 2 throughout the GHZ circuit.</p>
       <table class="bench-table">
         <tr><th>Qubits</th><th>Time</th><th>χ</th><th>Statevector RAM</th></tr>
-        <tr><td><b>10</b></td><td data-live-ghz="10"><span data-live-ms>6ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 KB</td></tr><tr><td><b>20</b></td><td data-live-ghz="20"><span data-live-ms>9ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 MB</td></tr><tr><td><b>50</b></td><td data-live-ghz="50"><span data-live-ms>20ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>100</b></td><td data-live-ghz="100"><span data-live-ms>38ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>127</b></td><td data-live-ghz="127"><span data-live-ms>47ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
+        <tr><td><b>10</b></td><td data-live-ghz="10"><span data-live-ms>3ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 KB</td></tr><tr><td><b>20</b></td><td data-live-ghz="20"><span data-live-ms>2ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 MB</td></tr><tr><td><b>50</b></td><td data-live-ghz="50"><span data-live-ms>4ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>100</b></td><td data-live-ghz="100"><span data-live-ms>9ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>127</b></td><td data-live-ghz="127"><span data-live-ms>10ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
       </table>
     </div>
     <div style="padding-left:1.5rem;min-width:0">
       <h2 style="margin-bottom:.3rem">Multi-Core Speedup</h2>
-      <p class="desc">Each noisy trajectory is an independent simulation — distribute across OS threads with <code style="color:var(--accent2)">workers: N</code>. Requires built bundle and Node.js ≥ 22. Measured at 2.2&ndash;2.3× with 4 workers on a 16-core machine, across 50- and 100-qubit runs at 8k&ndash;32k shots. Short of linear, and not because of the result transfer &mdash; a run with only two distinct outcomes scales the same.</p>
+      <p class="desc">Each noisy trajectory is an independent simulation — distribute across OS threads with <code style="color:var(--accent2)">workers: N</code>. Requires built bundle and Node.js ≥ 22. Measured at 3.8× with 4 workers and 7.1× with 8 on a 16-core machine (50 qubits, 32k shots).</p>
       <div class="state-box">circuit.runMps({
   shots: 1024,
   noise: DEVICES['forte-1'].noise,
-  workers: 4,   // ~2.2× wall-time speedup
+  workers: 4,   // ~3.8× wall-time speedup
   seed:    42,
 })</div>
       <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
         <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
-          <div class="big-num" style="font-size:1.8rem">2.2×</div>
+          <div class="big-num" style="font-size:1.8rem">3.8×</div>
           <div class="big-label">measured · 4 workers</div>
         </div>
         <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">

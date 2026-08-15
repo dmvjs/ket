@@ -1424,7 +1424,7 @@ Measured on Node 24 / Apple silicon, best of 5:
 | QFT-16, statevector | dense | 10.5ms |
 | random-16 depth 4, statevector | dense | 15.7ms |
 | GHZ-50, MPS chi=2 | tensor network | milliseconds |
-| GHZ-127, MPS, 1024 shots | tensor network | 186ms |
+| GHZ-127, MPS, 1024 shots | tensor network | 10ms |
 | 12-qubit noisy run, 1024 shots | dense | 0.69s |
 
 None of this needs a flag — the thresholds are defaults, adjustable per call via
