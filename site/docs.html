@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket API reference · dmvjs</title>
-<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, four backends, zero dependencies.">
+<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, five backends, zero dependencies.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/material-darker.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
@@ -305,7 +305,7 @@
 <div class="section" style="margin-bottom:2.5rem">
   <h1>ket</h1>
   <p class="lead">
-    TypeScript quantum circuit simulator. Immutable API, four backends (statevector, MPS, density matrix, Clifford), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
+    TypeScript quantum circuit simulator. Immutable API, five backends (statevector, MPS, density matrix, Clifford, stabilizer rank), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
   </p>
 </div>
 
@@ -337,7 +337,8 @@ const bell = new Circuit(2).h(0).cnot(0, 1)
 
 bell.draw()           // ASCII diagram
 bell.stateAsString()  // '0.7071|00⟩ + 0.7071|11⟩'
-bell.exactProbs()     // { '00': 0.5, '11': 0.5 }
+bell.exactProbs()     // { '11': 0.4999999999999999, '00': 0.4999999999999999 }
+                      // analytic — the last digit is float rounding, not shot noise
 
 // Shot-based sampling
 const result = bell
@@ -1192,8 +1193,8 @@ const restored2 = Circuit.fromJSON(JSON.parse(json))</code></pre>
 
 rho.purity()         // 0.986756 — decoherence has pulled it off 1
 rho.entropy()        // 0.057778 bits of mixedness
-rho.probabilities()  // { '00': 0.5, '11': 0.5 }
-rho.get(0, 0)        // { re: 0.5, im: 0 }</code></pre>
+rho.probabilities()  // { '11': 0.4999999999999999, '00': 0.4999999999999999 }
+rho.get(0, 0)        // { re: 0.4999999999999999, im: 0 }</code></pre>
 
   <p>Accepts <code>DmNoiseParams</code> or a named device, and a <code>dense</code> option that tunes the sparse → dense promotion (default 1/32 fill). Practical to about 12 qubits, since ρ is 4ⁿ.</p>
 </div>
@@ -1253,7 +1254,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
     </div>
     <div style="font-size:.74rem;color:var(--muted)">
       Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a>
-      · MIT License · 1,301 tests
+      · MIT License · 2,152 tests
     </div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">

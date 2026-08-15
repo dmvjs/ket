@@ -4,13 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket — Quantum Computing in JavaScript · dmvjs</title>
-<meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Four exact backends — statevector, MPS, density matrix, Clifford — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
+<meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Five exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
 <meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
-<meta property="og:description" content="Four exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,012 tests.">
+<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,152 tests.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
-<meta name="twitter:description" content="Four exact backends, cross-verified. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies.">
+<meta name="twitter:description" content="Five exact backends, cross-verified. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies.">
 <style>
   :root {
     --bg: #080a10; --card: #0c0e18; --border: #1a1d2e;
@@ -26,6 +26,10 @@
   .section-title { font-size:1.1rem; font-weight:600; margin:2.5rem 0 1rem;
     color:var(--accent); border-left:3px solid var(--accent); padding-left:.75rem; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+  /* Grid items default to min-width:auto, so a card holding a wide, non-wrapping
+     .state-box pushes its column past its 1fr share and squeezes its neighbour.
+     min-width:0 restores the even split and lets the box scroll inside itself. */
+  .grid2 > * { min-width: 0; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.25rem; }
   h2 { font-size:1rem; margin-bottom:.2rem; }
   .tag { display:inline-block; font-size:.68rem; padding:2px 8px; border-radius:99px;
@@ -42,7 +46,8 @@
   .meta span b { color:var(--text); }
   .big-num { font-size:2.2rem; font-weight:800; color:var(--green); line-height:1; }
   .big-label { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
-  .backend-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+  /* Two cards — ideal and Forte-1. A three-column rule left a dead cell. */
+  .backend-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; }
   .backend-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; display:flex; flex-direction:column; gap:.6rem; }
   .backend-name { font-size:.9rem; font-weight:700; }
   .backend-type { font-size:.72rem; color:var(--muted); }
@@ -77,6 +82,18 @@
   .bench-table th { color:var(--muted); font-weight:500; text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--border); }
   .bench-table td { padding:.35rem .6rem; border-bottom:1px solid #1a1d27; }
   .bench-bar { display:inline-block; height:10px; border-radius:3px; background:var(--accent); vertical-align:middle; margin-left:.5rem; }
+  /* Live measurement. Published figures render as-is; if ket loads from the CDN
+     they are replaced by numbers this browser produced, and marked as such. */
+  .live-badge { display:inline-block; font-size:.62rem; letter-spacing:.04em; text-transform:uppercase;
+                padding:2px 7px; border-radius:99px; border:1px solid var(--green);
+                color:var(--green); margin-left:.5rem; vertical-align:middle; }
+  .live-badge.pending { border-color:var(--muted); color:var(--muted); }
+  .is-live { color:var(--green); }
+  .live-out { background:#06080f; border:1px solid var(--border); border-radius:5px;
+              padding:.6rem .9rem; font-family:var(--mono); font-size:.75rem;
+              color:var(--muted); margin-top:.75rem; white-space:pre-wrap; line-height:1.6; }
+  .live-out b { color:var(--green); font-weight:600; }
+  @media (prefers-reduced-motion:reduce) { .live-badge { transition:none; } }
   .bloch-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
   .bloch-label { text-align:center; font-family:var(--mono); font-size:.78rem; color:var(--accent2); margin-top:.3rem; }
   .bloch-sublabel { text-align:center; font-size:.68rem; color:var(--muted); }
@@ -90,7 +107,7 @@
     .hero { grid-template-columns: 1fr; }
     .why-grid { grid-template-columns: 1fr 1fr; }
     .grid2 { grid-template-columns: 1fr; }
-    .backend-grid { grid-template-columns: repeat(2, 1fr); }
+    .backend-grid { grid-template-columns: 1fr; }
     .bloch-grid { grid-template-columns: repeat(2, 1fr); }
     .big-num { font-size: 1.5rem; }
     .bench-table { font-size: .72rem; }
@@ -131,12 +148,12 @@
   </a>
 </div>
 <h1>ket</h1>
-<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,012 tests · v0.8.0</p>
+<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,152 tests · v0.8.0</p>
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════ -->
 <div class="hero">
   <div class="hero-copy">
-    <p>A general-purpose quantum circuit simulator for TypeScript and JavaScript. Four backends, 14 import/export formats, and no dependencies — install it and a Bell state is three lines away.</p>
+    <p>A general-purpose quantum circuit simulator for TypeScript and JavaScript. Five backends, 14 import/export formats, and no dependencies — install it and a Bell state is three lines away.</p>
     <div class="hero-install"><code>npm install @kirkelliott/ket</code></div>
     <p class="hero-note">Node ≥ 22, or straight from a CDN in the browser. No Python, no build step, no toolchain.</p>
   </div>
@@ -163,7 +180,7 @@ q1: ────⊕──</div>
   <div class="why-chip"><b>Types are the source</b>Strict TypeScript, not JS with a <code>.d.ts</code> bolted on.</div>
   <div class="why-chip"><b>Bounds-checked</b>Bad qubit index throws <code>RangeError</code> at construction, not 200 gates later.</div>
   <div class="why-chip"><b>BigInt indices</b>No 32-bit overflow at qubit 31 — the failure mode that silently corrupts.</div>
-  <div class="why-chip"><b>2,012 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
+  <div class="why-chip"><b>2,152 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
   <div class="why-chip"><b>Zero dependencies</b>154 KB minified, total. Nothing to audit but ket.</div>
 </div>
 
@@ -183,7 +200,7 @@ q1: ────⊕──</div>
 </div>
 
 <!-- ═══ BACKENDS ═══════════════════════════════════════════════ -->
-<div class="section-title">Four backends, one API</div>
+<div class="section-title">Five backends, one API</div>
 <p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
   ket matches its representation to the circuit instead of committing to one, so the same API stays
   efficient across shapes that usually need different tools. Pick a backend explicitly when you want to.
@@ -191,7 +208,7 @@ q1: ────⊕──</div>
 <div class="card" style="margin-bottom:1.25rem">
   <table class="bench-table">
     <tr><th>Backend</th><th>Call</th><th>Memory</th><th>Best for</th><th>Measured</th></tr>
-    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20 — <1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127 — 15ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — 2ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 3997ms</td></tr>
+    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20 — <1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127 — 15ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — 2ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 3997ms</td></tr><tr><td><b>Stabilizer rank</b></td><td><code style="color:var(--accent2)">runStabilizerRank()</code></td><td style="color:var(--muted)">O(2<sup>0.228t</sup>·n²/8)</td><td style="color:var(--muted)">Clifford+T beyond statevector width</td><td>100q, 50 T — 5.6s</td></tr>
   </table>
   <p class="desc" style="margin-bottom:0">
     The statevector starts as a sparse map and promotes itself to a flat <code>Float64Array</code> past ⅛ fill.
@@ -203,8 +220,8 @@ q1: ────⊕──</div>
 <!-- ═══ CORRECTNESS ════════════════════════════════════════════ -->
 <div class="section-title">How you know it's right</div>
 <p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
-  Four backends built on four unrelated representations — amplitudes, density matrices, tensor
-  trains, stabilizer tableaux — have to agree. Where a circuit can be expressed in all four, ket
+  Backends built on unrelated representations — amplitudes, density matrices, tensor trains,
+  stabilizer tableaux — have to agree. Where a circuit can be expressed in several, ket
   checks that they do, and the suite is built on analytic expectations rather than snapshots.
   These numbers are computed while this page builds:
 </p>
@@ -319,7 +336,10 @@ shorBeauregard(15n, { a: 7n }).method
   and <code>vz</code> are first-class gates you can write directly, <code>compile(device)</code> transpiles
   an abstract circuit into them, and <code>toIonQ()</code> emits submit-ready JSON.
 </p>
-<div class="grid2" style="margin-bottom:1.25rem">
+<!-- 2fr/1fr: the transpiled circuit diagram is wide and must not wrap; the JSON
+     payload is narrow and reads fine in a third. Collapses to one column under
+     700px via the [style*="grid-template-columns"] rule. -->
+<div class="grid2" style="margin-bottom:1.25rem;grid-template-columns:2fr 1fr">
   <div class="card">
     <h2 style="margin-bottom:.5rem">Transpile to native gates</h2>
     <p class="desc">A textbook Bell pair, rewritten into what the trap actually executes — GPI2 and MS, with virtual-Z frame rotations that cost nothing on hardware.</p>
@@ -339,23 +359,37 @@ q1: ─GPI2(π)─────────────────────�
     {
       "gate": "rz",
       "target": 0,
-      "rotation": 0.5
+      "rotation": 1.5707963267948966
     },
     {
       "gate": "gpi2",
       "target": 0,
       "phase": 0
-    },
+    }
   ... ]
 }</div>
   </div>
 </div>
 <div class="card" style="margin-bottom:1.25rem">
-  <h2 style="margin-bottom:.5rem">Published device profiles <span class="tag" style="background:#00a3e0">IONQ_DEVICES</span></h2>
-  <p class="desc">Every IonQ system ships with its native gate set and published error rates, so a noisy run is one option away — <code>run({ noise: 'forte-1' })</code>.</p>
+  <h2 style="margin-bottom:.5rem">Submit it, and get results back <span class="tag" style="background:#00a3e0">runIonQ</span></h2>
+  <p class="desc">The client uses the global <code>fetch</code>, so submission adds no dependency. Algorithm circuits pass through <code>toIonQBasis()</code> first &mdash; QFT and modular-exponentiation circuits are built almost entirely from <code>cu1</code>, which IonQ has no direct representation for.</p>
+  <div class="state-box">const shor = shorCircuit(15n, 7n, 3)
+
+const { id } = await submitIonQ(shor.toIonQBasis().toIonQ(), {
+  apiKey, target: 'simulator', noise: { model: 'ideal' },
+})
+
+const job = await getIonQJob(id, { apiKey })   // 'ready' means queued
+await getIonQResults(job, { apiKey })          // behind results_url
+await cancelIonQJob(id, { apiKey })            // release the slot</div>
+  <p class="desc" style="margin-bottom:0">Run on IonQ's simulator, this factors 15: the counting register returns 0, 2, 4 and 6 at 25&thinsp;% each &mdash; period 4, giving 15 = 3 &times; 5 &mdash; with the work register on the orbit of 7 mod 15. The discrete-logarithm circuit recovers its exponent the same way.</p>
+</div>
+<div class="card" style="margin-bottom:1.25rem">
+  <h2 style="margin-bottom:.5rem">Device profiles <span class="tag" style="background:#00a3e0">IONQ_DEVICES</span></h2>
+  <p class="desc">Devices currently accepting jobs, so a noisy run is one option away — <code>run({ noise: 'forte-1' })</code>. The <b>Source</b> column is load-bearing: <code>vendor-published</code> means IonQ&rsquo;s own <code>r_1q</code>/<code>r_2q</code> parameters, <code>estimated</code> means it is not their figure. <b>Every readout rate is estimated</b> &mdash; no vendor here publishes one &mdash; and Forte&rsquo;s post-2025-09 model is unpublished, so these are the earlier parameters. Regenerate with <code>scripts/refresh-ionq-devices.ts</code>.</p>
   <table class="bench-table">
-    <tr><th>Device</th><th>Qubits</th><th>Native gates</th><th>1Q error</th><th>2Q error</th><th>Readout</th></tr>
-    <tr><td><b>aria-1</b></td><td>25</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz</code></td><td>0.030%</td><td>0.50%</td><td>0.40%</td></tr><tr><td><b>forte-1</b></td><td>36</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz, zz</code></td><td>0.010%</td><td>0.20%</td><td>0.20%</td></tr><tr><td><b>harmony</b></td><td>11</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, ms, vz</code></td><td>0.100%</td><td>1.50%</td><td>1.00%</td></tr>
+    <tr><th>Device</th><th>Qubits</th><th>Native gates</th><th>1Q error</th><th>2Q error</th><th>Readout</th><th>Source</th></tr>
+    <tr><td><b>forte-1</b><div style="color:var(--muted);font-size:.75rem;margin-top:.15rem">forte-enterprise-1 &mdash; same figures</div></td><td>36</td><td><code style="color:var(--accent2);font-size:.9em">gpi, gpi2, zz</code></td><td>0.027%</td><td>0.49%</td><td>0.20%</td><td style="color:var(--muted)">vendor-published<div style="font-size:.75rem;margin-top:.15rem">enterprise: estimated</div></td></tr>
   </table>
 </div>
 
@@ -539,9 +573,9 @@ circuit.exactProbs()  // → { '0101': 26.5%, '1010': 26.5%, … }</div>
 <!-- ═══ GROVER ACROSS HARDWARE ════════════════════════════════ -->
 <div class="section-title">Grover's Search — Hardware Fidelity</div>
 <p style="color:var(--muted);font-size:.82rem;margin-bottom:1rem;line-height:1.65">
-  The same 3-qubit Grover circuit (target: |101⟩) run across six backends with 4,096 shots each.
-  Lower gate error rates preserve the quadratic amplitude advantage.
-  All results use published device noise models — not real hardware runs.
+  The same 3-qubit Grover circuit (target: |101⟩), noiseless and under IonQ Forte-1&rsquo;s published error rates, 4,096 shots each.
+  Bars are all eight basis states; the labelled one is the search target.
+  A depolarizing model from IonQ&rsquo;s published rates — not a hardware run.
 </p>
 <div class="card" style="margin-bottom:1rem">
   <h2 style="margin-bottom:.5rem">Circuit <span class="tag">toSVG()</span></h2>
@@ -662,54 +696,19 @@ circuit.exactProbs()  // → { '0101': 26.5%, '1010': 26.5%, … }</div>
     
     <div class="backend-name" style="color:#54b4c5;margin-top:0">Ideal</div>
     <div class="backend-type">Statevector · no noise</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">Ideal (all 8 states)</text><rect x="67" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="83" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="99" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="115" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="131" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">95%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><rect x="179" y="174.01" width="14" height="0.99" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">Ideal (all 8 states)</text><rect x="67" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="83" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="99" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="115" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="131" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="147" y="61.56" width="14" height="113.44" rx="2" fill="#54b4c5"/><text x="154" y="58" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">95%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="179" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
     <div style="font-size:1.4rem;font-weight:800;color:#54b4c5">94.53%</div>
     <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
   </div>
   <div class="backend-card" style="border-color:#00a3e055;box-shadow:0 0 0 1px #00a3e0,0 4px 24px #00a3e033;position:relative">
-    <div style="position:absolute;top:-1px;right:12px;background:#00a3e0;color:#000;font-size:.65rem;font-weight:800;padding:2px 10px;border-radius:0 0 6px 6px;letter-spacing:.05em">BEST</div>
+    <div style="position:absolute;top:-1px;right:12px;background:#00a3e0;color:#000;font-size:.65rem;font-weight:800;padding:2px 10px;border-radius:0 0 6px 6px">HARDWARE</div>
     <div class="backend-name" style="color:#00a3e0;margin-top:.75rem">IonQ Forte-1</div>
     <div class="backend-type">Trapped-Ion · 36 qubits</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Forte-1 (all 8 states)</text><rect x="67" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="83" y="173.53" width="14" height="1.47" rx="2" fill="#2a2d3e"/><rect x="99" y="174.13" width="14" height="0.87" rx="2" fill="#2a2d3e"/><rect x="115" y="174.31" width="14" height="0.69" rx="2" fill="#2a2d3e"/><rect x="131" y="173.63" width="14" height="1.37" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">94%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.97" width="14" height="1.03" rx="2" fill="#2a2d3e"/><rect x="179" y="173.56" width="14" height="1.44" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
-    <div style="font-size:1.4rem;font-weight:800;color:#00a3e0">93.90%</div>
-    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
-  </div>
-  <div class="backend-card" style="border-color:#0077b655;position:relative">
-    
-    <div class="backend-name" style="color:#0077b6;margin-top:0">IonQ Aria-1</div>
-    <div class="backend-type">Trapped-Ion · 25 qubits</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Aria-1 (all 8 states)</text><rect x="67" y="174.02" width="14" height="0.98" rx="2" fill="#2a2d3e"/><rect x="83" y="173.30" width="14" height="1.70" rx="2" fill="#2a2d3e"/><rect x="99" y="173.99" width="14" height="1.01" rx="2" fill="#2a2d3e"/><rect x="115" y="174.24" width="14" height="0.76" rx="2" fill="#2a2d3e"/><rect x="131" y="173.27" width="14" height="1.73" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">93%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.87" width="14" height="1.13" rx="2" fill="#2a2d3e"/><rect x="179" y="173.33" width="14" height="1.67" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
-    <div style="font-size:1.4rem;font-weight:800;color:#0077b6">93.04%</div>
-    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
-  </div>
-  <div class="backend-card" style="border-color:#023e8a55;position:relative">
-    
-    <div class="backend-name" style="color:#023e8a;margin-top:0">IonQ Harmony</div>
-    <div class="backend-type">Trapped-Ion · 11 qubits</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Harmony (all 8 states)</text><rect x="67" y="173.57" width="14" height="1.43" rx="2" fill="#2a2d3e"/><rect x="83" y="172.40" width="14" height="2.60" rx="2" fill="#2a2d3e"/><rect x="99" y="173.76" width="14" height="1.24" rx="2" fill="#2a2d3e"/><rect x="115" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="131" y="172.07" width="14" height="2.93" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">90%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.63" width="14" height="1.37" rx="2" fill="#2a2d3e"/><rect x="179" y="172.27" width="14" height="2.73" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
-    <div style="font-size:1.4rem;font-weight:800;color:#023e8a">90.06%</div>
-    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
-  </div>
-  <div class="backend-card" style="border-color:#f47e5b55;position:relative">
-    
-    <div class="backend-name" style="color:#f47e5b;margin-top:0">IBM Torino</div>
-    <div class="backend-type">Superconducting · 133 qubits</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IBM Torino (all 8 states)</text><rect x="67" y="174.11" width="14" height="0.89" rx="2" fill="#2a2d3e"/><rect x="83" y="172.89" width="14" height="2.11" rx="2" fill="#2a2d3e"/><rect x="99" y="173.95" width="14" height="1.05" rx="2" fill="#2a2d3e"/><rect x="115" y="174.23" width="14" height="0.77" rx="2" fill="#2a2d3e"/><rect x="131" y="172.48" width="14" height="2.52" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">92%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.79" width="14" height="1.21" rx="2" fill="#2a2d3e"/><rect x="179" y="172.73" width="14" height="2.27" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
-    <div style="font-size:1.4rem;font-weight:800;color:#f47e5b">91.72%</div>
-    <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
-  </div>
-  <div class="backend-card" style="border-color:#d65c7055;position:relative">
-    
-    <div class="backend-name" style="color:#d65c70;margin-top:0">IBM Sherbrooke</div>
-    <div class="backend-type">Superconducting · 127 qubits</div>
-    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IBM Sherbrooke (all 8 states)</text><rect x="67" y="174.06" width="14" height="0.94" rx="2" fill="#2a2d3e"/><rect x="83" y="172.42" width="14" height="2.58" rx="2" fill="#2a2d3e"/><rect x="99" y="173.90" width="14" height="1.10" rx="2" fill="#2a2d3e"/><rect x="115" y="174.19" width="14" height="0.81" rx="2" fill="#2a2d3e"/><rect x="131" y="172.16" width="14" height="2.84" rx="2" fill="#2a2d3e"/><rect x="147" y="55.00" width="14" height="120.00" rx="2" fill="#54b4c5"/><text x="154" y="51" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">91%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="173.81" width="14" height="1.19" rx="2" fill="#2a2d3e"/><rect x="179" y="172.19" width="14" height="2.81" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
-    <div style="font-size:1.4rem;font-weight:800;color:#d65c70">90.72%</div>
+    <div class="svg-panel"><svg xmlns="http://www.w3.org/2000/svg" width="260" height="215" viewBox="0 0 260 215"><rect width="260" height="215" fill="#0c0e18"/><text x="130" y="18" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" fill="#7c8798">IonQ Forte-1 (all 8 states)</text><rect x="67" y="174.09" width="14" height="0.91" rx="2" fill="#2a2d3e"/><rect x="83" y="173.71" width="14" height="1.29" rx="2" fill="#2a2d3e"/><rect x="99" y="173.97" width="14" height="1.03" rx="2" fill="#2a2d3e"/><rect x="115" y="173.95" width="14" height="1.05" rx="2" fill="#2a2d3e"/><rect x="131" y="173.80" width="14" height="1.20" rx="2" fill="#2a2d3e"/><rect x="147" y="62.82" width="14" height="112.18" rx="2" fill="#54b4c5"/><text x="154" y="59" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" font-weight="600" fill="#d4b560">93%</text><text x="154" y="189" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#d4b560" transform="rotate(-45 154 189)">101</text><rect x="163" y="174.18" width="14" height="0.82" rx="2" fill="#2a2d3e"/><rect x="179" y="173.48" width="14" height="1.52" rx="2" fill="#2a2d3e"/><line x1="66" y1="175" x2="195" y2="175" stroke="#2a2d3e" stroke-width="1"/></svg></div>
+    <div style="font-size:1.4rem;font-weight:800;color:#00a3e0">93.48%</div>
     <div style="font-size:.75rem;color:var(--muted)">P(|101⟩) — target state</div>
   </div>
 </div>
-
-<!-- ═══ 1,024-QUBIT GHZ ════════════════════════════════════════ -->
-<div class="section-title">1,024-Qubit GHZ State <span class="tag">CliffordSim</span></div>
 
 <div class="card" style="margin-bottom:1.25rem">
   <h2>Stabilizer Tableau Heatmap <span class="tag orange">Gottesman-Knill</span></h2>
@@ -747,8 +746,9 @@ circuit.exactProbs()  // → { '0101': 26.5%, '1010': 26.5%, … }</div>
   <div class="meta" style="margin-top:.75rem">
     <span><b>Qubits:</b> 1,024</span>
     <span><b>Gates:</b> 1,024 (1H + 1,023 CNOT)</span>
-    <span><b>Build time:</b> 6ms</span>
+    <span><b>Build time:</b> <span data-live-clifford>6ms</span></span>
     <span><b>Stabilizers:</b> 1,024 generators</span>
+    <span class="live-badge pending" data-live-badge="clifford">published</span>
   </div>
 </div>
 
@@ -796,19 +796,25 @@ Qubit 1023 measured: 1  (same)</div>
 <div class="grid2" style="margin-bottom:1.25rem">
   <div class="card">
     <h2>GHZ Fidelity vs Qubit Count <span class="tag orange">noise model</span></h2>
-    <p class="desc">P(|00…0⟩ + |11…1⟩) for an n-qubit GHZ state under depolarizing noise.
-      Bond dimension stays at χ = 2 for all n — fidelity decays from gate errors only, not simulation approximation.</p>
+    <p class="desc">How often an n-qubit GHZ run finishes with <b>no gate error at all</b>. The circuit is
+      one H and n&nbsp;&minus;&nbsp;1 CNOTs, and each gate survives with probability 1&nbsp;&minus;&nbsp;p, so the
+      curve is that product as n grows. At n&nbsp;=&nbsp;127 roughly half of all runs come back clean.
+      <br><br>Landing on one of the two ideal answers is rarer still &mdash; <b>46.9&thinsp;% &plusmn; 1.5&thinsp;%</b> over
+      4,096 shots &mdash; because an error usually moves the result off |0…0⟩ and |1…1⟩ rather than back onto them.
+      <br><br>All of this is the hardware, not the simulator: bond dimension stays at χ&nbsp;=&nbsp;2 for every n,
+      so ket adds no approximation of its own. Forte-1 holds 36 qubits, so past n&nbsp;=&nbsp;36 the curve
+      extrapolates its published error rates to a machine that does not exist.</p>
     <div class="chart-panel">
-      <svg xmlns="http://www.w3.org/2000/svg" width="460" height="195" viewBox="0 0 460 195"><rect width="460" height="195" fill="#0c0e18" rx="6"/><line x1="50" y1="167.0" x2="444" y2="167.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="171" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">0%</text><line x1="50" y1="129.3" x2="444" y2="129.3" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="133" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">25%</text><line x1="50" y1="91.5" x2="444" y2="91.5" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="95" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">50%</text><line x1="50" y1="53.8" x2="444" y2="53.8" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="57" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">75%</text><line x1="50" y1="16.0" x2="444" y2="16.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="20" text-anchor="end" font-family="monospace" font-size="9" fill="#4e5a6b">100%</text><line x1="50.0" y1="16" x2="50.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="50.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">0</text><line x1="127.6" y1="16" x2="127.6" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="127.6" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">25</text><line x1="205.1" y1="16" x2="205.1" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="205.1" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">50</text><line x1="282.7" y1="16" x2="282.7" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="282.7" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">75</text><line x1="360.2" y1="16" x2="360.2" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="360.2" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">100</text><line x1="444.0" y1="16" x2="444.0" y2="167" stroke="#1a1d2e" stroke-width="1"/><text x="444.0" y="179" text-anchor="middle" font-family="monospace" font-size="9" fill="#4e5a6b">127</text><line x1="50" y1="16" x2="50" y2="167" stroke="#2a2d3e" stroke-width="1"/><line x1="50" y1="167" x2="444" y2="167" stroke="#2a2d3e" stroke-width="1"/><path d="M59.3,17.2 L81.0,20.7 L112.0,23.4 L143.1,29.6 L205.1,39.0 L282.7,47.6 L360.2,64.1 L444.0,76.7" fill="none" stroke="#00a3e0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M59.3,23.7 L81.0,41.1 L112.0,68.8 L143.1,82.7 L205.1,113.3 L282.7,135.2 L360.2,144.9 L444.0,154.0" fill="none" stroke="#d65c70" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="304" y="22" width="136" height="40" fill="rgba(6,8,15,0.85)" rx="4"/><line x1="312" y1="34" x2="332" y2="34" stroke="#00a3e0" stroke-width="2.5"/><text x="336" y="38" font-family="system-ui,sans-serif" font-size="10" fill="#dde4ef">IonQ Forte-1</text><line x1="312" y1="50" x2="332" y2="50" stroke="#d65c70" stroke-width="2.5"/><text x="336" y="54" font-family="system-ui,sans-serif" font-size="10" fill="#dde4ef">IBM Sherbrooke</text><text x="247" y="192" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#4e5a6b">GHZ qubits (n)</text></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" width="460" height="195" viewBox="0 0 460 195"><rect width="460" height="195" fill="#0c0e18" rx="6"/><line x1="50" y1="167.0" x2="444" y2="167.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="171.0" text-anchor="end" font-family="monospace" font-size="9" fill="#5a6478">0%</text><line x1="50" y1="130.8" x2="444" y2="130.8" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="134.8" text-anchor="end" font-family="monospace" font-size="9" fill="#5a6478">25%</text><line x1="50" y1="94.5" x2="444" y2="94.5" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="98.5" text-anchor="end" font-family="monospace" font-size="9" fill="#5a6478">50%</text><line x1="50" y1="58.3" x2="444" y2="58.3" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="62.3" text-anchor="end" font-family="monospace" font-size="9" fill="#5a6478">75%</text><line x1="50" y1="22.0" x2="444" y2="22.0" stroke="#1a1d2e" stroke-width="1"/><text x="46" y="26.0" text-anchor="end" font-family="monospace" font-size="9" fill="#5a6478">100%</text><text x="50.0" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">0</text><text x="127.6" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">25</text><text x="205.1" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">50</text><text x="282.7" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">75</text><text x="360.2" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">100</text><text x="444.0" y="182" text-anchor="middle" font-family="monospace" font-size="9" fill="#5a6478">127</text><polyline points="53.1,22.0 56.2,22.8 59.3,23.5 62.4,24.3 65.5,25.0 68.6,25.8 71.7,26.5 74.8,27.2 77.9,28.0 81.0,28.7 84.1,29.4 87.2,30.1 90.3,30.9 93.4,31.6 96.5,32.3 99.6,33.0 102.7,33.7 105.8,34.4 108.9,35.1 112.0,35.7 115.1,36.4 118.3,37.1 121.4,37.8 124.5,38.5 127.6,39.1 130.7,39.8 133.8,40.5 136.9,41.1 140.0,41.8 143.1,42.4 146.2,43.1 149.3,43.7 152.4,44.4 155.5,45.0 158.6,45.6 161.7,46.3 164.8,46.9 167.9,47.5 171.0,48.2 174.1,48.8 177.2,49.4 180.3,50.0 183.4,50.6 186.5,51.2 189.6,51.8 192.7,52.4 195.8,53.0 198.9,53.6 202.0,54.2 205.1,54.8 208.2,55.4 211.3,56.0 214.4,56.5 217.5,57.1 220.6,57.7 223.7,58.3 226.8,58.8 229.9,59.4 233.0,60.0 236.1,60.5 239.2,61.1 242.3,61.6 245.4,62.2 248.6,62.7 251.7,63.3 254.8,63.8 257.9,64.3 261.0,64.9 264.1,65.4 267.2,65.9 270.3,66.5 273.4,67.0 276.5,67.5 279.6,68.0 282.7,68.5 285.8,69.1 288.9,69.6 292.0,70.1 295.1,70.6 298.2,71.1 301.3,71.6 304.4,72.1 307.5,72.6 310.6,73.1 313.7,73.6 316.8,74.1 319.9,74.5 323.0,75.0 326.1,75.5 329.2,76.0 332.3,76.4 335.4,76.9 338.5,77.4 341.6,77.9 344.7,78.3 347.8,78.8 350.9,79.2 354.0,79.7 357.1,80.2 360.2,80.6 363.3,81.1 366.4,81.5 369.5,82.0 372.6,82.4 375.7,82.8 378.9,83.3 382.0,83.7 385.1,84.1 388.2,84.6 391.3,85.0 394.4,85.4 397.5,85.9 400.6,86.3 403.7,86.7 406.8,87.1 409.9,87.5 413.0,88.0 416.1,88.4 419.2,88.8 422.3,89.2 425.4,89.6 428.5,90.0 431.6,90.4 434.7,90.8 437.8,91.2 440.9,91.6 444.0,92.0" fill="none" stroke="#00a3e0" stroke-width="2"/><text x="444" y="86.0" text-anchor="end" font-family="ui-sans-serif,sans-serif" font-size="10" fill="#00a3e0">IonQ Forte-1</text><text x="247" y="193" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="9" fill="#5a6478">GHZ qubits (n)</text></svg>
     </div>
     <div class="meta" style="margin-top:.75rem">
-      <span><b>IBM Sherbrooke:</b> p₂ = 7.4 × 10⁻³</span>
-      <span><b>IonQ Forte-1:</b> p₂ ≈ 10⁻³</span>
+      <span><b>IonQ Forte-1:</b> p₁ = 2.7e-04, p₂ = 4.9e-03 (vendor-published)</span>
+      <span><b>GHZ-127:</b> 52% of runs error-free · 46.9% on an ideal outcome</span>
       <span><b>Model:</b> depolarizing channel · gate errors only</span>
     </div>
   </div>
   <div class="card">
-    <h2>127-Qubit IBM Sherbrooke <span class="tag">χ = 2</span></h2>
+    <h2>127-Qubit GHZ State <span class="tag">χ = 2</span></h2>
     <p class="desc">Statevector simulation of a 127-qubit circuit would require
       2<sup>127</sup> complex amplitudes — roughly 10<sup>20</sup>× more RAM than all data ever created.
       MPS stores O(n · χ²) numbers — <b>linear in qubit count</b>.</p>
@@ -820,9 +826,9 @@ for (let i = 0; i &lt; 126; i++) c = c.cnot(i, i+1)
 const result = c.runMps({
   shots: 256,
   seed: 42,
-  noise: DEVICES['ibm_sherbrooke'].noise,
+  noise: DEVICES['forte-1'].noise,
 })
-// → { '000…0': 2.3%, '111…1': 2.1%, … }</div>
+// → { '000…0': 24.2%, '111…1': 20.3%, … }</div>
     <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem">
       <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
         <div class="big-num">127</div>
@@ -833,32 +839,33 @@ const result = c.runMps({
         <div class="big-label">memory — not O(2ⁿ)</div>
       </div>
     </div>
+    <div class="live-out" data-live-ghz127>That circuit runs in this page. Scroll here with JavaScript enabled to execute it.</div>
   </div>
 </div>
 
 <div class="card" style="margin-bottom:1.25rem">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:start">
     <div style="padding-right:1.5rem;border-right:1px solid var(--border);min-width:0">
-      <h2 style="margin-bottom:.3rem">Scalability — GHZ with Noise</h2>
-      <p class="desc">256 shots, IBM Sherbrooke noise model, single-threaded. Time scales linearly with n because χ = 2 throughout the GHZ circuit.</p>
+      <h2 style="margin-bottom:.3rem">Scalability — GHZ with Noise<span class="live-badge pending" data-live-badge="ghz">published</span></h2>
+      <p class="desc">256 shots, IonQ Forte-1 error rates as the depolarizing model, single-threaded. Time scales linearly with n because χ = 2 throughout the GHZ circuit.</p>
       <table class="bench-table">
         <tr><th>Qubits</th><th>Time</th><th>χ</th><th>Statevector RAM</th></tr>
-        <tr><td><b>10</b></td><td>6ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">16 KB</td></tr><tr><td><b>20</b></td><td>9ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">16 MB</td></tr><tr><td><b>50</b></td><td>20ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>100</b></td><td>38ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>127</b></td><td>47ms <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)">2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
+        <tr><td><b>10</b></td><td data-live-ghz="10"><span data-live-ms>6ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 KB</td></tr><tr><td><b>20</b></td><td data-live-ghz="20"><span data-live-ms>9ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">16 MB</td></tr><tr><td><b>50</b></td><td data-live-ghz="50"><span data-live-ms>20ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">>16 PB</td></tr><tr><td><b>100</b></td><td data-live-ghz="100"><span data-live-ms>38ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr><tr><td><b>127</b></td><td data-live-ghz="127"><span data-live-ms>47ms</span> <span class="bench-bar" style="width:4px"></span></td><td style="color:var(--green)" data-live-chi>2</td><td style="color:var(--red);font-size:.75rem">> universe</td></tr>
       </table>
     </div>
     <div style="padding-left:1.5rem;min-width:0">
       <h2 style="margin-bottom:.3rem">Multi-Core Speedup</h2>
-      <p class="desc">Each noisy trajectory is an independent simulation — distribute across OS threads with <code style="color:var(--accent2)">workers: N</code>. Requires built bundle and Node.js ≥ 22.</p>
+      <p class="desc">Each noisy trajectory is an independent simulation — distribute across OS threads with <code style="color:var(--accent2)">workers: N</code>. Requires built bundle and Node.js ≥ 22. Measured at 2.2&ndash;2.3× with 4 workers on a 16-core machine, across 50- and 100-qubit runs at 8k&ndash;32k shots. Short of linear, and not because of the result transfer &mdash; a run with only two distinct outcomes scales the same.</p>
       <div class="state-box">circuit.runMps({
   shots: 1024,
   noise: DEVICES['forte-1'].noise,
-  workers: 4,   // ~4× wall-time speedup
+  workers: 4,   // ~2.2× wall-time speedup
   seed:    42,
 })</div>
       <div class="two-col-mobile" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
         <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
-          <div class="big-num" style="font-size:1.8rem">4×</div>
-          <div class="big-label">speedup · 4 workers</div>
+          <div class="big-num" style="font-size:1.8rem">2.2×</div>
+          <div class="big-label">measured · 4 workers</div>
         </div>
         <div style="background:#06080f;border:1px solid var(--border);border-radius:7px;padding:.9rem 1rem">
           <div class="big-num" style="color:var(--accent);font-size:1.3rem">O(n·χ²)</div>
@@ -949,6 +956,141 @@ const result = minimizeMps(ansatz, heisenbergH, params, {
     </a>
   </div>
 </div>
+
+<!-- ═══ LIVE MEASUREMENT ═══════════════════════════════════════
+     The figures above ship as published numbers. If ket loads from the CDN,
+     each block below re-runs the circuit it describes in this browser and
+     replaces those figures with what this machine actually measured.
+     Every failure path is a no-op: the published numbers simply stay. -->
+<script type="module">
+const KET_CDN = 'https://unpkg.com/@kirkelliott/ket/dist/ket.min.js'
+
+let ket
+try {
+  ket = await import(KET_CDN)
+} catch {
+  // Offline, blocked, or CDN down — leave every published figure untouched.
+  ket = null
+}
+
+if (ket) {
+  const { Circuit, CliffordSim, DEVICES } = ket
+
+  /** Build an n-qubit GHZ circuit: H on wire 0, then a CNOT ladder. */
+  const ghz = n => {
+    let c = new Circuit(n).h(0)
+    for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
+    return c
+  }
+
+  /** Yield to the browser so a long block never blocks paint or input. */
+  const breathe = () => new Promise(r => setTimeout(r, 0))
+
+  const badge = (name, text, done) => {
+    for (const el of document.querySelectorAll(`[data-live-badge="${name}"]`)) {
+      el.textContent = text
+      el.classList.toggle('pending', !done)
+    }
+  }
+
+  /** Run `fn` once, the first time `el` scrolls into view. */
+  const whenVisible = (el, fn) => {
+    if (!el) return
+    if (!('IntersectionObserver' in window)) { fn(); return }
+    const io = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue
+        io.disconnect()
+        fn()
+      }
+    }, { rootMargin: '120px' })
+    io.observe(el)
+  }
+
+  // ── The scalability table: one MPS run per row ───────────────────────────
+  const ghzRows = [...document.querySelectorAll('[data-live-ghz]')]
+  whenVisible(ghzRows[0], async () => {
+    badge('ghz', 'measuring…', false)
+    const measured = []
+    try {
+      for (const cell of ghzRows) {
+        const n   = Number(cell.dataset.liveGhz)
+        const out = cell.querySelector('[data-live-ms]')
+        out.textContent = '…'
+        await breathe()
+
+        const t0 = performance.now()
+        const d  = ghz(n).runMps({ shots: 256, seed: 42, noise: DEVICES['forte-1'].noise })
+        const ms = Math.round(performance.now() - t0)
+
+        out.textContent = ms + 'ms'
+        out.classList.add('is-live')
+        const chi = cell.parentElement.querySelector('[data-live-chi]')
+        if (chi && d.peakChi !== undefined) chi.textContent = String(d.peakChi)
+
+        // The published bars are a fixed 4px; scale them to what was measured so
+        // the linear-in-n claim is visible in the row, not just in the numbers.
+        measured.push({ ms, bar: cell.querySelector('.bench-bar') })
+        const slowest = Math.max(...measured.map(m => m.ms), 1)
+        for (const m of measured) m.bar.style.width = Math.max(4, Math.round(52 * m.ms / slowest)) + 'px'
+        await breathe()
+      }
+      badge('ghz', 'measured here', true)
+    } catch {
+      badge('ghz', 'published', false)
+    }
+  })
+
+  // ── The 127-qubit GHZ card: run it and show what came back ───────────────
+  const out127 = document.querySelector('[data-live-ghz127]')
+  whenVisible(out127, async () => {
+    out127.textContent = 'Running 127 qubits, 256 shots, Forte-1 noise…'
+    await breathe()
+    try {
+      const t0 = performance.now()
+      const d  = ghz(127).runMps({ shots: 256, seed: 42, noise: DEVICES['forte-1'].noise })
+      const ms = Math.round(performance.now() - t0)
+
+      // Noise flips single qubits, so several outcomes share the same first and
+      // last three characters. Print the weight too, or they read as duplicates.
+      const top = Object.entries(d.probs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([bits, p]) => {
+          const ones = bits.split('').filter(ch => ch === '1').length
+          return `  ${bits.slice(0, 3)}…${bits.slice(-3)}   ${String(ones).padStart(3)} of 127 set   ${(p * 100).toFixed(1)}%`
+        })
+        .join('\n')
+
+      out127.innerHTML =
+        `<b>${ms}ms</b> in this browser · 127 qubits · χ = ${d.peakChi ?? 2} · ${d.backend}\n` +
+        `${Object.keys(d.probs).length} distinct outcomes from 256 shots:\n${top}`
+    } catch (e) {
+      out127.textContent = `Could not run here: ${e.message}`
+    }
+  })
+
+  // ── The 1,024-qubit stabilizer claim ─────────────────────────────────────
+  const cliffordEl = document.querySelector('[data-live-clifford]')
+  whenVisible(cliffordEl, async () => {
+    badge('clifford', 'measuring…', false)
+    await breathe()
+    try {
+      const t0 = performance.now()
+      const s  = new CliffordSim(1024)
+      s.h(0)
+      for (let i = 0; i < 1023; i++) s.cnot(i, i + 1)
+      const ms = Math.round(performance.now() - t0)
+
+      cliffordEl.textContent = ms + 'ms'
+      cliffordEl.classList.add('is-live')
+      badge('clifford', 'measured here', true)
+    } catch {
+      badge('clifford', 'published', false)
+    }
+  })
+}
+</script>
 
 </body>
 </html>

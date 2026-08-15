@@ -17,8 +17,12 @@ bell.draw()          // q0: ─H──●─
                      // q1: ─────⊕─
 
 bell.stateAsString() // 0.7071|00⟩ + 0.7071|11⟩
-bell.exactProbs()    // { '00': 0.5, '11': 0.5 }
+bell.exactProbs()    // { '11': 0.4999999999999999, '00': 0.4999999999999999 }
 ```
+
+Those are analytic probabilities, computed from the amplitudes rather than sampled
+— the last digit is IEEE-754 rounding on 1/√2, not shot noise. Run it a thousand
+times and it does not move.
 
 **[Playground](https://dmvjs.com/ket/demo.html)** &nbsp;·&nbsp; **[Live demos](https://dmvjs.com/ket/)** &nbsp;·&nbsp; **[API docs](https://dmvjs.com/ket/docs.html)** &nbsp;·&nbsp; **[Full reference](docs/REFERENCE.md)**
 
@@ -28,11 +32,19 @@ bell.exactProbs()    // { '00': 0.5, '11': 0.5 }
 npm install @kirkelliott/ket
 ```
 
-No dependencies, no build step, no Python. Works in Node ≥ 22 and directly in the browser:
+No dependencies, no build step, no Python. Works in Node ≥ 22 and directly in the
+browser, as a module or as a plain script tag:
 
 ```html
 <script type="module">
   import { Circuit } from 'https://unpkg.com/@kirkelliott/ket/dist/ket.js'
+</script>
+```
+
+```html
+<script src="https://unpkg.com/@kirkelliott/ket"></script>
+<script>
+  const bell = new ket.Circuit(2).h(0).cnot(0, 1)
 </script>
 ```
 
@@ -46,7 +58,7 @@ import { Circuit, runIonQ, countsToProbs } from '@kirkelliott/ket'
 
 const bell = new Circuit(2).h(0).cnot(0, 1)
 
-bell.exactProbs()          // { '00': 0.5, '11': 0.5 }   — locally, instantly
+bell.exactProbs()           // { '11': 0.4999999999999999, '00': 0.4999999999999999 }
 bell.checkDevice('forte-1') // fail fast, before spending queue time
 
 const { counts } = await runIonQ(bell.toIonQ(), {
@@ -165,11 +177,11 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,012 tests.** Analytic correctness against known amplitudes — gate
+- **2,152 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.
-- **Zero dependencies.** 172 KB minified, total.
+- **Zero dependencies.** 196 KB minified, total.
 
 ## Documentation
 

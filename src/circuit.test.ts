@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { Circuit, Distribution, IONQ_DEVICES, DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
@@ -8070,4 +8072,264 @@ describe('Circuit.gateCounts', () => {
   it('is empty for a circuit with no gates', () => {
     expect(new Circuit(3).gateCounts()).toEqual({ total: 0, oneQubit: 0, twoQubit: 0, byName: {} })
   })
+})
+
+describe('fromQASM — named registers and broadcast', () => {
+  it('lays multiple qregs out in declaration order', () => {
+    // a[0..1] → qubits 0,1;  b[0..1] → qubits 2,3
+    const c = Circuit.fromQASM('qreg a[2];\nqreg b[2];\nx b[0];')
+    expect(c.qubits).toBe(4)
+    expect(c.probability('0010')).toBeCloseTo(1, 12)
+  })
+
+  it('entangles across two registers without index collision', () => {
+    // Previously `a[0]` and `b[0]` both resolved to qubit 0, so this threw
+    const c = Circuit.fromQASM('qreg a[2];\nqreg b[2];\nh a[0];\ncx a[0],b[0];')
+    expect(c.probability('0000')).toBeCloseTo(0.5, 12)
+    expect(c.probability('1010')).toBeCloseTo(0.5, 12)
+  })
+
+  it('applies a bare register name to every one of its qubits', () => {
+    // Previously produced `q[undefined]` silently
+    expect(Circuit.fromQASM('qreg q[3];\nx q;').probability('111')).toBeCloseTo(1, 12)
+  })
+
+  it('broadcasts a two-qubit gate across equal-sized registers', () => {
+    const c = Circuit.fromQASM('qreg a[2];\nqreg b[2];\nx a;\ncx a,b;')
+    expect(c.probability('1111')).toBeCloseTo(1, 12)
+  })
+
+  it('holds a single qubit fixed while broadcasting the other argument', () => {
+    const c = Circuit.fromQASM('qreg a[1];\nqreg b[2];\nx a[0];\ncx a[0],b;')
+    expect(c.probability('111')).toBeCloseTo(1, 12)
+  })
+
+  it('broadcasts measure over a whole register', () => {
+    const c = Circuit.fromQASM('qreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;')
+    const r = c.run({ shots: 400, seed: 11 })
+    expect(Object.keys(r.probs).every(k => k === '00' || k === '11')).toBe(true)
+  })
+
+  it('broadcasts reset over a whole register', () => {
+    // reset makes the circuit impure, so sample it rather than asking for amplitudes
+    const r = Circuit.fromQASM('qreg q[2];\nx q;\nreset q;').run({ shots: 100, seed: 5 })
+    expect(r.probs['00']).toBeCloseTo(1, 12)
+  })
+
+  it('rejects registers of differing sizes', () => {
+    expect(() => Circuit.fromQASM('qreg a[2];\nqreg b[3];\ncx a,b;')).toThrow(/broadcast/)
+  })
+
+  it('rejects an undeclared register', () => {
+    expect(() => Circuit.fromQASM('qreg q[2];\nh r[0];')).toThrow(/undeclared quantum register 'r'/)
+  })
+
+  it('rejects an out-of-range index', () => {
+    expect(() => Circuit.fromQASM('qreg q[2];\nh q[5];')).toThrow(/out of range/)
+  })
+
+  it('rejects a duplicate register declaration', () => {
+    expect(() => Circuit.fromQASM('qreg q[2];\nqreg q[2];')).toThrow(/declared twice/)
+  })
+})
+
+describe('fromQASM — gate definitions', () => {
+  it('expands a user-defined gate inline', () => {
+    const src = 'gate bell a,b { h a; cx a,b; }\nqreg q[2];\nbell q[0],q[1];'
+    const c   = Circuit.fromQASM(src)
+    expect(c.probability('00')).toBeCloseTo(0.5, 12)
+    expect(c.probability('11')).toBeCloseTo(0.5, 12)
+  })
+
+  it('binds formal parameters at the call site', () => {
+    // rx(pi) via a wrapper must match rx(pi) directly
+    const src = 'gate spin(theta) a { rx(theta) a; }\nqreg q[1];\nspin(pi) q[0];'
+    expect(Circuit.fromQASM(src).probability('1')).toBeCloseTo(1, 12)
+  })
+
+  it('evaluates expressions over formal parameters inside the body', () => {
+    const src = 'gate half(theta) a { rx(theta/2) a; }\nqreg q[1];\nhalf(2*pi) q[0];'
+    expect(Circuit.fromQASM(src).probability('1')).toBeCloseTo(1, 12)
+  })
+
+  it('expands nested gate definitions', () => {
+    const src = 'gate bell a,b { h a; cx a,b; }\n'
+              + 'gate two a,b,c,d { bell a,b; bell c,d; }\n'
+              + 'qreg q[4];\ntwo q[0],q[1],q[2],q[3];'
+    const c = Circuit.fromQASM(src)
+    for (const bs of ['0000', '1100', '0011', '1111']) {
+      expect(c.probability(bs)).toBeCloseTo(0.25, 12)
+    }
+  })
+
+  it('accepts the U and CX builtins used by qelib1.inc bodies', () => {
+    const c = Circuit.fromQASM('qreg q[2];\nU(pi/2,0,pi) q[0];\nCX q[0],q[1];')
+    expect(c.probability('00')).toBeCloseTo(0.5, 12)
+    expect(c.probability('11')).toBeCloseTo(0.5, 12)
+  })
+
+  it('broadcasts a user-defined gate over a register', () => {
+    const src = 'gate flip a { x a; }\nqreg q[3];\nflip q;'
+    expect(Circuit.fromQASM(src).probability('111')).toBeCloseTo(1, 12)
+  })
+
+  it('rejects a call with the wrong qubit arity', () => {
+    expect(() => Circuit.fromQASM('gate g a,b { cx a,b; }\nqreg q[3];\ng q[0];'))
+      .toThrow(/takes 2 qubit\(s\), got 1/)
+  })
+
+  it('rejects a call with the wrong parameter arity', () => {
+    expect(() => Circuit.fromQASM('gate g(t) a { rx(t) a; }\nqreg q[1];\ng q[0];'))
+      .toThrow(/takes 1 parameter\(s\), got 0/)
+  })
+
+  it('rejects indexing a formal qubit argument inside a body', () => {
+    expect(() => Circuit.fromQASM('gate g a { h a[0]; }\nqreg q[1];\ng q[0];'))
+      .toThrow(/cannot be indexed/)
+  })
+
+  it('rejects measure inside a gate body', () => {
+    expect(() => Circuit.fromQASM('gate g a { measure a -> c[0]; }\nqreg q[1];\ncreg c[1];\ng q[0];'))
+      .toThrow(/not allowed inside a gate definition/)
+  })
+
+  it('rejects calling an opaque gate', () => {
+    expect(() => Circuit.fromQASM('opaque mystery a;\nqreg q[1];\nmystery q[0];'))
+      .toThrow(/declared opaque/)
+  })
+
+  it('rejects a recursive definition rather than hanging', () => {
+    expect(() => Circuit.fromQASM('gate loop a { loop a; }\nqreg q[1];\nloop q[0];'))
+      .toThrow(/nest too deeply/)
+  })
+})
+
+describe('fromQASM — conditionals', () => {
+  it('applies a gate when the classical register matches', () => {
+    const src = 'qreg q[2];\ncreg c[2];\nx q[0];\nmeasure q[0] -> c[0];\nif(c==1) x q[1];'
+    expect(Circuit.fromQASM(src).run({ shots: 100, seed: 1 }).probs['11']).toBeCloseTo(1, 12)
+  })
+
+  it('leaves the target alone when the register does not match', () => {
+    const src = 'qreg q[2];\ncreg c[2];\nmeasure q[0] -> c[0];\nif(c==1) x q[1];'
+    expect(Circuit.fromQASM(src).run({ shots: 100, seed: 1 }).probs['00']).toBeCloseTo(1, 12)
+  })
+
+  it('rejects an undeclared classical register', () => {
+    expect(() => Circuit.fromQASM('qreg q[1];\nif(c==1) x q[0];'))
+      .toThrow(/undeclared classical register 'c'/)
+  })
+
+  it('rejects the indexed comparison form', () => {
+    expect(() => Circuit.fromQASM('qreg q[1];\ncreg c[1];\nif(c[0]==1) x q[0];'))
+      .toThrow(/only 'if \(creg == N\)/)
+  })
+})
+
+describe('fromQASM — angle expressions', () => {
+  it('evaluates scientific notation', () => {
+    expect(Circuit.fromQASM('qreg q[1];\nrx(1e-9) q[0];').probability('0')).toBeCloseTo(1, 12)
+  })
+
+  it('evaluates ^ as right-associative exponentiation', () => {
+    // 2^3^2 = 2^9 = 512;  rx(512 - 512) is identity, so compare against the value
+    const c = Circuit.fromQASM('qreg q[1];\nrx(2*sqrt(pi^2/4)) q[0];')
+    expect(c.probability('1')).toBeCloseTo(1, 12)   // 2·sqrt(π²/4) = π
+  })
+
+  it('evaluates the built-in functions', () => {
+    // 2*ln(exp(pi/2)) = pi
+    expect(Circuit.fromQASM('qreg q[1];\nrx(2*ln(exp(pi/2))) q[0];').probability('1')).toBeCloseTo(1, 12)
+  })
+
+  it('rejects an unknown symbol', () => {
+    expect(() => Circuit.fromQASM('qreg q[1];\nrx(theta) q[0];')).toThrow(/unknown symbol 'theta'/)
+  })
+
+  it('rejects an unknown function', () => {
+    expect(() => Circuit.fromQASM('qreg q[1];\nrx(arcsin(1)) q[0];')).toThrow(/unknown function 'arcsin'/)
+  })
+})
+
+describe('fromQASM — unsupported constructs are rejected, not mis-parsed', () => {
+  const cases: [string, string, RegExp][] = [
+    ['for loops',        'qreg q[2];\nfor int i in [0:1] { h q[i]; }', /construct 'for'/],
+    ['while loops',      'qreg q[2];\nwhile(true) { h q[0]; }',        /construct 'while'/],
+    ['classical types',  'qreg q[1];\nfloat[64] x = 0.5;',             /construct 'float'/],
+    ['global phase',     'qreg q[1];\ngphase(pi/4);',                  /construct 'gphase'/],
+    ['register aliases', 'qreg q[4];\nlet sub = q[0:1];',              /construct 'let'/],
+    ['gate modifiers',   'qreg q[2];\nctrl @ x q[0],q[1];',            /gate modifiers/],
+    ['else branches',    'qreg q[1];\nelse x q[0];',                   /'else' is not supported/],
+  ]
+  for (const [label, src, pattern] of cases) {
+    it(`rejects ${label}`, () => {
+      expect(() => Circuit.fromQASM(src)).toThrow(pattern)
+    })
+  }
+})
+
+describe('runMps — worker pool', () => {
+  // The parallel path only engages from a built bundle: runMps checks
+  // `import.meta.url` and falls back to single-threaded under a .ts entry point,
+  // so a test that calls runMps directly from vitest exercises the fallback, not
+  // the workers. Every case here runs in a child process against dist/ket.js.
+  //
+  // Skipped rather than failed when dist is absent — `npm test` does not build.
+  const distUrl = new URL('../dist/ket.js', import.meta.url)
+  const built   = existsSync(fileURLToPath(distUrl))
+
+  /** Run a snippet against the built bundle; resolves to its output, or 'hung'. */
+  async function inChild(body: string, ms = 30_000): Promise<string> {
+    const { spawn } = await import('node:child_process')
+    const src = `import { Circuit, DEVICES } from '${distUrl.href}'\n${body}`
+    return new Promise<string>(resolve => {
+      const child = spawn(process.execPath, ['--input-type=module', '--eval', src],
+        { stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      child.stdout.on('data', d => { out += d })
+      child.stderr.on('data', d => { out += d })
+      const killer = setTimeout(() => { child.kill('SIGKILL'); resolve('hung') }, ms)
+      child.on('exit', code => { clearTimeout(killer); resolve(code === 0 ? out.trim() : `exit ${code}: ${out.trim()}`) })
+    })
+  }
+
+  it.runIf(built)('exits the host process instead of stranding it', async () => {
+    // A live worker keeps Node's event loop open, so a pool that is not unreffed
+    // leaves the process hanging after the run has already finished.
+    const out = await inChild(`
+      const c = new Circuit(8).h(0).cnot(0, 1)
+      c.runMps({ shots: 256, seed: 1, noise: { p1: 0.001, p2: 0.002 }, workers: 2 })
+      console.log('done')
+    `)
+    expect(out).toBe('done')
+  }, 40_000)
+
+  it.runIf(built)('survives CLI flags the parent cannot pass to a worker', async () => {
+    // Workers inherit execArgv by default; --input-type is rejected for a
+    // file-backed worker, which used to surface as a five-minute wait.
+    const out = await inChild(`
+      const c = new Circuit(6).h(0).cnot(0, 1)
+      const d = c.runMps({ shots: 128, seed: 2, noise: { p1: 0.001, p2: 0.002 }, workers: 2 })
+      console.log('shots=' + d.shots)
+    `)
+    expect(out).toBe('shots=128')
+  }, 40_000)
+
+  it.runIf(built)('agrees with the single-threaded path and keeps every shot', async () => {
+    const out = await inChild(`
+      let c = new Circuit(12).h(0)
+      for (let i = 0; i < 11; i++) c = c.cnot(i, i + 1)
+      const noise = DEVICES['forte-1'].noise
+      const ideal = d => (d.probs['0'.repeat(12)] ?? 0) + (d.probs['1'.repeat(12)] ?? 0)
+      const one  = c.runMps({ shots: 512,  seed: 5, noise, workers: 1 })
+      const many = c.runMps({ shots: 512,  seed: 5, noise, workers: 2 })
+      const odd  = c.runMps({ shots: 1001, seed: 3, noise, workers: 4 })
+      const total = Object.values(odd.probs).reduce((a, b) => a + b, 0)
+      console.log(JSON.stringify({
+        one: ideal(one) > 0.7, many: ideal(many) > 0.7,
+        shots: many.shots, oddShots: odd.shots, sums: Math.abs(total - 1) < 1e-9,
+      }))
+    `)
+    expect(JSON.parse(out)).toEqual({ one: true, many: true, shots: 512, oddShots: 1001, sums: true })
+  }, 40_000)
 })

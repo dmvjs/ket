@@ -65,7 +65,9 @@ console.log(bell.stateAsString())
 // 0.7071|00⟩ + 0.7071|11⟩
 
 console.log(bell.exactProbs())
-// { '00': 0.5, '11': 0.5 }
+// { '11': 0.4999999999999999, '00': 0.4999999999999999 }
+// Analytic, not sampled: the final digit is IEEE-754 rounding on 1/√2, not shot
+// noise. "Exact" here means free of sampling variance, not free of float error.
 
 // Add measurement for shot-based sampling
 const result = bell
@@ -716,6 +718,84 @@ one circuit representation, no serialisation boundary between two languages.
 | Quirk JSON | — | ✓ | `circuit.toQuirk()` |
 | LaTeX (quantikz) | — | ✓ | `circuit.toLatex()` |
 
+### OpenQASM coverage
+
+`Circuit.fromQASM` parses OpenQASM 2.0 and the 3.0 subset that maps onto it,
+auto-detecting the version.
+
+**Supported:** any number of `qreg`/`creg` (or `qubit`/`bit`) declarations, laid
+out in declaration order — `qreg a[2]; qreg b[2];` puts `b[0]` at qubit 2;
+`gate` definitions, expanded inline, including parameterised and nested ones;
+`opaque` declarations; `measure` in both the `->` and assignment forms; `reset`;
+`barrier`; `if (creg == N) <statement>`; register-wide broadcast (`h q;`,
+`cx a,b;`, `measure q -> c;`); `//` and `/* */` comments; the `U`/`CX` builtins
+and all of qelib1.inc.
+
+Angle expressions accept `pi`, `+ - * / ^`, parentheses, scientific notation,
+`sin cos tan exp ln sqrt`, and — inside a gate body — that gate's own parameters.
+
+**Rejected with a `TypeError`,** rather than silently mis-parsed: undeclared
+registers, out-of-range indices, gate arity mismatches, registers that cannot be
+broadcast together, gate modifiers (`ctrl @`, `inv @`, `pow @`), `gphase`,
+`for`/`while`/`def`, `else`, register aliasing (`let`), and QASM 3 classical
+types beyond `bit`.
+
+## Mutable adapter
+
+`@kirkelliott/ket/compat` exports a `QuantumCircuit` class with a mutable,
+column-indexed API: gates are placed at an explicit column, the circuit grows to
+fit any wire named, and `run()` stores state on the instance. It matches the API
+shape used by the `quantum-circuit` package, so code written against that shape
+runs unmodified.
+
+It is an adapter, not a second API to build on. `toKet()` returns the equivalent
+immutable `Circuit`, which is where the rest of this reference applies.
+
+```javascript
+import { QuantumCircuit } from '@kirkelliott/ket/compat'
+
+const circuit = new QuantumCircuit(2)
+circuit.addGate('h', 0, 0)
+circuit.addGate('cx', 1, [0, 1])
+circuit.addMeasure(0, 'c', 0)
+circuit.run()
+
+circuit.getCregValue('c')          // 0 or 1
+circuit.measureAllMultishot(1024)  // { '00': 517, '11': 507 }
+circuit.toKet()                    // → Circuit, for the rest of the library
+```
+
+| Area | Methods |
+|---|---|
+| Construction | `init`, `clearGates`, `resetState`, `addGate`, `appendGate`, `addMeasure`, `removeGate`, `appendCircuit` |
+| Shape | `numQubits`, `numCols`, `numAmplitudes`, `getDepth`, `usedGates` |
+| Classical registers | `createCreg`, `getCregs`, `getCregValue`, `getCregBit`, `setCregBit`, `cregsAsString` |
+| Execution | `run(initialValues, options)`, `probabilities`, `probability`, `measure`, `measureAll`, `measureAllMultishot` |
+| State | `stateAsString`, `print` |
+| Custom gates | `registerGate`, `save`, `load` |
+| Interchange | `importQASM`, `exportQASM`, `exportToQiskit`, `exportToCirq`, `exportToQuil`, `exportToPyquil`, `exportToQSharp`, `exportToTFQ`, `exportToBraket`, `exportToIonq`, `exportSVG` |
+| Escape hatch | `toKet(initialValues?)` |
+
+Every gate name this adapter accepts is a gate ket already implements under the
+same name, so no translation table is involved.
+
+**Bit order.** Strings returned by `stateAsString` and `measureAllMultishot` put
+the highest wire leftmost — the opposite of ket's native wire-0-leftmost order,
+and the convention this API shape expects. `probabilities()` and `measureAll()`
+are indexed by wire.
+
+**Measurement is non-destructive.** A `measure` gate writes to its classical
+register but leaves the state alone, unless the circuit also contains a
+classically-controlled gate or a reset, in which case it collapses.
+
+**Seeding.** `run(initialValues, { seed })` makes a run reproducible. Unseeded
+runs draw a fresh seed from the platform CSPRNG each time, so running the same
+circuit in a loop gives independent results. This seeds a deterministic sampler —
+for cryptographic randomness call `crypto.getRandomValues` directly.
+
+**QASM output** follows ket's formatting: a blank line after the `include`, and no
+space after the comma in `cx q[0],q[1];`.
+
 ## Algorithms
 
 ```typescript
@@ -980,6 +1060,35 @@ reset, so the counts describe what would actually execute. `byName` gives finer
 accounting — `byName['t']` is the T-count, which is what the stabilizer-rank
 backend's cost depends on.
 
+### Building blocks of the Beauregard circuit
+
+The layers `shorCircuit` is assembled from are exported so a circuit can be
+inspected, unit-tested, or rebuilt with different arithmetic. Each acts in place
+on a `Circuit` and returns a new one.
+
+| Function | Layer |
+|---|---|
+| `phiAdd(c, n, a, q0)` | add the constant `a` in the Fourier basis |
+| `phiAddMod(c, n, a, N, ...)` | the same addition reduced mod `N` |
+| `ccPhiAddMod(c, n, a, N, ctrl1, ctrl2, ...)` | doubly-controlled modular addition |
+| `cMultModAdd(c, n, a, N, ctrl, ...)` | controlled modular multiply-accumulate |
+| `beauregardU(c, n, a, aInv, N, ctrl, x, acc, anc)` | the controlled `U_a` used by phase estimation |
+| `applyQft(c, n, off)` / `applyIqft(c, n, off)` | in-place QFT over a sub-register |
+
+`examples/node/dlog-shor.js` builds the two-register discrete-logarithm circuit
+directly from `beauregardU` and `applyIqft`, which is the shortest example of
+composing them into something `shorCircuit` does not provide.
+
+### Stabilizer internals
+
+`StabilizerCH` is the phase-sensitive CH-form simulator underneath
+`runStabilizerRank` (Bravyi et al., *Quantum* **3**, 181, 2019). Unlike the CHP
+tableau in `CliffordSim` it tracks global phase, so `amplitude()` is exact rather
+than correct-up-to-phase — which is what makes summing over Clifford terms valid.
+`randomEquatorial(n, rand)` draws the random equatorial stabilizer states used by
+the norm estimator. `bytesPerTerm(qubits)` gives the measured per-term memory
+cost that `maxTGates` inverts.
+
 ### Worked examples: recovering a key end to end
 
 Two example programs use the above to make a complete, self-checking argument.
@@ -1146,7 +1255,7 @@ const circuit = new Circuit(2).h(0).cnot(0, 1)
 circuit.statevector()           // Map<bigint, Complex> — full sparse amplitude map
 circuit.amplitude('11')         // Complex — amplitude of |11⟩
 circuit.probability('11')       // number — |amplitude|²
-circuit.exactProbs()            // { '00': 0.5, '11': 0.5 } — no sampling, no variance
+circuit.exactProbs()            // { bitstring: probability } — no sampling, no variance
 circuit.marginals()             // [P(q0=1), P(q1=1)]
 circuit.stateAsString()         // '0.7071|00⟩ + 0.7071|11⟩'
 circuit.stateAsArray()          // [{ bitstring, re, im, prob, phase }, ...] sorted by prob

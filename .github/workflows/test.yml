@@ -24,8 +24,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # benchmark/run.ts imports the package through its own exports map, so the
-      # declarations in dist/ have to exist before typecheck can resolve them.
+      # Build before typecheck and test, and keep it in that order:
+      #   - benchmark/run.ts imports the package through its own exports map, so
+      #     the declarations in dist/ have to exist before typecheck can resolve them.
+      #   - src/dist.test.ts and the runMps worker-pool tests assert against the
+      #     built artifacts (ESM, IIFE global, compat entry) and skip themselves
+      #     when dist/ is absent. Without this step they would silently not run.
       - name: Build
         run: npm run build
 
