@@ -21,7 +21,7 @@ This matches the convention used by every major quantum computing library and pa
 - **TypeScript-strict, zero runtime dependencies** — not a JavaScript library with bolted-on types.
 - **BigInt state indices** — handles 30+ qubits without 32-bit integer overflow.
 - **Bounds-checked** — every qubit index is validated at gate-construction time; out-of-range indices throw `RangeError` immediately rather than silently corrupting state.
-- **Four simulation backends** — statevector, MPS/tensor network, exact density matrix, and Clifford stabilizer in one library.
+- **Five simulation backends** — statevector, MPS/tensor network, exact density matrix, Clifford stabilizer, and stabilizer rank in one library.
 - **WebGPU browser simulation** — the interactive guide (source in [`ket-guide/`](../ket-guide/), not yet published) runs statevector QPE on GPU compute shaders, holding the state in VRAM rather than the JS heap and so bypassing the tab memory limit. It reaches 29-bit state spaces, but only on deliberately favourable targets: N = p(p+2) for twin primes p, with base a = p+1 chosen so that a² ≡ 1 (mod N) and the period is always r = 2, which lets a single counting qubit (t = 1) suffice. The circuit itself is not hand-compiled — every amplitude is computed — but these are not arbitrary semiprimes. See [`ket-guide/book/08-shor.qmd`](../ket-guide/book/08-shor.qmd) for the full disclosure.
 - **14 import/export formats** — more than any comparable JavaScript quantum library.
 - **Algorithm library built-in** — QFT, Grover's search, QPE, VQE, Trotter simulation, QAOA, gradient (parameter shift rule), minimize, standard ansatz circuits, and Pauli operator algebra ship with the core.

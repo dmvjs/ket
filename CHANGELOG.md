@@ -94,7 +94,7 @@ unguarded, they threw on every `runMps` call in the browser.
 
 ### Tests
 
-2,152, up from 2,012. New coverage where the suite was structurally blind:
+2,154, up from 2,012. New coverage where the suite was structurally blind:
 
 - `src/dist.test.ts` asserts against the built artifacts — export parity across
   ESM and the global bundle, the global bundle evaluated as a classic script (a

@@ -24,6 +24,16 @@ const SEED_ATTEMPTS = 64
  */
 const WALK_MIN_STEPS = 64
 
+/**
+ * Probes for other supported states when the Metropolis chain never moves.
+ *
+ * Each is one amplitude-oracle call, so this is cheap enough to run on every
+ * frozen chain. Finding nothing is not proof the result is sound — only that no
+ * counter-example turned up — so a frozen chain that survives all of them still
+ * returns its samples.
+ */
+const FROZEN_PROBES = 64
+
 export interface SampleOptions {
   /** Metropolis steps taken before the first sample is returned. */
   burnIn?: number
@@ -158,20 +168,53 @@ export function sampleFromOracle(
   // almost everything is accepted, so an even `thin` would lock sampling to one
   // parity class and silently halve the support. Staying put with probability
   // 1/2 makes the chain aperiodic and leaves the stationary distribution alone.
+  let accepted = 0
   const step = (): void => {
     if (rand() < 0.5) return
     const j = Math.floor(rand() * n)
     const flip = (): void => { x[j] = (x[j] ?? 0) ^ 1; walker?.flip(j) }
     flip()
     const py = prob()
-    if (py >= px || rand() < py / px) px = py
+    if (py >= px || rand() < py / px) { px = py; accepted++ }
     else flip()
   }
 
   for (let i = 0; i < burnIn; i++) step()
-  return Array.from({ length: shots }, () => {
+  const out = Array.from({ length: shots }, () => {
     for (let i = 0; i < thin; i++) step()
     return Uint8Array.from(x)
   })
+
+  // A chain that never moved emits its seed `shots` times. That is correct for a
+  // genuine point mass and badly wrong for a support that single-bit flips cannot
+  // traverse — a GHZ state seeds at |1…1⟩, every neighbour has zero amplitude, and
+  // the walk reports P(|1…1⟩) = 1 against a true 1/2.
+  //
+  // Having accepted nothing, the chain has proved every single-bit neighbour is
+  // empty, so it cannot take even one step. Any other supported state anywhere is
+  // therefore unreachable, and finding one is proof the samples are wrong rather
+  // than evidence of it. Probing for that costs a handful of oracle calls; the
+  // norm estimator would answer the same question thousands of times slower.
+  if (accepted === 0) {
+    const probe = new Uint8Array(n)
+    for (let attempt = 0; attempt < FROZEN_PROBES; attempt++) {
+      probe.set(x)
+      // The complement first: it is the other half of every parity-split support,
+      // GHZ included. Then random subsets, which cover less symmetric splits.
+      if (attempt === 0) for (let j = 0; j < n; j++) probe[j] = (probe[j] ?? 0) ^ 1
+      else {
+        let flipped = 0
+        for (let j = 0; j < n; j++) if (rand() < 0.5) { probe[j] = (probe[j] ?? 0) ^ 1; flipped++ }
+        if (flipped === 0) continue
+      }
+      if (batchProb(probe) > 0)
+        throw new RangeError(
+          `Metropolis chain could not move: every single-bit neighbour of its starting state has zero ` +
+          `amplitude, yet the state is not the whole distribution — the support is not connected under ` +
+          `single-bit flips, so these samples would be wrong, not merely noisy. Use method: 'exact' ` +
+          `(raising exactBudget if needed) for a correct distribution.`)
+    }
+  }
+  return out
 }
 
