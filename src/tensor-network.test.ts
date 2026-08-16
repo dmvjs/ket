@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
 import { makePrng } from './prng.js'
-import { amplitudeByContraction, amplitudeBatchByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair } from './tensor-network.js'
+import { amplitudeByContraction, amplitudeBatchByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair, sampleByContraction } from './tensor-network.js'
 
 /**
  * Contraction against the statevector oracle.
@@ -450,5 +450,100 @@ describe('tensor network — diagonal gates as hyper-indices', () => {
     const summed = contractPair(a, c)
     expect(summed.indices).toEqual([])
     expect(Array.from(summed.data)).toEqual([31, 0])
+  })
+})
+
+describe('tensor network — sampling', () => {
+  const messy = (n: number, rand: () => number): Circuit => {
+    let c = new Circuit(n)
+    const one = ['h', 'x', 'y', 'z', 's', 'sdg', 't', 'tdg'] as const
+    for (let d = 0; d < 3 * n; d++) {
+      const r = rand()
+      if (n > 1 && r < 0.35) {
+        const a = Math.floor(rand() * n); let b = Math.floor(rand() * (n - 1)); if (b >= a) b++
+        c = rand() < 0.5 ? c.cz(a, b) : c.cnot(a, b)
+      } else if (r < 0.6) c = c.rx((rand() * 6 - 3), Math.floor(rand() * n))
+      else if (r < 0.75) c = c.rz((rand() * 6 - 3), Math.floor(rand() * n))
+      else c = c[one[Math.floor(rand() * one.length)]!](Math.floor(rand() * n))
+    }
+    return c
+  }
+
+  it('reproduces the exact distribution, not just its support', () => {
+    const shots = 40000
+    for (let seed = 1; seed <= 6; seed++) {
+      const rand = makePrng(seed * 6151 + 7)
+      const n = 2 + Math.floor(rand() * 3)
+      const c = messy(n, rand)
+      const exact = c.exactProbs()
+      const got = sampleByContraction(c, { shots, blockSize: 2, seed: 4242 })
+
+      for (const [outcome, p] of Object.entries(exact)) {
+        const empirical = (got.counts.get(outcome) ?? 0) / shots
+        // 4 sigma of a binomial at this shot count, floored for tiny p.
+        const sigma = Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots)
+        expect(Math.abs(empirical - p), `seed=${seed} |${outcome}⟩`).toBeLessThan(4 * sigma + 1e-3)
+      }
+      // Nothing outside the support may ever be emitted.
+      for (const outcome of got.counts.keys()) expect(exact[outcome] ?? 0).toBeGreaterThan(0)
+    }
+  })
+
+  it('gives the same distribution however the qubits are blocked', () => {
+    // Chaining is where a conditional sampler goes wrong: block boundaries are
+    // exactly where a mis-normalised marginal would show up.
+    const c = new Circuit(8).h(0).cnot(0, 1).cz(1, 2).ry(0.7, 3)
+      .cnot(3, 4).rx(0.4, 5).cz(5, 6).t(7).cnot(6, 7).h(2)
+    const exact = c.exactProbs()
+    const shots = 40000
+    for (const blockSize of [1, 2, 3, 8]) {
+      const got = sampleByContraction(c, { shots, blockSize, seed: 99 })
+      for (const [outcome, p] of Object.entries(exact)) {
+        const empirical = (got.counts.get(outcome) ?? 0) / shots
+        expect(Math.abs(empirical - p), `blockSize=${blockSize} |${outcome}⟩`)
+          .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+      }
+    }
+  })
+
+  it('a deterministic circuit yields exactly one outcome', () => {
+    const got = sampleByContraction(new Circuit(5).x(0).x(3), { shots: 500, blockSize: 2 })
+    expect([...got.counts.entries()]).toEqual([['10010', 500]])
+  })
+
+  it('reaches widths no statevector could, on a circuit no MPS is shaped for', () => {
+    // 60 qubits: 2^60 amplitudes do not exist. Long-range CZs, so this is not a
+    // chain an MPS would keep narrow either.
+    let c = new Circuit(60)
+    for (let i = 0; i < 60; i++) c = c.h(i)
+    for (let i = 0; i + 30 < 60; i++) c = c.cz(i, i + 30)
+    for (let i = 0; i < 60; i++) c = c.rz(0.2 + 0.01 * i, i)
+    const got = sampleByContraction(c, { shots: 200, blockSize: 4, restarts: 4 })
+    let total = 0
+    for (const [outcome, k] of got.counts) { expect(outcome).toMatch(/^[01]{60}$/); total += k }
+    expect(total).toBe(200)
+  })
+
+  it('the light cone keeps the conditional cache small without changing it', () => {
+    // Same circuit, same seed: whatever the cache does, the samples must be the
+    // ones the chain would have produced anyway. The cone only decides how often
+    // a conditional is recomputed, never what it is.
+    let c = new Circuit(24)
+    for (let i = 0; i < 24; i++) c = c.h(i)
+    for (let d = 0; d < 3; d++) {
+      for (let i = d % 2; i + 1 < 24; i += 2) c = c.cz(i, i + 1)
+      for (let i = 0; i < 24; i++) c = c.rx(0.6, i)
+    }
+    const got = sampleByContraction(c, { shots: 2000, blockSize: 4, seed: 7, restarts: 4 })
+    // 6 blocks x 2000 shots is 12,000 conditionals if nothing is shared.
+    expect(got.contractions).toBeLessThan(400)
+    expect([...got.counts.values()].reduce((a, b) => a + b, 0)).toBe(2000)
+  })
+
+  it('rejects nonsense parameters', () => {
+    const c = new Circuit(3).h(0)
+    expect(() => sampleByContraction(c, { shots: 0 })).toThrow(/positive integer/)
+    expect(() => sampleByContraction(c, { blockSize: 0 })).toThrow(/1\.\.16/)
+    expect(() => sampleByContraction(c, { blockSize: 17 })).toThrow(/1\.\.16/)
   })
 })

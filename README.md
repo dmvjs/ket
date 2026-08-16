@@ -179,7 +179,7 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,456 tests.** Analytic correctness against known amplitudes — gate
+- **2,462 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.

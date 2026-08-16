@@ -6,7 +6,7 @@
 <title>ket — Quantum Computing in JavaScript · dmvjs</title>
 <meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Seven exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
 <meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
-<meta property="og:description" content="Seven exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,456 tests.">
+<meta property="og:description" content="Seven exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,462 tests.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
@@ -148,7 +148,7 @@
   </a>
 </div>
 <h1>ket</h1>
-<p class="subtitle">Quantum circuit simulation for TypeScript · seven exact backends · 14 interchange formats · zero dependencies · 2,456 tests · v0.9.1</p>
+<p class="subtitle">Quantum circuit simulation for TypeScript · seven exact backends · 14 interchange formats · zero dependencies · 2,462 tests · v0.9.2</p>
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════ -->
 <div class="hero">
@@ -180,7 +180,7 @@ q1: ────⊕──</div>
   <div class="why-chip"><b>Types are the source</b>Strict TypeScript, not JS with a <code>.d.ts</code> bolted on.</div>
   <div class="why-chip"><b>Bounds-checked</b>Bad qubit index throws <code>RangeError</code> at construction, not 200 gates later.</div>
   <div class="why-chip"><b>BigInt indices</b>No 32-bit overflow at qubit 31 — the failure mode that silently corrupts.</div>
-  <div class="why-chip"><b>2,456 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
+  <div class="why-chip"><b>2,462 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
   <div class="why-chip"><b>Zero dependencies</b>215 KB minified, total. Nothing to audit but ket.</div>
 </div>
 
@@ -221,25 +221,31 @@ q1: ────⊕──</div>
 <div class="section-title">How you know it's right</div>
 <p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
   Backends built on unrelated representations — amplitudes, density matrices, tensor trains,
-  stabilizer tableaux — have to agree. Where a circuit can be expressed in several, ket
-  checks that they do, and the suite is built on analytic expectations rather than snapshots.
+  stabilizer tableaux, contracted networks — have to agree. Where a circuit can be expressed in
+  several, ket checks that they do, and the suite is built on analytic expectations rather than
+  snapshots. One battery runs every backend against the same circuits and holds them all to one
+  rule: <b>a backend may decline a circuit; it may not answer one wrongly.</b> Declining is a
+  thrown error you can catch. Answering wrongly is what this is built to make impossible.
   These numbers are computed while this page builds:
 </p>
 <div class="card" style="margin-bottom:1.25rem">
-  <div class="hero-out-label">GHZ-6 — same circuit, four representations, 200,000 shots for the sampled ones</div>
+  <div class="hero-out-label">6 qubits, rotations and entanglers — five representations, 200,000 shots for the sampled ones</div>
   <table class="bench-table">
-    <tr><th>Outcome</th><th>Statevector (exact)</th><th>Density matrix</th><th>MPS</th><th>Clifford</th></tr>
-    <tr><td><code>|000000⟩</code></td><td>0.500000</td><td>0.500000</td><td>0.499870</td><td>0.499870</td></tr><tr><td><code>|111111⟩</code></td><td>0.500000</td><td>0.500000</td><td>0.500130</td><td>0.500130</td></tr>
+    <tr><th>Outcome</th><th>Statevector (exact)</th><th>Density matrix</th><th>MPS</th><th>Contraction (sampled)</th><th>Contraction |amp|²</th></tr>
+    <tr><td><code>|111100⟩</code></td><td>0.081067</td><td>0.081067</td><td>0.081850</td><td>0.081075</td><td>0.081067</td></tr><tr><td><code>|000000⟩</code></td><td>0.070321</td><td>0.070321</td><td>0.069185</td><td>0.071030</td><td>0.070321</td></tr><tr><td><code>|011100⟩</code></td><td>0.048067</td><td>0.048067</td><td>0.048015</td><td>0.047405</td><td>0.048067</td></tr><tr><td><code>|000001⟩</code></td><td>0.041968</td><td>0.041968</td><td>0.041905</td><td>0.041870</td><td>0.041968</td></tr><tr><td><code>|100000⟩</code></td><td>0.041695</td><td>0.041695</td><td>0.041925</td><td>0.040575</td><td>0.041695</td></tr>
   </table>
   <div class="meta">
     <span><b>Density matrix:</b> bit-identical</span>
-    <span><b>MPS:</b> within 1.3e-4 (sampling)</span>
-    <span><b>Clifford:</b> within 1.3e-4 (sampling)</span>
+    <span><b>Contraction |amp|²:</b> bit-identical</span>
+    <span><b>MPS &amp; sampled:</b> within shot noise</span>
   </div>
   <p class="desc" style="margin-top:.75rem;margin-bottom:0">
-    The density matrix backend is exact, so it matches to floating-point precision. MPS and Clifford
-    sample, so they land within shot noise of the analytic answer — which is the correct result, not a
-    tolerance that was widened until it passed.
+    Every probability here is different, and the last two rows differ by 0.00027 — a circuit like this is
+    the point. A symmetric state is the <em>weakest</em> possible check: an equal-superposition GHZ has two
+    outcomes at exactly 0.5, so a badly broken sampler still looks right on it, and one shipped in ket
+    that way. This release fixed a stabilizer-rank sampler that returned a single outcome with probability
+    1 on GHZ while its tests — which only checked that samples landed in the support — passed. Asymmetric
+    probabilities have nowhere to hide.
   </p>
 </div>
 <div class="grid2" style="margin-bottom:1.25rem">

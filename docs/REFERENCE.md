@@ -863,6 +863,56 @@ depth pushes the width past n. A single call returns **one amplitude**, not a
 distribution — but `amplitudeBatchByContraction` leaves chosen qubits open and
 returns all 2^k at once, which is what makes sampling practical.
 
+### Sampling shots from a contraction
+
+One contraction gives one amplitude, which is no use for sampling — you would
+need all 2ⁿ. `sampleByContraction` instead resolves the qubits a block at a time,
+each block from one contraction of the circuit against its own conjugate:
+
+```typescript
+import { sampleByContraction } from '@kirkelliott/ket'
+
+const { counts, width, contractions } =
+  sampleByContraction(circuit, { shots: 1000, blockSize: 8 })
+```
+
+Joining ψ to conj(ψ) makes each qubit's two wires share one index, and what is
+attached to that index decides the qubit's role:
+
+| attached | meaning |
+|---|---|
+| a rank-1 \|v⟩ | condition on this qubit having value v |
+| an identity cap | leave it open, returning ψ(x)·conj(ψ(x)) — the probability |
+| nothing | the index is summed, marginalising the qubit away |
+
+So the chain P(q₀…) · P(q₁…\|q₀…) · … is **exact**, with no rejection step and no
+approximation. Each conditional is a real, non-negative vector over 2^blockSize
+outcomes, normalised by its own sum.
+
+This is exact sampling from circuits no other representation reaches:
+
+| circuit | shots | width | contractions | time |
+|---|---|---|---|---|
+| 100 qubits, depth 4 | 1,000 | 7 | 257 | 1.3 s |
+| 200 qubits, depth 4 | 1,000 | 9 | 385 | 4.3 s |
+| **400 qubits, depth 4** | 1,000 | 9 | 785 | **19.5 s** |
+| 400 qubits, depth 6 | 1,000 | 11 | 3,117 | 68 s |
+
+Two things make that affordable. The network's *structure* does not depend on the
+values sampled, so each block is planned once and replayed for every shot. And a
+block's conditional can only depend on decided qubits inside its **backward light
+cone** — outside it there is no path through the circuit and so no correlation —
+so the cache is keyed on those bits alone. On a 200-qubit depth-4 circuit that is
+the difference between 23,105 contractions and 385, and 76 s against 4.3 s, with
+the samples bit-for-bit the same.
+
+The limit is the doubling. Joining ψ to its conjugate roughly doubles the
+contraction width, and memory is 2^width, so this is affordable exactly where
+contraction already wins and hopeless where it already loses. Depth is what ends
+it: the cone widens with depth, cache hits collapse, and the width doubles on top.
+Past about depth 8 this is not the right tool, and no amount of tuning changes
+that.
+
 ### Diagonal gates do not cut their wires
 
 Depth is the wall, and most of what builds it is bookkeeping rather than physics.
@@ -1884,7 +1934,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,456 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,462 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

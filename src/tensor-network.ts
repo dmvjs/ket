@@ -24,6 +24,7 @@
  */
 
 import type { Circuit } from './circuit.js'
+import { makePrng } from './prng.js'
 
 /** A tensor over `indices`, complex, stored re/im interleaved in row-major order. */
 export interface Tensor {
@@ -422,10 +423,47 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
   if (!/^[01?]+$/.test(bitstring))
     throw new TypeError(`bitstring '${bitstring}' may contain only 0, 1 and ? (open)`)
 
+  const { tensors, wire, next } = buildWires(circuit, 'i')
+
+  // Close each wire with ⟨0| or ⟨1|. A '?' leaves the wire open, so the
+  // contraction returns a tensor over those qubits instead of a scalar — 2^k
+  // amplitudes from one contraction rather than 2^k contractions.
+  for (let q = 0; q < n; q++) {
+    const ch = bitstring[q]
+    if (ch === '?') continue
+    const bit = ch === '1' ? 1 : 0
+    tensors.push({ indices: [wire[q]!], data: Float64Array.from(bit ? [0, 0, 1, 0] : [1, 0, 0, 0]) })
+  }
+
+  // An open wire gets an identity cap, in ascending qubit order. A trailing
+  // diagonal gate shares the wire's index rather than renaming it, so without
+  // the cap an open wire can end on an index two tensors hold — which the
+  // contraction would sum away instead of returning. The cap restores the
+  // invariant the rest of the module relies on: an index held once is an output.
+  for (let q = 0; q < n; q++) {
+    if (bitstring[q] !== '?') continue
+    const out = next()
+    tensors.push({ indices: [out, wire[q]!], data: matrixOf('id', undefined)! })
+    wire[q] = out
+  }
+  return tensors
+}
+
+/**
+ * The circuit's tensors with every wire left open, plus the index each wire ends on.
+ *
+ * Separated out because sampling needs the state as a tensor rather than an
+ * amplitude: it builds this twice, once conjugated, and joins the two copies.
+ * `prefix` keeps the two copies' index names apart.
+ */
+function buildWires(
+  circuit: Circuit, prefix: string,
+): { tensors: Tensor[]; wire: string[]; next: () => string } {
+  const n = circuit.qubits
   const tensors: Tensor[] = []
   const wire: string[] = []
   let fresh = 0
-  const next = (): string => `i${fresh++}`
+  const next = (): string => `${prefix}${fresh++}`
 
   // |0⟩ on every wire.
   for (let q = 0; q < n; q++) {
@@ -475,28 +513,7 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
     }
   }
 
-  // Close each wire with ⟨0| or ⟨1|. A '?' leaves the wire open, so the
-  // contraction returns a tensor over those qubits instead of a scalar — 2^k
-  // amplitudes from one contraction rather than 2^k contractions.
-  for (let q = 0; q < n; q++) {
-    const ch = bitstring[q]
-    if (ch === '?') continue
-    const bit = ch === '1' ? 1 : 0
-    tensors.push({ indices: [wire[q]!], data: Float64Array.from(bit ? [0, 0, 1, 0] : [1, 0, 0, 0]) })
-  }
-
-  // An open wire gets an identity cap, in ascending qubit order. A trailing
-  // diagonal gate shares the wire's index rather than renaming it, so without
-  // the cap an open wire can end on an index two tensors hold — which the
-  // contraction would sum away instead of returning. The cap restores the
-  // invariant the rest of the module relies on: an index held once is an output.
-  for (let q = 0; q < n; q++) {
-    if (bitstring[q] !== '?') continue
-    const out = next()
-    tensors.push({ indices: [out, wire[q]!], data: matrixOf('id', undefined)! })
-    wire[q] = out
-  }
-  return tensors
+  return { tensors, wire, next }
 }
 
 /** CNOT as a rank-4 tensor with index order [outC, outT, inC, inT]. */
@@ -1240,4 +1257,221 @@ function openIndexFor(tensors: readonly Tensor[], circuit: Circuit, pattern: str
   // touched — not by qubit. Match by position in the network's own tensor order.
   const byLastUse = dangling.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))
   return byLastUse[rank]!
+}
+
+// ── Sampling ──────────────────────────────────────────────────────────────────
+
+/** One shot-sampling run over a contracted network. */
+export interface ContractionSample {
+  /** Bitstring → shot count, q0 leftmost, as `Distribution` uses. */
+  counts: Map<string, number>
+  /** Widest intermediate across every conditional contraction. */
+  width: number
+  /** Contractions actually run, after identical conditionals were reused. */
+  contractions: number
+  /** Qubits resolved per contraction. */
+  blockSize: number
+}
+
+/**
+ * Conjugate a network and rename its wires onto another copy's.
+ *
+ * ⟨ψ| is ψ with every tensor conjugated, since conjugation distributes over the
+ * product. Renaming the bra's final wire indices onto the ket's joins the two
+ * copies: an index both copies hold is summed when they meet, and summing
+ * ψ(x)·conj(ψ(x)) over x is exactly the trace over that qubit.
+ */
+function conjugateOnto(bra: { tensors: Tensor[]; wire: string[] }, ketWire: readonly string[]): Tensor[] {
+  const rename = new Map<string, string>()
+  bra.wire.forEach((b, q) => rename.set(b, ketWire[q]!))
+  return bra.tensors.map(t => {
+    const data = new Float64Array(t.data.length)
+    for (let i = 0; i < t.data.length; i += 2) {
+      data[i] = t.data[i]!
+      data[i + 1] = -t.data[i + 1]!          // conjugate
+    }
+    return { indices: t.indices.map(x => rename.get(x) ?? x), data }
+  })
+}
+
+/**
+ * Qubits whose values the marginal on `block` can possibly depend on.
+ *
+ * Walking the ops backwards and collecting everything that touches the growing
+ * set gives the block's backward light cone. Outside it there is no path through
+ * the circuit and so no correlation: conditioning on those qubits cannot move
+ * this block's distribution.
+ *
+ * That is worth knowing because it is the difference between a cache keyed on
+ * every decided bit — which never hits twice on a flat distribution — and one
+ * keyed on a handful, which hits constantly. Shallow circuits have small cones,
+ * and shallow circuits are the whole regime this method is good for.
+ */
+function backwardCone(circuit: Circuit, block: readonly number[]): Set<number> {
+  const cone = new Set<number>(block)
+  const ops = circuit.toJSON().ops as Record<string, unknown>[]
+
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i]!
+    const kind = op['kind'] as string
+    const touched: number[] =
+      kind === 'single' ? [op['q'] as number]
+      : kind === 'cnot' || kind === 'controlled' ? [op['control'] as number, op['target'] as number]
+      : kind === 'swap' ? [op['a'] as number, op['b'] as number]
+      : []
+    if (touched.some(q => cone.has(q))) for (const q of touched) cone.add(q)
+  }
+  return cone
+}
+
+/** The reusable structure for one block of a chained conditional sample. */
+interface BlockPlan {
+  tensors: Tensor[]
+  plan: ContractionPlan
+  /** Rank-1 closers for already-decided qubits, mutated per shot. */
+  closers: { qubit: number; data: Float64Array }[]
+  block: number[]
+  openIndices: string[]
+}
+
+/**
+ * Build the doubled network that yields P(block | earlier qubits).
+ *
+ * Structure only — the closer *values* are written per shot, so one plan serves
+ * every shot that reaches this block. Three roles per qubit, and they differ
+ * only in what is attached to the shared wire index:
+ *
+ *   decided  → a rank-1 |v⟩, picking out that value of the shared index
+ *   in block → an identity cap, which leaves the index open and so returns the
+ *              diagonal ψ(x)·conj(ψ(x)) — the probability, not the amplitude
+ *   later    → nothing, so the index is summed and the qubit is marginalised out
+ */
+function blockPlanFor(
+  circuit: Circuit, decided: readonly number[], block: readonly number[],
+  restarts: number, seed: number,
+): BlockPlan {
+  const ket = buildWires(circuit, 'k')
+  const bra = buildWires(circuit, 'b')
+  const tensors = [...ket.tensors, ...conjugateOnto(bra, ket.wire)]
+
+  const closers: { qubit: number; data: Float64Array }[] = []
+  for (const q of decided) {
+    const data = new Float64Array([1, 0, 0, 0])
+    tensors.push({ indices: [ket.wire[q]!], data })
+    closers.push({ qubit: q, data })
+  }
+
+  const openIndices: string[] = []
+  for (const q of block) {
+    const out = ket.next()
+    tensors.push({ indices: [out, ket.wire[q]!], data: matrixOf('id', undefined)! })
+    openIndices.push(out)
+  }
+
+  const plan = planContraction(tensors.map(t => t.indices), { restarts, seed })
+  return { tensors, plan, closers, block: [...block], openIndices }
+}
+
+/**
+ * Sample bitstrings from a circuit by contraction.
+ *
+ * A single contraction gives one amplitude, which is useless for sampling: you
+ * would need all 2ⁿ. This instead resolves the qubits a block at a time, each
+ * block from one contraction of the circuit against its own conjugate. Closing a
+ * qubit's shared wire with |v⟩ conditions on it, leaving it open returns its
+ * probability, and leaving it alone marginalises it away — so the chain
+ * P(q₀…) · P(q₁…| q₀…) · … is exact, with no rejection step.
+ *
+ * The doubled network is what costs: joining ψ to its conjugate roughly doubles
+ * the contraction width, and memory is 2^width. That is affordable exactly where
+ * contraction already wins — a 400-qubit depth-4 circuit contracts at width 2, so
+ * doubled it is still trivial — and hopeless where it already loses. Deep
+ * circuits are not reachable this way and never will be by this route.
+ *
+ * Two things keep the cost down across shots. The network's *structure* does not
+ * depend on the values sampled, so each block is planned once and replayed; and
+ * conditionals repeat heavily on any peaked distribution, so a resolved prefix
+ * is contracted once and reused. `contractions` reports how many actually ran.
+ */
+export function sampleByContraction(
+  circuit: Circuit,
+  { shots = 1024, seed = 1, blockSize = 4, restarts = 32 }: {
+    shots?: number; seed?: number; blockSize?: number; restarts?: number
+  } = {},
+): ContractionSample {
+  const n = circuit.qubits
+  if (!Number.isInteger(shots) || shots < 1) throw new TypeError(`shots must be a positive integer, got ${shots}`)
+  if (!Number.isInteger(blockSize) || blockSize < 1 || blockSize > 16)
+    throw new TypeError(`blockSize must be an integer in 1..16, got ${blockSize}`)
+
+  const blocks: number[][] = []
+  for (let q = 0; q < n; q += blockSize) {
+    blocks.push(Array.from({ length: Math.min(blockSize, n - q) }, (_, j) => q + j))
+  }
+
+  const plans = blocks.map((block, b) =>
+    blockPlanFor(circuit, blocks.slice(0, b).flat(), block, restarts, seed))
+  const width = Math.max(...plans.map(p => p.plan.width))
+
+  // Which already-decided qubits each block's conditional can actually depend on.
+  // Normalising by the total turns the joint into the conditional, and the
+  // conditional is flat in every qubit outside the cone — so two prefixes that
+  // agree on the cone give the same answer, whatever they do elsewhere.
+  const coneBits = blocks.map((block, b) => {
+    const cone = backwardCone(circuit, block)
+    return blocks.slice(0, b).flat().filter(q => cone.has(q))
+  })
+
+  // A resolved prefix determines the next conditional exactly, so it is worth
+  // contracting once however many shots walk through it.
+  const cache = new Map<string, Float64Array>()
+  let contractions = 0
+
+  const conditional = (b: number, prefix: string): Float64Array => {
+    const key = `${b}:${coneBits[b]!.map(q => prefix[q]).join('')}`
+    const hit = cache.get(key)
+    if (hit) return hit
+
+    const bp = plans[b]!
+    for (const c of bp.closers) {
+      const bit = prefix[c.qubit] === '1' ? 1 : 0
+      c.data[0] = bit ? 0 : 1; c.data[2] = bit ? 1 : 0
+    }
+    const out = contractNetwork(bp.tensors, bp.plan)
+    contractions++
+
+    const ordered = permuteTensor(out, bp.openIndices)
+    const k = 1 << bp.block.length
+    const probs = new Float64Array(k)
+    for (let j = 0; j < k; j++) probs[j] = Math.max(0, ordered.data[2 * j]!)
+    cache.set(key, probs)
+    return probs
+  }
+
+  const rand = makePrng(seed)
+  const counts = new Map<string, number>()
+
+  for (let s = 0; s < shots; s++) {
+    let prefix = ''
+    for (let b = 0; b < blocks.length; b++) {
+      const probs = conditional(b, prefix)
+      let total = 0
+      for (const p of probs) total += p
+      // A zero-probability prefix cannot be reached, so this cannot fire unless
+      // the conditional chain has gone wrong.
+      if (!(total > 0)) throw new Error(`sampleByContraction: conditional at block ${b} has zero weight`)
+
+      let r = rand() * total
+      let pick = probs.length - 1
+      for (let j = 0; j < probs.length; j++) { r -= probs[j]!; if (r <= 0) { pick = j; break } }
+
+      const bitsOfBlock = blocks[b]!.length
+      let chunk = ''
+      for (let j = bitsOfBlock - 1; j >= 0; j--) chunk += (pick >> j) & 1
+      prefix += chunk
+    }
+    counts.set(prefix, (counts.get(prefix) ?? 0) + 1)
+  }
+
+  return { counts, width, contractions, blockSize }
 }
