@@ -930,20 +930,25 @@ also removes work that was being repeated inside it:
 
 | circuit | width | sliced | slices | actual overhead |
 |---|---|---|---|---|
-| n=12 d=8 → target 4 | 7 → **4** | 7 | 128 | **37.6×** |
-| n=20 d=12 → target 10 | 13 → **10** | 4 | 16 | **5.65×** |
-| n=20 d=12 → target 8 | 13 → **8** | 10 | 1024 | **99×** |
+| n=20 d=12 → target 9 | 12 → **9** | 5 | 32 | **4.7×** |
+| n=20 d=12 → target 7 | 12 → **7** | 9 | 512 | **26.9×** |
+| n=40 d=12 → target 10 | 13 → **11** | 3 | 8 | **4.8×** |
 
-The last row is the point: **32× less memory for 99× work**, against a naive
-expectation of 1024×, and every one of those 1024 contractions is independent.
+The middle row is the point: **32× less memory for 27× more work**, against a
+naive expectation of 512×, and every one of those 512 contractions is independent.
 
 Selection ranks candidates by how many of the widest intermediates carry them.
 Width alone is the wrong signal — a peak held by six intermediates does not fall
 when an index leaves five of them, so a width-only rule reports no progress and
 stops before it starts. Emptying that peak set is the step before the width
 moves, so progress is measured on `(width, count at that width)` and a slice is
-taken only when one of them improves. Anything else would double the work for
-nothing.
+taken only when one of them improves.
+
+Because that comparison is between two *planned* contractions, it is only as
+trustworthy as the planner is repeatable. Scoring candidates with too few
+restarts measures planner variance rather than the slice, and the search stops
+early — the same target that reaches width 7 with 24 trial restarts stalls at 11
+with two. Planning is cheap enough now to buy that certainty.
 
 Slicing stops at `maxSliced` (default 12) and reports the width it actually
 reached rather than the width requested.
@@ -978,9 +983,27 @@ them in a circuit network; and a zero row of the left operand skips a whole pass
 over the right one, which matters because gate tensors are mostly zeros — a CNOT
 has four non-zero entries out of sixteen.
 
-**Planning, not arithmetic, is now the cost.** At n=28 the contraction takes 17 ms
-against 957 ms to choose the order. Further kernel work would not show up; better
-planning would.
+### Planner cost
+
+Candidate pairs are held in a min-heap keyed by score, with lazy invalidation by
+version counter, so a contraction step costs the merged tensor's degree rather
+than a scan of every remaining pair. Rescanning made planning O(tensors ×
+candidates) per step and dominated everything else:
+
+| network | scanning | heap |
+|---|---|---|
+| n=20 d=12, 654 tensors | 578 ms | **14 ms** |
+| n=28 d=14, 1,057 tensors | 1,460 ms | **17 ms** |
+| n=60 d=12, 1,974 tensors | 5,182 ms | **25 ms** |
+| n=100 d=8, 2,296 tensors | 6,658 ms | **27 ms** |
+
+Same restart count in both columns. The speedup is not free: freezing a
+candidate's jittered score when it is pushed means each restart explores a little
+less than rescoring everything every step did, so a single restart lands 1–2 wider.
+Restarts are now cheap enough that spending the win on more of them more than
+covers it — at 128 restarts the heap matches or beats the old planner's width on
+most networks while still being 5–12× faster — so the default restart count is 64
+rather than 24.
 
 ### Working with the network directly
 

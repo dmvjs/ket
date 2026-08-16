@@ -16,7 +16,8 @@
  *
  * The search here is randomized greedy with restarts: repeatedly contract the
  * pair that looks cheapest, with the tie-break jittered, and keep the best plan
- * found. That is the standard baseline. It is not hypergraph partitioning
+ * found. Restarts are the whole search, and they are cheap — a plan for a
+ * 100-qubit network takes about 4ms — so the default runs many of them. That is the standard baseline. It is not hypergraph partitioning
  * (KaHyPar-class, as `cotengra` uses), which does better on large hard networks —
  * so `planContraction` is deliberately separate from the contraction itself, and
  * a better planner can be dropped in without touching anything else.
@@ -54,7 +55,7 @@ const size = (n: number): number => 2 ** n
  */
 export function planContraction(
   network: readonly (readonly string[])[],
-  { restarts = 24, seed = 1 }: { restarts?: number; seed?: number } = {},
+  { restarts = 64, seed = 1 }: { restarts?: number; seed?: number } = {},
 ): ContractionPlan {
   let rng = seed >>> 0 || 1
   const rand = (): number => {
@@ -68,10 +69,10 @@ export function planContraction(
     const jitter = attempt === 0 ? 0 : 0.35
     const live: (Set<string> | undefined)[] = network.map(idx => new Set(idx))
 
-    // Candidates are drawn from the network's own connectivity rather than from
-    // all pairs. Scanning every pair at every step is O(tensors^3) overall, which
-    // for a 160-qubit circuit was minutes of planning to guide microseconds of
-    // arithmetic — the planner, not the contraction, was the whole cost.
+    // Candidates come from the network's own connectivity, and are kept in a heap
+    // so a step costs the merged tensor's degree rather than a scan of every
+    // pair. Rescanning was O(tensors x candidates) per step: at n=28 that made
+    // planning 957ms against 17ms of actual contraction.
     const holders = new Map<string, Set<number>>()
     live.forEach((idx, i) => {
       for (const x of idx!) {
@@ -81,12 +82,39 @@ export function planContraction(
       }
     })
 
-    const pairKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},${a}`)
-    const candidates = new Set<string>()
+    const neighbours: Set<number>[] = live.map(() => new Set<number>())
     for (const set of holders.values()) {
       const members = [...set]
-      for (let i = 0; i < members.length; i++)
-        for (let j = i + 1; j < members.length; j++) candidates.add(pairKey(members[i]!, members[j]!))
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          neighbours[members[i]!]!.add(members[j]!)
+          neighbours[members[j]!]!.add(members[i]!)
+        }
+      }
+    }
+
+    // Version counters make invalidation lazy: an entry is stale if either of its
+    // tensors has changed since the entry was pushed, so nothing has to be found
+    // and removed from the heap when a merge happens.
+    const version = new Int32Array(live.length)
+    const heap = new MinHeap()
+
+    const scoreOf = (a: number, b: number): { score: number; outRank: number; cost: number } => {
+      const A = live[a]!, B = live[b]!
+      let shared = 0
+      for (const x of A) if (B.has(x)) shared++
+      const outRank = A.size + B.size - 2 * shared
+      const cost = size(A.size + B.size - shared)
+      return { score: outRank + Math.log2(cost) * 0.001 + rand() * jitter, outRank, cost }
+    }
+
+    const push = (a: number, b: number): void => {
+      const { score } = scoreOf(a, b)
+      heap.push(score, a, b, version[a]!, version[b]!)
+    }
+
+    for (let i = 0; i < live.length; i++) {
+      for (const j of neighbours[i]!) if (j > i) push(i, j)
     }
 
     const steps: ContractionStep[] = []
@@ -95,35 +123,25 @@ export function planContraction(
     let remaining = live.length
 
     while (remaining > 1) {
-      let pick: [number, number] | null = null
-      let pickScore = Infinity, pickWidth = 0, pickCost = 0
-
-      for (const key of candidates) {
-        const [a, b] = key.split(',').map(Number) as [number, number]
-        const A = live[a], B = live[b]
-        if (!A || !B) { candidates.delete(key); continue }
-        let shared = 0
-        for (const x of A) if (B.has(x)) shared++
-        const outRank = A.size + B.size - 2 * shared
-        const stepCost = size(A.size + B.size - shared)
-        const score = outRank + Math.log2(stepCost) * 0.001 + rand() * jitter
-        if (score < pickScore) { pickScore = score; pick = [a, b]; pickWidth = outRank; pickCost = stepCost }
+      let a = -1, b = -1
+      while (!heap.empty()) {
+        const top = heap.pop()!
+        if (!live[top.a] || !live[top.b]) continue
+        if (top.va !== version[top.a] || top.vb !== version[top.b]) continue   // stale
+        a = top.a; b = top.b
+        break
       }
 
-      // No connected pair left: the network has separate components, which is
-      // legal — an idle wire is |0> meeting <0| and touches nothing else. Join
-      // two of them and continue.
-      if (!pick) {
+      // Nothing connected left: separate components, which is legal — an idle
+      // wire is |0> meeting <0| and touches nothing else. Join two and continue.
+      if (a < 0) {
         const alive: number[] = []
         for (let i = 0; i < live.length && alive.length < 2; i++) if (live[i]) alive.push(i)
         if (alive.length < 2) break
-        pick = [alive[0]!, alive[1]!]
-        const A = live[pick[0]]!, B = live[pick[1]]!
-        pickWidth = A.size + B.size
-        pickCost = size(pickWidth)
+        a = alive[0]!; b = alive[1]!
       }
 
-      const [a, b] = pick
+      const { outRank, cost: stepCost } = scoreOf(a, b)
       const A = live[a]!, B = live[b]!
       const merged = new Set<string>()
       for (const x of A) if (!B.has(x)) merged.add(x)
@@ -133,23 +151,20 @@ export function planContraction(
       live[b] = undefined
       remaining--
       steps.push([a, b])
-      width = Math.max(width, pickWidth)
-      cost += pickCost
+      width = Math.max(width, outRank)
+      cost += stepCost
 
-      // b is gone; every candidate naming it now names a instead. Collected
-      // first and applied after, so the set is never grown while being read.
-      const drop: string[] = []
-      const gain: string[] = []
-      for (const key of candidates) {
-        const [x, y] = key.split(',').map(Number) as [number, number]
-        if (x !== b && y !== b) continue
-        drop.push(key)
-        const other = x === b ? y : x
-        if (other !== a && live[other]) gain.push(pairKey(a, other))
+      // b's neighbours become a's. Only these pairs need rescoring.
+      version[a]!++
+      for (const x of neighbours[b]!) {
+        if (x === a || !live[x]) continue
+        neighbours[a]!.add(x)
+        neighbours[x]!.delete(b)
+        neighbours[x]!.add(a)
       }
-      for (const key of drop) candidates.delete(key)
-      for (const key of gain) candidates.add(key)
-      candidates.delete(pairKey(a, b))
+      neighbours[a]!.delete(b)
+      neighbours[b]!.clear()
+      for (const x of neighbours[a]!) if (live[x]) push(a, x)
     }
 
     if (!best || width < best.width || (width === best.width && cost < best.cost)) {
@@ -159,6 +174,55 @@ export function planContraction(
 
   if (!best) throw new Error('planContraction: no plan found')
   return best
+}
+
+/** Binary min-heap over candidate contractions, with the versions that validate them. */
+class MinHeap {
+  #score: number[] = []
+  #a: number[] = []
+  #b: number[] = []
+  #va: number[] = []
+  #vb: number[] = []
+
+  empty(): boolean { return this.#score.length === 0 }
+
+  push(score: number, a: number, b: number, va: number, vb: number): void {
+    this.#score.push(score); this.#a.push(a); this.#b.push(b); this.#va.push(va); this.#vb.push(vb)
+    let i = this.#score.length - 1
+    while (i > 0) {
+      const parent = (i - 1) >> 1
+      if (this.#score[parent]! <= this.#score[i]!) break
+      this.#swap(i, parent)
+      i = parent
+    }
+  }
+
+  pop(): { a: number; b: number; va: number; vb: number } | null {
+    if (this.empty()) return null
+    const out = { a: this.#a[0]!, b: this.#b[0]!, va: this.#va[0]!, vb: this.#vb[0]! }
+    const last = this.#score.length - 1
+    this.#swap(0, last)
+    this.#score.pop(); this.#a.pop(); this.#b.pop(); this.#va.pop(); this.#vb.pop()
+    let i = 0
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1
+      let small = i
+      if (l < this.#score.length && this.#score[l]! < this.#score[small]!) small = l
+      if (r < this.#score.length && this.#score[r]! < this.#score[small]!) small = r
+      if (small === i) break
+      this.#swap(i, small)
+      i = small
+    }
+    return out
+  }
+
+  #swap(i: number, j: number): void {
+    ;[this.#score[i], this.#score[j]] = [this.#score[j]!, this.#score[i]!]
+    ;[this.#a[i], this.#a[j]] = [this.#a[j]!, this.#a[i]!]
+    ;[this.#b[i], this.#b[j]] = [this.#b[j]!, this.#b[i]!]
+    ;[this.#va[i], this.#va[j]] = [this.#va[j]!, this.#va[i]!]
+    ;[this.#vb[i], this.#vb[j]] = [this.#vb[j]!, this.#vb[i]!]
+  }
 }
 
 /**
@@ -810,6 +874,15 @@ const IMBALANCE_LADDER = [0.4, 0.7, 0.85, 0.95]
 
 /** How many slice candidates to re-plan for at each step. */
 const SLICE_CANDIDATES = 12
+/**
+ * Restarts used when scoring a candidate slice.
+ *
+ * Progress is judged by comparing two plans, so it is only as trustworthy as the
+ * planner is repeatable. Too few restarts and the comparison measures planner
+ * variance instead of the slice: candidates that genuinely help look like noise
+ * and the search stops early. Planning is cheap enough now to buy that certainty.
+ */
+const SLICE_TRIAL_RESTARTS = 24
 
 
 /**
@@ -868,7 +941,7 @@ export function sliceContraction(
     targetWidth?: number; maxSliced?: number; restarts?: number; seed?: number
   } = {},
 ): SlicedPlan {
-  const base = planContraction(network, { restarts, seed })
+  const base = planContraction(network, { restarts: Math.max(restarts, SLICE_TRIAL_RESTARTS), seed })
   const sliced: string[] = []
   let current = base
 
@@ -894,7 +967,7 @@ export function sliceContraction(
     for (const candidate of ranked) {
       drop.add(candidate)
       const reduced = withoutIndices(network, drop)
-      const trial = planContraction(reduced, { restarts: 2, seed })
+      const trial = planContraction(reduced, { restarts: SLICE_TRIAL_RESTARTS, seed })
       const prof = planProfile(reduced, trial.steps)
       drop.delete(candidate)
       // Lexicographic: narrower first, then fewer intermediates at that width,

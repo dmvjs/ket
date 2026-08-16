@@ -107,6 +107,18 @@ does; coarsening collapses clusters so one move relocates a whole region.
 **Searching the balance tolerance**: balanced halves are the wrong shape for a
 circuit, whose best order is a lopsided sweep, and forcing them cost 2–4 width.
 
+### Changed — contraction planning is heap-driven
+
+Candidate pairs now live in a min-heap with lazy invalidation, so each step costs
+the merged tensor's degree instead of a scan over every remaining pair. Planning a
+100-qubit network drops from 6,658 ms to 27 ms; a 60-qubit one from 5,182 ms to
+25 ms.
+
+Freezing a candidate's jittered score at push time means one restart explores
+slightly less than rescoring everything each step, costing 1–2 width on its own.
+Restarts are cheap now, so the default rises from 24 to 64, which recovers the
+quality and is still several times faster than the old default.
+
 ### Changed — contraction kernel is a permute plus a matrix product
 
 A contraction over shared indices *is* a matrix product once those indices are
@@ -139,10 +151,15 @@ alone is the wrong signal: a peak held by six intermediates does not fall when a
 index leaves five of them, so a width-only rule stalls after a single slice.
 Emptying the peak set is the step before the width moves.
 
-That reaches real targets — width 13 down to 8 on a 20-qubit depth-12 circuit,
-**32× less memory for 99× work** against a naive 1024×, with every slice
-independent. It stops at `maxSliced` and reports the width it reached rather than
-the one requested.
+That reaches real targets — width 12 down to 7 on a 20-qubit depth-12 circuit,
+**32× less memory for 27× more work** against a naive 512×, with every slice
+independent.
+
+Candidates are scored by planning the reduced network, so the comparison is only
+as trustworthy as the planner is repeatable: with too few restarts it measures
+planner variance instead of the slice and stops early, reaching width 11 where 24
+restarts reach 7. It stops at `maxSliced` and reports the width it reached rather
+than the one requested.
 
 ### Added — expectation values by Pauli-path propagation
 
