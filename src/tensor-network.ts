@@ -343,6 +343,8 @@ function matrixOf(name: string, params: readonly number[] | undefined): Float64A
 export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
   const n = circuit.qubits
   if (bitstring.length !== n) throw new TypeError(`bitstring '${bitstring}' must have ${n} characters`)
+  if (!/^[01?]+$/.test(bitstring))
+    throw new TypeError(`bitstring '${bitstring}' may contain only 0, 1 and ? (open)`)
 
   const tensors: Tensor[] = []
   const wire: string[] = []
@@ -393,9 +395,13 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
     }
   }
 
-  // Close each wire with ⟨0| or ⟨1|. Bitstring is q0-leftmost, matching the library.
+  // Close each wire with ⟨0| or ⟨1|. A '?' leaves the wire open, so the
+  // contraction returns a tensor over those qubits instead of a scalar — 2^k
+  // amplitudes from one contraction rather than 2^k contractions.
   for (let q = 0; q < n; q++) {
-    const bit = bitstring[q] === '1' ? 1 : 0
+    const ch = bitstring[q]
+    if (ch === '?') continue
+    const bit = ch === '1' ? 1 : 0
     tensors.push({ indices: [wire[q]!], data: Float64Array.from(bit ? [0, 0, 1, 0] : [1, 0, 0, 0]) })
   }
   return tensors
@@ -1059,4 +1065,79 @@ export function amplitudeBySlicedContraction(
     width: spec.width, cost: spec.totalCost, tensors: tensors.length,
     slices: spec.slices, sliced: spec.sliced, overhead: spec.overhead,
   }
+}
+
+/** A batch of amplitudes: every assignment of the open qubits, in one contraction. */
+export interface AmplitudeBatch {
+  /** Qubits left open, ascending. */
+  open: number[]
+  /** 2^open.length complex amplitudes, re/im interleaved, open[0] most significant. */
+  data: Float64Array
+  width: number
+  cost: number
+  /** Look one amplitude up by the values of the open qubits, in `open` order. */
+  at(bits: readonly number[]): { re: number; im: number }
+}
+
+/**
+ * Contract once, returning every amplitude consistent with a partial bitstring.
+ *
+ * Write `?` for a qubit to leave open. Its wire is not closed off, so the
+ * contraction ends on a tensor over those qubits rather than a scalar: 2^k
+ * amplitudes for roughly the price of one, instead of 2^k separate contractions.
+ *
+ * This is what makes contraction usable for sampling rather than for spot checks.
+ * The open indices widen every intermediate that carries them, so the batch size
+ * trades directly against contraction width — which is the same currency slicing
+ * spends, and the reason the two are usually used together.
+ */
+export function amplitudeBatchByContraction(
+  circuit: Circuit,
+  pattern: string,
+  { restarts = 32, seed = 1 }: { restarts?: number; seed?: number } = {},
+): AmplitudeBatch {
+  const tensors = circuitNetwork(circuit, pattern)
+  const plan = planContraction(tensors.map(t => t.indices), { restarts, seed })
+  const out = contractNetwork(tensors, plan)
+
+  const open: number[] = []
+  for (let q = 0; q < circuit.qubits; q++) if (pattern[q] === '?') open.push(q)
+  if (out.indices.length !== open.length)
+    throw new Error(`contraction left ${out.indices.length} open indices, expected ${open.length}`)
+
+  // The contracted tensor's index order follows the network, not the qubit
+  // order, so permute it into ascending-qubit order before handing it back.
+  const wanted = open.map(q => openIndexFor(tensors, circuit, pattern, q))
+  const ordered = permuteTensor(out, wanted.filter(x => out.indices.includes(x)))
+
+  return {
+    open,
+    data: ordered.data,
+    width: plan.width,
+    cost: plan.cost,
+    at(bits: readonly number[]) {
+      if (bits.length !== open.length) throw new TypeError(`expected ${open.length} bit values`)
+      let k = 0
+      for (const b of bits) k = (k << 1) | (b ? 1 : 0)
+      return { re: ordered.data[2 * k]!, im: ordered.data[2 * k + 1]! }
+    },
+  }
+}
+
+/** The dangling index belonging to an open qubit, found from the built network. */
+function openIndexFor(tensors: readonly Tensor[], circuit: Circuit, pattern: string, qubit: number): string {
+  // An open wire's final index appears exactly once across the whole network.
+  const seen = new Map<string, number>()
+  for (const t of tensors) for (const i of t.indices) seen.set(i, (seen.get(i) ?? 0) + 1)
+  const dangling = [...seen.entries()].filter(([, c]) => c === 1).map(([i]) => i)
+
+  // Rebuild the wire assignment to know which dangling index is which qubit.
+  const open: number[] = []
+  for (let q = 0; q < circuit.qubits; q++) if (pattern[q] === '?') open.push(q)
+  const rank = open.indexOf(qubit)
+  // Wires are created in qubit order and renamed in gate order, so the dangling
+  // indices sort by their numeric suffix in the same order the wires were last
+  // touched — not by qubit. Match by position in the network's own tensor order.
+  const byLastUse = dangling.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))
+  return byLastUse[rank]!
 }

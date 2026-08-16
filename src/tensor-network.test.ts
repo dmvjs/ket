@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
 import { makePrng } from './prng.js'
-import { amplitudeByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair } from './tensor-network.js'
+import { amplitudeByContraction, amplitudeBatchByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair } from './tensor-network.js'
 
 /**
  * Contraction against the statevector oracle.
@@ -325,5 +325,57 @@ describe('tensor network — contraction kernel', () => {
     // Same tensor, transposed layout.
     expect(ba.data[0]!).toBeCloseTo(ab.data[0]!, 12)
     expect(ba.data[2]!).toBeCloseTo(ab.data[4]!, 12)
+  })
+})
+
+describe('tensor network — batched amplitudes', () => {
+  it('every amplitude in a batch matches the statevector', () => {
+    // A wrong index-to-qubit mapping is the failure mode here, and it hides on
+    // circuits whose amplitudes are zero or symmetric — so this sweeps random
+    // circuits, several open-qubit subsets, and every entry of each batch.
+    let worst = 0
+    let checks = 0
+    for (const n of [3, 4, 5]) {
+      for (let seed = 0; seed < 4; seed++) {
+        const rand = makePrng(seed * 991 + n * 7)
+        let c = new Circuit(n)
+        for (let i = 0; i < n; i++) c = c.h(i).rz(rand() * 2, i)
+        for (let d = 0; d < 3; d++) {
+          for (let i = 0; i + 1 < n; i++) if (rand() < 0.6) c = c.cnot(i, i + 1)
+          for (let i = 0; i < n; i++) c = c.ry(rand() * 2, i).t(i)
+        }
+        for (const mask of [1, 3, 5, 6]) {
+          if (mask >= 1 << n) continue
+          const pattern = Array.from({ length: n }, (_, q) =>
+            ((mask >> q) & 1) ? '?' : (seed % 2 ? '1' : '0')).join('')
+          const batch = amplitudeBatchByContraction(c, pattern, { restarts: 4 })
+          const k = batch.open.length
+          for (let v = 0; v < 1 << k; v++) {
+            const bitVals = Array.from({ length: k }, (_, i) => (v >> (k - 1 - i)) & 1)
+            const full = pattern.split('')
+            batch.open.forEach((q, i) => { full[q] = String(bitVals[i]) })
+            const want = c.amplitude(full.join(''))
+            const got = batch.at(bitVals)
+            worst = Math.max(worst, Math.abs(got.re - want.re), Math.abs(got.im - want.im))
+            checks++
+          }
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(150)
+    expect(worst).toBeLessThan(1e-9)
+  })
+
+  it('returns 2^k amplitudes from one contraction', () => {
+    const c = new Circuit(6).h(0).cnot(0, 1).ry(0.5, 2).cz(1, 2).t(3).cnot(3, 4).rx(0.3, 5)
+    const batch = amplitudeBatchByContraction(c, '??0?00')
+    expect(batch.open).toEqual([0, 1, 3])
+    expect(batch.data.length / 2).toBe(8)
+  })
+
+  it('rejects a pattern of the wrong length or alphabet', () => {
+    const c = new Circuit(3).h(0)
+    expect(() => amplitudeBatchByContraction(c, '??')).toThrow(/must have 3 characters/)
+    expect(() => amplitudeBatchByContraction(c, '?X0')).toThrow(/only 0, 1 and \?/)
   })
 })

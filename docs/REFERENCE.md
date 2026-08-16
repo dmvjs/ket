@@ -56,9 +56,9 @@ Or load directly in a browser, as a module:
 
 | File | Size | Format | For |
 |---|---|---|---|
-| `dist/ket.js` | 431 KB | ESM | bundlers that tree-shake and minify |
-| `dist/ket.min.js` | 196 KB | ESM | `import` from a CDN |
-| `dist/ket.global.js` | 197 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
+| `dist/ket.js` | 468 KB | ESM | bundlers that tree-shake and minify |
+| `dist/ket.min.js` | 215 KB | ESM | `import` from a CDN |
+| `dist/ket.global.js` | 216 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
 | `dist/compat.js` | 69 B | ESM | `@kirkelliott/ket/compat`, a re-export of `ket.js` |
 
 The global build is a second format, not a second copy: `@kirkelliott/ket/compat`
@@ -841,24 +841,25 @@ of a contraction whose width is n.
 
 | n, depth 4 | width | operations | time |
 |---|---|---|---|
-| 20 | 4 | 2.7e3 | 84 ms |
-| 40 | 4 | 5.5e3 | 341 ms |
-| 160 | 4 | 2.2e4 | 4.7 s |
-| 400 | 4 | 5.6e4 | 29 s |
+| 20 | 4 | 2.7e3 | 18 ms |
+| 40 | 4 | 5.5e3 | 24 ms |
+| 160 | 4 | 2.2e4 | 99 ms |
+| 400 | 4 | 5.6e4 | 230 ms |
 
 Width stays flat as n grows and rises with **depth** instead, which is where the
 real limit is:
 
-| n = 40 | width | operations |
-|---|---|---|
-| depth 4 | 4 | 5.5e3 |
-| depth 8 | 8 | 7.0e4 |
-| depth 12 | 13 | 2.1e6 |
-| depth 16 | 17 | 1.2e8 |
+| n = 40 | width | operations | time |
+|---|---|---|---|
+| depth 4 | 4 | 5.5e3 | 24 ms |
+| depth 8 | 7 | 6.8e4 | 51 ms |
+| depth 12 | 13 | 2.2e6 | 87 ms |
+| depth 16 | 17 | 1.2e8 | 282 ms |
 
 So this wins decisively on wide shallow circuits and loses to a statevector once
-depth pushes the width past n. It returns **one amplitude**, not a distribution;
-sampling means contracting repeatedly.
+depth pushes the width past n. A single call returns **one amplitude**, not a
+distribution — but `amplitudeBatchByContraction` leaves chosen qubits open and
+returns all 2^k at once, which is what makes sampling practical.
 
 ### The order is the algorithm
 
@@ -868,8 +869,8 @@ contraction itself. It runs randomized greedy with restarts, minimising width
 first — width sets memory, and memory is what makes a contraction impossible.
 
 Planning dominates runtime at large n — contracting a 400-qubit depth-4 circuit is
-5.6e4 operations, microseconds of arithmetic, and effectively all of the 29 s goes
-on choosing the order.
+5.6e4 operations, microseconds of arithmetic, and effectively all of the 230 ms
+goes on choosing the order.
 
 Three planners are available, and which one wins is a property of the network:
 
@@ -891,6 +892,12 @@ grows, which is the regime where the order matters most:
 | shallow n=50 d=14 | 15 | **width 13** (4× less memory) |
 | shallow n=60 d=16 | 17 | **width 15** |
 | long-range pairings | 4–10 | tie |
+
+Greedy's quality plateaus: 64, 256 and 1,024 restarts all return the same width,
+so extra search buys nothing past the default. Bisection's wins are quality greedy
+cannot reach by repetition — but it costs seconds where greedy costs milliseconds,
+and `planBest` is dominated by it. Pass `imbalance` or a low `restarts` to bound
+that, or call `planContraction` directly when latency matters more than width.
 
 Two things were needed to get there, and both were found by measurement rather
 than assumed:
@@ -959,6 +966,38 @@ reached rather than the width requested.
 | `contractSliced(tensors, slicedPlan)` | Contract every slice and sum. |
 | `projectTensor(tensor, fixed)` | Fix indices to values, dropping those axes. |
 | `amplitudeBySlicedContraction(circuit, bitstring, opts?)` | The whole path in one call. |
+
+### Many amplitudes at once
+
+Contracting to a scalar answers one question: the amplitude of a single
+bitstring. Sampling needs many, and running the contraction once per bitstring
+pays the whole cost again each time.
+
+Write `?` for a qubit to leave its wire open. The contraction then ends on a
+tensor over those qubits instead of a scalar — 2^k amplitudes for roughly the
+price of one:
+
+```typescript
+import { amplitudeBatchByContraction } from '@kirkelliott/ket'
+
+const batch = amplitudeBatchByContraction(circuit, '?'.repeat(16) + '0'.repeat(44))
+batch.open            // [0, 1, …, 15] — the qubits left open, ascending
+batch.data            // 2^16 amplitudes, re/im interleaved
+batch.at([1, 0, 1, …]) // → { re, im }, indexed in `open` order
+```
+
+At n=60 depth 10, 65,536 amplitudes take **76 ms** in one batched contraction.
+One at a time, the same set is a projected ~3,299 s — the batch is not a constant
+factor faster, it removes the repetition entirely.
+
+The open indices widen every intermediate that carries them, so batch size trades
+directly against contraction width. That is the same currency slicing spends,
+which is why the two are normally used together: open enough qubits to make
+sampling worthwhile, then slice the width back down to fit memory.
+
+| Function | Purpose |
+|---|---|
+| `amplitudeBatchByContraction(circuit, pattern, opts?)` | Every amplitude matching a `?`-pattern, in one contraction. |
 
 ### The kernel
 
@@ -1797,7 +1836,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-1,843 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,452 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

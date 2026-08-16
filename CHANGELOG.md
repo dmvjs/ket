@@ -161,6 +161,22 @@ planner variance instead of the slice and stops early, reaching width 11 where 2
 restarts reach 7. It stops at `maxSliced` and reports the width it reached rather
 than the one requested.
 
+### Added — many amplitudes from one contraction
+
+`amplitudeBatchByContraction(circuit, pattern)` takes `?` for a qubit to leave
+open. The wire is not closed off, so the contraction ends on a tensor over those
+qubits rather than a scalar, and one contraction yields every amplitude matching
+the pattern.
+
+At 60 qubits and depth 10, **65,536 amplitudes in 76 ms** against a projected
+~3,299 s one at a time. That is not a constant factor — contracting per bitstring
+repeats the whole network each time, and the batch does it once.
+
+This is what makes contraction usable for sampling rather than for spot checks.
+The open indices widen every intermediate carrying them, so batch size trades
+against contraction width — the same currency slicing spends, which is why the
+two belong together.
+
 ### Added — expectation values by Pauli-path propagation
 
 `pauliPathExpectation(circuit, observable)` computes ⟨ψ|O|ψ⟩ for a Pauli
@@ -241,7 +257,7 @@ a near-miss where there is one:
 
 ### Tests
 
-2,449, up from 2,154.
+2,452, up from 2,154.
 
 ## 0.9.0
 
