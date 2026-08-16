@@ -56,9 +56,9 @@ Or load directly in a browser, as a module:
 
 | File | Size | Format | For |
 |---|---|---|---|
-| `dist/ket.js` | 429 KB | ESM | bundlers that tree-shake and minify |
-| `dist/ket.min.js` | 195 KB | ESM | `import` from a CDN |
-| `dist/ket.global.js` | 196 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
+| `dist/ket.js` | 431 KB | ESM | bundlers that tree-shake and minify |
+| `dist/ket.min.js` | 196 KB | ESM | `import` from a CDN |
+| `dist/ket.global.js` | 197 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
 | `dist/compat.js` | 69 B | ESM | `@kirkelliott/ket/compat`, a re-export of `ket.js` |
 
 The global build is a second format, not a second copy: `@kirkelliott/ket/compat`

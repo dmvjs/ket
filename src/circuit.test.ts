@@ -8333,3 +8333,42 @@ describe('runMps — worker pool', () => {
     expect(JSON.parse(out)).toEqual({ one: true, many: true, shots: 512, oddShots: 1001, sums: true })
   }, 40_000)
 })
+
+describe('option objects reject unknown keys', () => {
+  // Destructuring ignores keys it does not name, so a wrong option silently
+  // selects different behaviour. `delta` instead of `targetError` left a
+  // stabilizer-rank run exact rather than sparsified — a different simulation,
+  // no warning, plausible numbers. Same failure class as any other silently
+  // wrong answer, so it fails loudly now.
+  const circuit = new Circuit(3).h(0).t(0).cnot(0, 1)
+
+  const cases: [string, () => unknown, RegExp][] = [
+    ['run',               () => circuit.run({ shots: 8, dens: {} } as never),                    /unknown option 'dens'/],
+    ['runMps',            () => circuit.runMps({ shots: 8, maxbond: 8 } as never),               /did you mean 'maxBond'/],
+    ['runClifford',       () => new Circuit(2).h(0).runClifford({ shot: 8 } as never),           /did you mean 'shots'/],
+    ['runStabilizerRank', () => circuit.runStabilizerRank({ shots: 8, delta: 0.3 } as never),    /unknown option 'delta'/],
+    ['simulate',          () => circuit.simulate({ shots: 8, statevectorlimit: 4 } as never),    /did you mean 'statevectorLimit'/],
+    ['statevector',       () => circuit.statevector({ initialstate: '000' } as never),           /did you mean 'initialState'/],
+    ['dm',                () => circuit.dm({ nois: 'forte-1' } as never),                        /unknown option 'nois'/],
+  ]
+
+  for (const [name, call, pattern] of cases) {
+    it(`${name} rejects a wrong key`, () => {
+      expect(call).toThrow(TypeError)
+      expect(call).toThrow(pattern)
+    })
+  }
+
+  it('lists the valid options so the caller can correct it', () => {
+    expect(() => circuit.runStabilizerRank({ delta: 0.3 } as never))
+      .toThrow(/Valid options: shots, seed, maxTerms, targetError, burnIn, thin, method, exactBudget, workers/)
+  })
+
+  it('accepts every documented option without complaint', () => {
+    expect(() => circuit.run({ shots: 8, seed: 1 })).not.toThrow()
+    expect(() => circuit.runMps({ shots: 8, seed: 1, maxBond: 8, truncErr: 0, maxChi: 16 })).not.toThrow()
+    expect(() => circuit.runStabilizerRank({ shots: 8, seed: 1, targetError: 0.3 })).not.toThrow()
+    expect(() => circuit.simulate({ shots: 8, seed: 1, statevectorLimit: 10 })).not.toThrow()
+    expect(() => circuit.statevector({ dense: { fill: 8 } })).not.toThrow()
+  })
+})

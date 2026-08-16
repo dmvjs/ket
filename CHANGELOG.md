@@ -1,5 +1,136 @@
 # Changelog
 
+## 0.9.1
+
+### Fixed — stabilizer-rank sampling was wrong on any support single-bit flips cannot cross
+
+`runStabilizerRank` returned a confident wrong distribution for a whole class of
+states. A 26-qubit GHZ came back as `P(|1…1⟩) = 1` against a true 1/2 — on every
+seed, with nothing to indicate a problem.
+
+**Results from 0.9.0 and earlier are wrong for any circuit whose support is not
+connected under single-bit flips, at n ≥ 23.** That class is not exotic: GHZ and
+cat states, W states, and stabilizer-code states all have parity- or
+weight-constrained support, and those are exactly what one points a stabilizer
+simulator at. Clifford-only circuits, connected-support circuits, and anything
+below n = 23 are unaffected — under that width the sampler enumerates exactly.
+
+The decomposition was never at fault. Forcing `method: 'exact'` on the same
+26-qubit state gave the right answer all along; only the Metropolis fallback was
+broken. Its single-bit-flip proposals cannot cross a zero-amplitude basis state,
+so the chain seeds on one component of the support and cannot leave it — for GHZ
+every neighbour of the seed is empty, so it emitted its starting state for every
+shot.
+
+A chain that accepts no move now probes for supported states elsewhere. Having
+accepted nothing it has proved every neighbour empty, so finding any other
+supported state is *proof* the samples are wrong rather than evidence of it, and
+it throws with an explanation instead of returning them. Detection costs 1–8 ms
+even at n = 100. A genuine point mass, where the frozen chain is correct, still
+returns normally.
+
+Two tests were passing against the degenerate output — they asserted only that
+shots came back and that samples lay in the GHZ support, both true of a single
+repeated bitstring — and `benchmark/stabilizer-rank.ts` measured a run that never
+sampled at all. All corrected.
+
+### Fixed — MPS trajectories cleared the whole workspace on every shot
+
+`MpsTrajectory.reset()` zeroed the entire preallocated workspace per shot. The
+workspace is sized for `maxChi`, so at the default `maxBond = 64` each site holds
+262 KB while a χ = 2 state needs 128 bytes: a 50-qubit run paid **13 MB of memset
+per shot to clear 6 KB of live data**. It now clears only the extent the previous
+shot used.
+
+That was both a single-threaded tax and the reason worker runs stopped scaling —
+every thread streamed those 13 MB at once and they contended on memory.
+
+- Single-threaded: **3.9× faster** (2038 ms → 518 ms, 50 qubits, 32k shots)
+- Worker scaling: **2.4× → 7.7×** on 16 cores
+- End to end at 8 workers: 848 ms → 73 ms
+- **127-qubit GHZ, 1024 shots: 186 ms → 10 ms**
+
+### Changed — sparse states promote to dense at 1/64 fill instead of 1/8
+
+The break-even between the sparse and dense kernels sits near 2ⁿ/100; promotion
+at 2ⁿ/8 was twelve times later than that, so every amplitude past the crossover
+paid a BigInt key, a boxed complex and a Map slot to build and was then copied
+into the dense buffer anyway.
+
+Measured across dense, sparse, partial-occupancy, QFT and Grover circuits at
+n = 10…22, `fill: 64` is faster everywhere and slower nowhere — 4.9× on a
+75%-occupancy state at n = 16, 4.2× at n = 22 (788 ms → 188 ms), 2.0× on QFT-16.
+Genuinely sparse states still never promote. Override with `dense: { fill }`.
+
+The `fill` option was also documented backwards: **higher** values promote sooner.
+
+### Changed — sparse kernel applies gates in place
+
+Diagonal gates (`z`, `s`, `t`, `rz`, `u1`, `p` and `cu1`) only scale amplitudes
+and cannot change the support, so they now skip the pairing machinery entirely —
+which per entry was a `Set` insert and lookup, three BigInt allocations and two
+extra Map lookups. The general path drops that `Set` too, and gates mutate the
+state rather than rebuilding the map, matching what the dense kernel already did.
+
+Grover-12 **1.8× faster**; QFT-20 1.2×.
+
+### Added — one conformance battery for every backend
+
+`src/conformance.test.ts` replaces eight hand-written per-backend test blocks
+with a single battery that all six backends run through: agreement with the
+analytic oracle, normalisation, seed determinism, and support containment.
+
+It also carries invariants that hold **past statevector reach**, which is where
+the stabilizer-rank bug lived and why nothing caught it — a GHZ state is two
+outcomes at 1/2 each at any width, no oracle required. Adding a backend now means
+declaring what it accepts and how it samples.
+
+The contract it encodes: **a backend may decline a circuit; it may not answer one
+wrongly.** A refusal passes, provided it explains itself.
+
+### Changed — published figures corrected to measured values
+
+Several numbers in the README, reference and site did not survive measurement:
+
+- Multi-core speedup was quoted as 4× and had never been measured; it is 3.8× at
+  4 workers and 7.1× at 8, on 16 cores.
+- `exactProbs()` examples promised `{ '00': 0.5, '11': 0.5 }`; it returns
+  `0.4999999999999999`, one ulp below, because 1/√2 is not representable in a
+  double. The arithmetic is unchanged — rounding inside `exactProbs()` would hide
+  real numerical error in the method people use to check correctness. "Exact"
+  means free of sampling variance, not free of float error.
+- The GHZ fidelity chart was labelled `P(|0…0⟩ + |11…1⟩)` but plots the
+  probability of an error-free run (52%); landing on one of the two ideal
+  outcomes is 46.9% ± 1.5% over 4096 shots. Both figures are now given.
+- The stabilizer-rank headline is the cost of building the decomposition at one
+  shot. Sampling is flat in t and charged separately: ~43 ms/shot at t = 50, so
+  the default 1024 shots turns 5.6 s into about 49 s.
+- The Clifford figure had the same problem: "GHZ-1024 — 3997 ms" was a 64-shot
+  run with the shot count left off. Evolving the tableau takes 4 ms; each shot
+  costs ~57 ms, because sampling 1,024 qubits is the expensive part. Both are now
+  stated. The MPS, statevector and density-matrix rows were also re-measured.
+- Bundle sizes in the reference were stale (429/195/196 KB → 431/196/197 KB).
+
+### Fixed — option objects silently ignored unknown keys
+
+Destructuring drops any key a method does not name, so a wrong option changed
+behaviour without complaint. Passing `delta` to `runStabilizerRank`, whose option
+is `targetError`, left the run exact rather than sparsified — a different
+simulation, no warning, and plausible numbers out the other end. It is how a
+benchmark in this very release cycle came to "disprove" a documented figure that
+was in fact correct.
+
+`run`, `runMps`, `runClifford`, `runStabilizerRank`, `simulate`, `statevector`
+and `dm` now reject keys they do not read, listing the valid ones and suggesting
+a near-miss where there is one:
+
+    runMps: unknown option 'maxbond' — did you mean 'maxBond'? Valid options:
+    shots, seed, maxBond, truncErr, maxChi, initialState, noise, workers.
+
+### Tests
+
+2,402, up from 2,154.
+
 ## 0.9.0
 
 ### Fixed — OpenQASM import mis-parsed multi-register programs, silently

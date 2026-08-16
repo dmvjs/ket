@@ -6,7 +6,7 @@
 <title>ket — Quantum Computing in JavaScript · dmvjs</title>
 <meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Five exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
 <meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
-<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,393 tests.">
+<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,402 tests.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
@@ -148,7 +148,7 @@
   </a>
 </div>
 <h1>ket</h1>
-<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,393 tests · v0.9.0</p>
+<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,402 tests · v0.9.1</p>
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════ -->
 <div class="hero">
@@ -180,7 +180,7 @@ q1: ────⊕──</div>
   <div class="why-chip"><b>Types are the source</b>Strict TypeScript, not JS with a <code>.d.ts</code> bolted on.</div>
   <div class="why-chip"><b>Bounds-checked</b>Bad qubit index throws <code>RangeError</code> at construction, not 200 gates later.</div>
   <div class="why-chip"><b>BigInt indices</b>No 32-bit overflow at qubit 31 — the failure mode that silently corrupts.</div>
-  <div class="why-chip"><b>2,393 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
+  <div class="why-chip"><b>2,402 tests</b>Analytic correctness against known amplitudes, not "doesn't crash".</div>
   <div class="why-chip"><b>Zero dependencies</b>196 KB minified, total. Nothing to audit but ket.</div>
 </div>
 
@@ -208,7 +208,7 @@ q1: ────⊕──</div>
 <div class="card" style="margin-bottom:1.25rem">
   <table class="bench-table">
     <tr><th>Backend</th><th>Call</th><th>Memory</th><th>Best for</th><th>Measured</th></tr>
-    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20 — <1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127 — 15ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — 2ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 3997ms</td></tr><tr><td><b>Stabilizer rank</b></td><td><code style="color:var(--accent2)">runStabilizerRank()</code></td><td style="color:var(--muted)">O(2<sup>0.228t</sup>·n²/8)</td><td style="color:var(--muted)">Clifford+T beyond statevector width</td><td>100q, 50 T — 5.6s build + 43ms/shot</td></tr>
+    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20, 1024 shots — &lt;1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127, 1024 shots — 10ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — &lt;1ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 4ms evolve + 57ms/shot</td></tr><tr><td><b>Stabilizer rank</b></td><td><code style="color:var(--accent2)">runStabilizerRank()</code></td><td style="color:var(--muted)">O(2<sup>0.228t</sup>·n²/8)</td><td style="color:var(--muted)">Clifford+T beyond statevector width</td><td>100q, 50 T — 5.6s build + 43ms/shot</td></tr>
   </table>
   <p class="desc" style="margin-bottom:0">
     The statevector starts as a sparse map and promotes itself to a flat <code>Float64Array</code> past ⅛ fill.
