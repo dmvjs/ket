@@ -1,6 +1,6 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, five backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
@@ -45,7 +45,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/index.ts --bundle --minify --format=iife --global-name=ket --log-override:empty-import-meta=silent --outfile=dist/ket.global.js && node scripts/build-compat-shim.ts && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js && esbuild src/stabilizer-rank.worker.ts --bundle --format=esm --platform=node --outfile=dist/stabilizer-rank.worker.js",
+    "build": "rm -rf dist && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --format=esm --external:node:worker_threads --outfile=dist/ket.js && esbuild src/index.ts --bundle --minify --format=esm --external:node:worker_threads --outfile=dist/ket.min.js && esbuild src/index.ts --bundle --minify --format=iife --global-name=ket --log-override:empty-import-meta=silent --outfile=dist/ket.global.js && node scripts/build-compat-shim.ts && esbuild src/mps.worker.ts --bundle --format=esm --platform=node --outfile=dist/mps.worker.js && esbuild src/stabilizer-rank.worker.ts --bundle --format=esm --platform=node --outfile=dist/stabilizer-rank.worker.js && esbuild src/contraction.worker.ts --bundle --format=esm --platform=node --outfile=dist/contraction.worker.js",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "lint": "oxlint",
     "test": "vitest run",

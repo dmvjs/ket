@@ -23,6 +23,7 @@ import { CliffordSim } from './clifford.js'
 import { makePrng } from './prng.js'
 import { StabilizerRank, buildSlice, countSplits, termBudget, type SrOp } from './stabilizer-rank.js'
 import { sampleFromOracle } from './stabilizer-sampling.js'
+import { sampleByContraction } from './tensor-network.js'
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -1773,7 +1774,7 @@ export class Distribution {
    * Which simulation backend produced this result.
    * Set by `simulate()` and the individual `run*` methods.
    */
-  readonly backend: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | undefined
+  readonly backend: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | 'tensor-network' | undefined
   /**
    * Peak bond dimension χ used during MPS simulation.
    * Only defined when `backend === 'mps'`.
@@ -1796,7 +1797,7 @@ export class Distribution {
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
     truncated = false,
-    backend?: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank',
+    backend?: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | 'tensor-network',
     peakChi?: number,
     representation?: 'sparse' | 'dense',
   ) {
@@ -5752,6 +5753,89 @@ export class Circuit {
       counts.set(idx, (counts.get(idx) ?? 0) + 1)
     }
     return new Distribution(this.qubits, shots, counts, new Map(), sr.sparsified, 'stabilizer-rank')
+  }
+
+  /**
+   * Sample shots by contracting the circuit against its own conjugate.
+   *
+   * For circuits that are wide and shallow, where the contraction width is small
+   * but 2ⁿ amplitudes do not exist and the connectivity is not a chain an MPS
+   * keeps narrow. Exact — the qubits are resolved a block at a time from
+   * conditional marginals, with no rejection step and nothing truncated.
+   *
+   * The width roughly doubles against a plain amplitude contraction, since ψ is
+   * joined to its conjugate, so this is affordable exactly where contraction
+   * already wins. Depth ends it: past roughly depth 8 use another backend.
+   *
+   * ```typescript
+   * const d = circuit.runContraction({ shots: 1000 })
+   * d.backend   // 'tensor-network'
+   * d.probs     // as any other backend
+   * ```
+   *
+   * `sampleByContraction` is the same run with the contraction diagnostics —
+   * width, and how many contractions the light-cone cache avoided.
+   */
+  runContraction(
+    options: { shots?: number; seed?: number; blockSize?: number; restarts?: number; workers?: number } = {},
+  ): Distribution {
+    checkOptions(options, ['shots', 'seed', 'blockSize', 'restarts', 'workers'], 'runContraction')
+    const shots      = options.shots ?? 1024
+    const seed       = options.seed ?? 1
+    const blockSize  = options.blockSize ?? 4
+    const restarts   = options.restarts ?? 32
+    const numWorkers = Math.max(1, Math.floor(options.workers ?? 1))
+
+    const tally = new Map<string, number>()
+    const add = (from: Iterable<[string, number]>): void => {
+      for (const [k, v] of from) tally.set(k, (tally.get(k) ?? 0) + v)
+    }
+
+    const wtLocal = wt
+    const isBuilt = !import.meta.url?.endsWith('.ts')
+    if (numWorkers > 1 && (!isBuilt || wtLocal === null)) {
+      console.warn('[ket] runContraction: workers option ignored — build the bundle first (npm run build) to enable parallel sampling')
+    }
+
+    if (numWorkers > 1 && isBuilt && wtLocal !== null) {
+      // Shots are independent given the circuit, and each seeds its own stream
+      // from a global index, so slicing them is exact: the merged counts are the
+      // ones a single thread would have produced.
+      const workerUrl = new URL('./contraction.worker.js', import.meta.url)
+      const slices    = distributeShots(shots, numWorkers)
+      const flags     = slices.map(() => new Int32Array(new SharedArrayBuffer(4)))
+      const ws        = acquirePool(numWorkers, workerUrl, wtLocal.Worker)
+      const channels  = slices.map(() => new MessageChannel())
+      const json      = this.toJSON()
+
+      let lo = 0
+      const bounds = slices.map(count => { const range = [lo, lo + count] as const; lo += count; return range })
+
+      bounds.forEach(([from, to], i) => {
+        const job = {
+          circuit: json, seed, blockSize, restarts, lo: from, hi: to,
+          flag: flags[i]!, port: channels[i]!.port2,
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(ws[i] as any).postMessage(job, [channels[i]!.port2])
+      })
+
+      for (let i = 0; i < ws.length; i++) {
+        if (Atomics.wait(flags[i]!, 0, 0, 300_000) === 'timed-out') throw workerFailure(ws[i], i, 'runContraction')
+        const { message } = wtLocal.receiveMessageOnPort(channels[i]!.port1)!
+        add(message.counts as [string, number][])
+      }
+    } else {
+      add(sampleByContraction(this, { shots, seed, blockSize, restarts }).counts)
+    }
+
+    const counts = new Map<bigint, number>()
+    for (const [bitstring, n] of tally) {
+      let idx = 0n
+      for (let q = 0; q < this.qubits; q++) if (bitstring[q] === '1') idx |= 1n << BigInt(q)
+      counts.set(idx, n)
+    }
+    return new Distribution(this.qubits, shots, counts, new Map(), false, 'tensor-network')
   }
 
   /**

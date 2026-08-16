@@ -863,6 +863,78 @@ depth pushes the width past n. A single call returns **one amplitude**, not a
 distribution — but `amplitudeBatchByContraction` leaves chosen qubits open and
 returns all 2^k at once, which is what makes sampling practical.
 
+### Sampling shots from a contraction
+
+One contraction gives one amplitude, which is no use for sampling — you would
+need all 2ⁿ. `sampleByContraction` instead resolves the qubits a block at a time,
+each block from one contraction of the circuit against its own conjugate:
+
+```typescript
+const d = circuit.runContraction({ shots: 1000, blockSize: 8 })
+d.backend   // 'tensor-network'
+d.probs     // a Distribution, as every other backend returns
+```
+
+`sampleByContraction(circuit, opts)` is the same run with the contraction
+diagnostics attached — the width it reached, and how many contractions the light
+cone let it skip:
+
+```typescript
+import { sampleByContraction } from '@kirkelliott/ket'
+
+const { counts, width, contractions } =
+  sampleByContraction(circuit, { shots: 1000, blockSize: 8 })
+```
+
+Joining ψ to conj(ψ) makes each qubit's two wires share one index, and what is
+attached to that index decides the qubit's role:
+
+| attached | meaning |
+|---|---|
+| a rank-1 \|v⟩ | condition on this qubit having value v |
+| an identity cap | leave it open, returning ψ(x)·conj(ψ(x)) — the probability |
+| nothing | the index is summed, marginalising the qubit away |
+
+So the chain P(q₀…) · P(q₁…\|q₀…) · … is **exact**, with no rejection step and no
+approximation. Each conditional is a real, non-negative vector over 2^blockSize
+outcomes, normalised by its own sum.
+
+This is exact sampling from circuits no other representation reaches:
+
+| circuit | shots | width | 1 worker | 8 workers |
+|---|---|---|---|---|
+| 30 qubits, depth 4 | 1,000 | 7 | 1.1 s | 0.5 s |
+| 60 qubits, depth 4 | 1,000 | 7 | 6.3 s | **1.6 s** |
+| 100 qubits, depth 4 | 1,000 | 7 | 20.3 s | **5.0 s** |
+| 200 qubits, depth 4 | 1,000 | 9 | 67.3 s | **16.8 s** |
+
+Shots are independent given the circuit, and each draws from a stream seeded by
+its **global** index, so slicing them across threads reproduces the
+single-threaded run exactly rather than merely to within shot noise:
+`runContraction({ workers: 8 })` and `workers: 1` return bit-identical
+distributions. Measured 4.0× on 16 cores.
+
+Each block is planned once and replayed for every shot, since the network's
+structure does not depend on the values sampled. Planning is about 5% of a run;
+the contractions are the rest.
+
+The limit is the doubling. Joining ψ to its conjugate roughly doubles the
+contraction width, and memory is 2^width, so this is affordable exactly where
+contraction already wins and hopeless where it already loses. Depth ends it: the
+conditionals stop repeating, and the width doubles on top. Past about depth 6
+this is not the right tool.
+
+> **A note on a wrong idea, kept because it is instructive.** An earlier version
+> of this conditioned each block only on the decided qubits inside its backward
+> light cone, reasoning that nothing outside can correlate with the block. That
+> is true of the *marginal* and false of the conditional. Two qubits with no
+> ancestry between them are still correlated through a shared ancestor:
+> `h(5).cnot(5,1).cnot(5,0)` puts q0 and q1 in perfect agreement, yet walking
+> backward from q1 never reaches q0. It made sampling 60× faster and it was
+> wrong, and it passed every brickwork test because a contiguous band of decided
+> qubits screens off whatever lies beyond it — a property of that geometry, not
+> a licence the rule had. Every decided qubit is conditioned on now.
+
 ### Diagonal gates do not cut their wires
 
 Depth is the wall, and most of what builds it is bookkeeping rather than physics.
@@ -1884,7 +1956,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,456 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,468 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

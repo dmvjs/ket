@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
 import { makePrng } from './prng.js'
-import { amplitudeByContraction, amplitudeBatchByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair } from './tensor-network.js'
+import { amplitudeByContraction, amplitudeBatchByContraction, amplitudeBySlicedContraction, circuitNetwork, planContraction, planContractionPartitioned, planBest, evaluatePlan, contractNetwork, sliceContraction, projectTensor, permuteTensor, contractPair, sampleByContraction } from './tensor-network.js'
 
 /**
  * Contraction against the statevector oracle.
@@ -450,5 +450,156 @@ describe('tensor network — diagonal gates as hyper-indices', () => {
     const summed = contractPair(a, c)
     expect(summed.indices).toEqual([])
     expect(Array.from(summed.data)).toEqual([31, 0])
+  })
+})
+
+describe('tensor network — sampling', () => {
+  const messy = (n: number, rand: () => number): Circuit => {
+    let c = new Circuit(n)
+    const one = ['h', 'x', 'y', 'z', 's', 'sdg', 't', 'tdg'] as const
+    for (let d = 0; d < 3 * n; d++) {
+      const r = rand()
+      if (n > 1 && r < 0.35) {
+        const a = Math.floor(rand() * n); let b = Math.floor(rand() * (n - 1)); if (b >= a) b++
+        c = rand() < 0.5 ? c.cz(a, b) : c.cnot(a, b)
+      } else if (r < 0.6) c = c.rx((rand() * 6 - 3), Math.floor(rand() * n))
+      else if (r < 0.75) c = c.rz((rand() * 6 - 3), Math.floor(rand() * n))
+      else c = c[one[Math.floor(rand() * one.length)]!](Math.floor(rand() * n))
+    }
+    return c
+  }
+
+  it('reproduces the exact distribution, not just its support', () => {
+    const shots = 40000
+    for (let seed = 1; seed <= 6; seed++) {
+      const rand = makePrng(seed * 6151 + 7)
+      const n = 2 + Math.floor(rand() * 3)
+      const c = messy(n, rand)
+      const exact = c.exactProbs()
+      const got = sampleByContraction(c, { shots, blockSize: 2, seed: 4242 })
+
+      for (const [outcome, p] of Object.entries(exact)) {
+        const empirical = (got.counts.get(outcome) ?? 0) / shots
+        // 4 sigma of a binomial at this shot count, floored for tiny p.
+        const sigma = Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots)
+        expect(Math.abs(empirical - p), `seed=${seed} |${outcome}⟩`).toBeLessThan(4 * sigma + 1e-3)
+      }
+      // Nothing outside the support may ever be emitted.
+      for (const outcome of got.counts.keys()) expect(exact[outcome] ?? 0).toBeGreaterThan(0)
+    }
+  })
+
+  it('gives the same distribution however the qubits are blocked', () => {
+    // Chaining is where a conditional sampler goes wrong: block boundaries are
+    // exactly where a mis-normalised marginal would show up.
+    const c = new Circuit(8).h(0).cnot(0, 1).cz(1, 2).ry(0.7, 3)
+      .cnot(3, 4).rx(0.4, 5).cz(5, 6).t(7).cnot(6, 7).h(2)
+    const exact = c.exactProbs()
+    const shots = 40000
+    for (const blockSize of [1, 2, 3, 8]) {
+      const got = sampleByContraction(c, { shots, blockSize, seed: 99 })
+      for (const [outcome, p] of Object.entries(exact)) {
+        const empirical = (got.counts.get(outcome) ?? 0) / shots
+        expect(Math.abs(empirical - p), `blockSize=${blockSize} |${outcome}⟩`)
+          .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+      }
+    }
+  })
+
+  it('a deterministic circuit yields exactly one outcome', () => {
+    const got = sampleByContraction(new Circuit(5).x(0).x(3), { shots: 500, blockSize: 2 })
+    expect([...got.counts.entries()]).toEqual([['10010', 500]])
+  })
+
+  it('reaches widths no statevector could, on a circuit no MPS is shaped for', () => {
+    // 60 qubits: 2^60 amplitudes do not exist. Long-range CZs, so this is not a
+    // chain an MPS would keep narrow either.
+    let c = new Circuit(60)
+    for (let i = 0; i < 60; i++) c = c.h(i)
+    for (let i = 0; i + 30 < 60; i++) c = c.cz(i, i + 30)
+    for (let i = 0; i < 60; i++) c = c.rz(0.2 + 0.01 * i, i)
+    const got = sampleByContraction(c, { shots: 200, blockSize: 4, restarts: 4 })
+    let total = 0
+    for (const [outcome, k] of got.counts) { expect(outcome).toMatch(/^[01]{60}$/); total += k }
+    expect(total).toBe(200)
+  })
+
+  it('conditions on every decided qubit, not just the causally near ones', () => {
+    // The counterexample that killed a light-cone optimisation here. q0 and q1
+    // are both copies of q5, but q5's gate onto q0 comes *after* its gate onto
+    // q1, so walking backward from q1 never reaches q0. They are nonetheless
+    // perfectly correlated: only |000000> and |110001> exist.
+    //
+    // Dropping q0 from q1's conditioning draws them independently, which reaches
+    // an impossible prefix and then finds a conditional of zero weight. Marginal
+    // independence is not conditional independence, and the chain needs the
+    // second one.
+    const c = new Circuit(6).h(5).cnot(5, 1).cnot(5, 0)
+    const shots = 20000
+    const got = sampleByContraction(c, { shots, blockSize: 1, seed: 7 })
+
+    expect([...got.counts.keys()].sort()).toEqual(['000000', '110001'])
+    for (const outcome of ['000000', '110001']) {
+      expect(Math.abs(got.counts.get(outcome)! / shots - 0.5)).toBeLessThan(0.02)
+    }
+  })
+
+  it('stays exact when a swap moves qubits across the circuit', () => {
+    // Swaps relabel wires, so any reasoning about which qubits a block depends
+    // on has to follow them. A chain of them is where that goes wrong.
+    let c = new Circuit(8).h(0).h(1).ry(0.6, 2)
+    for (let i = 0; i + 1 < 8; i++) c = c.swap(i, i + 1)
+    c = c.cnot(0, 7).rz(0.5, 7).cz(3, 6).rx(0.9, 4)
+
+    const exact = c.exactProbs()
+    const shots = 30000
+    const got = sampleByContraction(c, { shots, blockSize: 2, seed: 13 })
+    for (const outcome of got.counts.keys()) expect(exact[outcome] ?? 0).toBeGreaterThan(0)
+    for (const [outcome, p] of Object.entries(exact)) {
+      expect(Math.abs((got.counts.get(outcome) ?? 0) / shots - p), `|${outcome}⟩`)
+        .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+    }
+  })
+
+  it('rejects nonsense parameters', () => {
+    const c = new Circuit(3).h(0)
+    expect(() => sampleByContraction(c, { shots: 0 })).toThrow(/positive integer/)
+    expect(() => sampleByContraction(c, { blockSize: 0 })).toThrow(/1\.\.16/)
+    expect(() => sampleByContraction(c, { blockSize: 17 })).toThrow(/1\.\.16/)
+  })
+})
+
+describe('Circuit.runContraction — contraction as a first-class backend', () => {
+  it('returns a Distribution shaped like every other backend', () => {
+    const c = new Circuit(6).h(0).ry(0.7, 1).cnot(0, 2).cz(1, 4).rx(0.45, 5).cnot(3, 5)
+    const shots = 40000
+    const d = c.runContraction({ shots, seed: 3 })
+
+    expect(d.backend).toBe('tensor-network')
+    expect(d.qubits).toBe(6)
+    expect(d.shots).toBe(shots)
+    expect(d.truncated).toBe(false)
+
+    const exact = c.exactProbs()
+    for (const [outcome, p] of Object.entries(exact)) {
+      expect(Math.abs((d.probs[outcome] ?? 0) - p), `|${outcome}⟩`)
+        .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+    }
+    // The bit order must be the one every other backend reports.
+    expect(Object.keys(d.probs).every(k => k.length === 6)).toBe(true)
+  })
+
+  it('agrees with run() on the same circuit', () => {
+    const c = new Circuit(5).h(0).cnot(0, 1).ry(0.9, 2).cz(2, 3).rx(0.3, 4)
+    const a = c.run({ shots: 40000, seed: 5 })
+    const b = c.runContraction({ shots: 40000, seed: 5 })
+    for (const outcome of new Set([...Object.keys(a.probs), ...Object.keys(b.probs)])) {
+      expect(Math.abs((a.probs[outcome] ?? 0) - (b.probs[outcome] ?? 0)), `|${outcome}⟩`).toBeLessThan(0.01)
+    }
+  })
+
+  it('rejects unknown options like the other backends', () => {
+    expect(() => new Circuit(2).h(0).runContraction({ shot: 10 } as never))
+      .toThrow(/unknown option 'shot'/)
   })
 })

@@ -230,7 +230,7 @@
 <div class="topbar">
   <div class="topbar-logo">
     <span class="name">ket</span>
-    <span class="ver">v0.9.1</span>
+    <span class="ver">v0.9.2</span>
   </div>
   <div class="topbar-links">
     <a href="index.html">home</a>
@@ -651,7 +651,7 @@ d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
       <h4>Tensor Network Contraction</h4>
       <div class="method">amplitudeByContraction(circuit, bitstring)</div>
       <div class="mem">O(2<sup>width</sup>), width = treewidth not n</div>
-      <p>Wide, shallow circuits. Contracts the circuit to a scalar, so cost follows the largest intermediate tensor rather than the qubit count &mdash; a statevector is the special case where the width is n. 400 qubits at depth 4 in 362&nbsp;ms; 40 qubits at depth 24 in 543&nbsp;ms. Diagonal gates (<code>cz</code>, <code>rz</code>, <code>t</code>&hellip;) sit on their wires as hyper-indices instead of cutting them, which is what makes depth reachable at all. <code>amplitudeBatchByContraction</code> leaves qubits open with <code>?</code> and returns all 2<sup>k</sup> amplitudes from one contraction &mdash; 65,536 in 76&nbsp;ms &mdash; and <code>amplitudeBySlicedContraction</code> trades independent repeats for memory. Planning is exposed separately: <code>planContraction</code>, <code>planContractionPartitioned</code>, <code>planBest</code>.</p>
+      <p>Wide, shallow circuits. Contracts the circuit to a scalar, so cost follows the largest intermediate tensor rather than the qubit count &mdash; a statevector is the special case where the width is n. 400 qubits at depth 4 in 362&nbsp;ms; 40 qubits at depth 24 in 543&nbsp;ms. Diagonal gates (<code>cz</code>, <code>rz</code>, <code>t</code>&hellip;) sit on their wires as hyper-indices instead of cutting them, which is what makes depth reachable at all. <code>amplitudeBatchByContraction</code> leaves qubits open with <code>?</code> and returns all 2<sup>k</sup> amplitudes from one contraction &mdash; 65,536 in 76&nbsp;ms &mdash; and <code>amplitudeBySlicedContraction</code> trades independent repeats for memory. <code>circuit.runContraction({ shots })</code> draws actual shots &mdash; contracting the circuit against its own conjugate and resolving qubits a block at a time, exactly, with no rejection step: <b>1,000 shots from a 200-qubit depth-4 circuit in 16.8&nbsp;s on 8 workers</b>, and <code>workers</code> cannot change the answer &mdash; every shot draws from a stream seeded by its own index. Planning is exposed separately: <code>planContraction</code>, <code>planContractionPartitioned</code>, <code>planBest</code>.</p>
     </div>
     <div class="backend-card">
       <h4>Pauli Path</h4>
@@ -1316,7 +1316,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
     </div>
     <div style="font-size:.74rem;color:var(--muted)">
       Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a>
-      · MIT License · 2,456 tests
+      · MIT License · 2,468 tests
     </div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">
