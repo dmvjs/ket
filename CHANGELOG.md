@@ -74,6 +74,101 @@ state rather than rebuilding the map, matching what the dense kernel already did
 
 Grover-12 **1.8× faster**; QFT-20 1.2×.
 
+### Added — amplitudes by tensor-network contraction
+
+`amplitudeByContraction(circuit, bitstring)` computes ⟨x|U|0…0⟩ by treating the
+circuit as a tensor network and contracting it to a scalar. Cost is governed by
+the contraction **width** — the largest intermediate tensor — which follows the
+circuit's connectivity rather than its qubit count. A statevector is the special
+case where the width is n.
+
+A depth-4 circuit contracts at width 4 whether it is 20 qubits or 400, so a
+400-qubit amplitude takes 29 s where a statevector needs 2⁴⁰⁰. Width grows with
+depth instead — 4, 8, 13, 17 at depths 4, 8, 12, 16 on 40 qubits — which is where
+the real limit sits. It returns one amplitude, not a distribution.
+
+Planning is exposed separately, because the order *is* the algorithm: the same
+network contracted well or badly differs by orders of magnitude. Three planners
+ship — randomized greedy (`planContraction`), recursive bisection with
+Fiduccia–Mattheyses refinement (`planContractionPartitioned`), and `planBest`,
+which runs both and keeps the better.
+
+Neither planner dominates. Greedy wins on smaller circuits (width 7 against 8 at
+n=14, 5 against 6 at n=30); bisection pulls ahead as width grows, which is where
+the order matters most — 12 against 13 at n=40 d=12, **13 against 15 at n=50 d=14**
+(four times less memory), 15 against 17 at n=60 d=16. `planBest` runs both and
+keeps the better, which is cheap because `evaluatePlan` scores a plan without
+touching tensor data.
+
+Bisection needed two things to become competitive, both found by measuring rather
+than assuming. **Multilevel coarsening**: flat refinement cannot escape a local
+minimum unless some single-vertex move improves matters, and on these graphs none
+does; coarsening collapses clusters so one move relocates a whole region.
+**Searching the balance tolerance**: balanced halves are the wrong shape for a
+circuit, whose best order is a lopsided sweep, and forcing them cost 2–4 width.
+
+### Changed — contraction kernel is a permute plus a matrix product
+
+A contraction over shared indices *is* a matrix product once those indices are
+contiguous, so both operands are permuted and multiplied rather than walked
+position by position with the index decomposition repeated per element.
+
+Between 1.4× and 4.6× faster, the advantage growing with contraction size:
+77.5 ms to 16.7 ms on a 28-qubit depth-14 network. Operands already in the right
+order skip the permutation, and a zero row of the left operand skips an entire
+pass over the right — worth having, since gate tensors are mostly zeros.
+
+Arithmetic is no longer the bottleneck: at that size the contraction is 17 ms
+against 957 ms of planning.
+
+### Added — contraction slicing
+
+`amplitudeBySlicedContraction` fixes a set of indices rather than summing over
+them, contracting once per assignment and adding the results. Each sliced index
+halves the memory and doubles the number of contractions, and those contractions
+are independent — the mechanism by which contractions too large for any machine
+are spread across many.
+
+The doubling is a worst case: one sliced index bought half the memory for
+1.27–1.53× the work on the circuits measured, because removing an index also
+removes work that was being repeated inside the contraction.
+
+Selection ranks candidates by how many of the widest intermediates carry them,
+and measures progress on `(width, count of intermediates at that width)`. Width
+alone is the wrong signal: a peak held by six intermediates does not fall when an
+index leaves five of them, so a width-only rule stalls after a single slice.
+Emptying the peak set is the step before the width moves.
+
+That reaches real targets — width 13 down to 8 on a 20-qubit depth-12 circuit,
+**32× less memory for 99× work** against a naive 1024×, with every slice
+independent. It stops at `maxSliced` and reports the width it reached rather than
+the one requested.
+
+### Added — expectation values by Pauli-path propagation
+
+`pauliPathExpectation(circuit, observable)` computes ⟨ψ|O|ψ⟩ for a Pauli
+observable without building a state, by carrying the observable backward through
+the circuit in the Heisenberg picture.
+
+The cost model is unlike the other backends: a Clifford gate maps one Pauli to
+±one Pauli at any width, so width is nearly free, and only rotations branch. What
+costs is the surviving term count, which is set by the observable's light cone
+rather than the qubit count. Two QAOA layers with a two-local observable hold at
+63 terms from 8 qubits to 120, so **120 qubits takes 28 ms** where a statevector
+needs 127 ms at 16 and is out of reach past ~24.
+
+It answers ⟨O⟩ only — no sampling, no state — which is what VQE and QAOA actually
+want. Truncation is reported rather than hidden: `droppedWeight` bounds the error
+in the returned value, and unsupported gates are refused by name.
+
+Truncation runs along two axes, and both matter at depth. `maxWeight` discards
+Pauli terms above a given weight; `noise: { p1, p2 }` damps terms by the same
+depolarizing convention the density-matrix backend uses, validated against exact
+`Tr(ρP)` at n ≤ 4. On a 60-qubit kicked-Ising circuit at depth 6, where an
+exact-ish run holds 62,626 terms in 8.7 s, `maxWeight: 6` gets the same answer to
+four decimals in 1.2 s, and modelling the device noise takes 124 ms — the latter
+being a better model of real hardware rather than a worse one of ideal hardware.
+
 ### Added — one conformance battery for every backend
 
 `src/conformance.test.ts` replaces eight hand-written per-backend test blocks
@@ -129,7 +224,7 @@ a near-miss where there is one:
 
 ### Tests
 
-2,402, up from 2,154.
+2,449, up from 2,154.
 
 ## 0.9.0
 

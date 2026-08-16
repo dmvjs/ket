@@ -822,6 +822,261 @@ for cryptographic randomness call `crypto.getRandomValues` directly.
 **QASM output** follows ket's formatting: a blank line after the `include`, and no
 space after the comma in `cx q[0],q[1];`.
 
+## Amplitudes by tensor-network contraction
+
+`amplitudeByContraction(circuit, bitstring)` computes ⟨x|U|0…0⟩ by treating the
+circuit as a tensor network — every gate a tensor, every wire segment an index —
+and contracting it to a scalar.
+
+```typescript
+import { amplitudeByContraction } from '@kirkelliott/ket'
+
+const { re, im, width, cost } = amplitudeByContraction(circuit, '0'.repeat(400))
+```
+
+Cost has nothing to do with 2ⁿ. It is set by the **width** of the contraction —
+the largest intermediate tensor — which is a property of the circuit's
+connectivity rather than its qubit count. A statevector is simply the special case
+of a contraction whose width is n.
+
+| n, depth 4 | width | operations | time |
+|---|---|---|---|
+| 20 | 4 | 2.7e3 | 84 ms |
+| 40 | 4 | 5.5e3 | 341 ms |
+| 160 | 4 | 2.2e4 | 4.7 s |
+| 400 | 4 | 5.6e4 | 29 s |
+
+Width stays flat as n grows and rises with **depth** instead, which is where the
+real limit is:
+
+| n = 40 | width | operations |
+|---|---|---|
+| depth 4 | 4 | 5.5e3 |
+| depth 8 | 8 | 7.0e4 |
+| depth 12 | 13 | 2.1e6 |
+| depth 16 | 17 | 1.2e8 |
+
+So this wins decisively on wide shallow circuits and loses to a statevector once
+depth pushes the width past n. It returns **one amplitude**, not a distribution;
+sampling means contracting repeatedly.
+
+### The order is the algorithm
+
+The same network contracted well or badly differs by orders of magnitude, so
+`planContraction` is exposed separately and searched independently of the
+contraction itself. It runs randomized greedy with restarts, minimising width
+first — width sets memory, and memory is what makes a contraction impossible.
+
+Planning dominates runtime at large n — contracting a 400-qubit depth-4 circuit is
+5.6e4 operations, microseconds of arithmetic, and effectively all of the 29 s goes
+on choosing the order.
+
+Three planners are available, and which one wins is a property of the network:
+
+| Planner | Method |
+|---|---|
+| `planContraction` | Randomized greedy with restarts, minimising width then cost. |
+| `planContractionPartitioned` | Recursive balanced bisection with Fiduccia–Mattheyses refinement. |
+| `planBest` | Runs both, scores them with `evaluatePlan`, returns the better and which it was. |
+
+**Neither planner dominates — they win on different networks.** Greedy is better
+on small and mid-size circuits; recursive bisection pulls ahead as the width
+grows, which is the regime where the order matters most:
+
+| circuit | greedy | bisection |
+|---|---|---|
+| shallow n=14 d=8 | **width 7** | 8 |
+| shallow n=30 d=6 | **width 5** | 6 |
+| shallow n=40 d=12 | 13 | **width 12** |
+| shallow n=50 d=14 | 15 | **width 13** (4× less memory) |
+| shallow n=60 d=16 | 17 | **width 15** |
+| long-range pairings | 4–10 | tie |
+
+Two things were needed to get there, and both were found by measurement rather
+than assumed:
+
+- **Multilevel coarsening.** Flat refinement cannot escape a local minimum unless
+  some single-vertex move improves things, and on these graphs none does. The
+  coarsened levels collapse clusters into single vertices, so one move relocates
+  a whole region; the partition is projected back down and polished at each level.
+- **Searching the balance tolerance.** A balanced split is the wrong shape for a
+  circuit: the best order for a shallow circuit is a sweep, which is maximally
+  lopsided. Holding halves cost 2–4 width; opening the tolerance recovers it, and
+  the best value differs per circuit, so it is searched rather than fixed.
+
+`planBest` exists so the choice does not have to be made in advance, and scoring
+is cheap because `evaluatePlan` replays a plan over index sets without touching
+tensor data.
+
+### Slicing, when width is the wall
+
+No contraction order helps once the width exceeds memory — 2^width is 2^width.
+Slicing fixes a set of indices instead of summing over them, contracts once per
+assignment, and adds the results:
+
+```typescript
+const { re, im, width, slices, overhead } =
+  amplitudeBySlicedContraction(circuit, bitstring, { targetWidth: 24 })
+```
+
+Each sliced index halves the memory and doubles the number of contractions, and
+the contractions are completely independent — this is the mechanism that let
+petabyte-scale contractions run on ordinary hardware, by spreading the slices
+across machines.
+
+The doubling is a worst case, and the gap widens with the slice count, because a
+slice is not merely a smaller copy of the same contraction — removing an index
+also removes work that was being repeated inside it:
+
+| circuit | width | sliced | slices | actual overhead |
+|---|---|---|---|---|
+| n=12 d=8 → target 4 | 7 → **4** | 7 | 128 | **37.6×** |
+| n=20 d=12 → target 10 | 13 → **10** | 4 | 16 | **5.65×** |
+| n=20 d=12 → target 8 | 13 → **8** | 10 | 1024 | **99×** |
+
+The last row is the point: **32× less memory for 99× work**, against a naive
+expectation of 1024×, and every one of those 1024 contractions is independent.
+
+Selection ranks candidates by how many of the widest intermediates carry them.
+Width alone is the wrong signal — a peak held by six intermediates does not fall
+when an index leaves five of them, so a width-only rule reports no progress and
+stops before it starts. Emptying that peak set is the step before the width
+moves, so progress is measured on `(width, count at that width)` and a slice is
+taken only when one of them improves. Anything else would double the work for
+nothing.
+
+Slicing stops at `maxSliced` (default 12) and reports the width it actually
+reached rather than the width requested.
+
+| Function | Purpose |
+|---|---|
+| `sliceContraction(indexSets, opts?)` | Choose slice indices and plan one slice. |
+| `contractSliced(tensors, slicedPlan)` | Contract every slice and sum. |
+| `projectTensor(tensor, fixed)` | Fix indices to values, dropping those axes. |
+| `amplitudeBySlicedContraction(circuit, bitstring, opts?)` | The whole path in one call. |
+
+### The kernel
+
+A contraction over shared indices is a matrix product once those indices are made
+contiguous, so `contractPair` permutes both operands — shared indices trailing on
+the left, leading on the right — and runs an ordinary GEMM. The alternative is to
+walk output positions and re-derive each operand's offset a bit at a time, paying
+that decomposition per element and reading memory in a stride the hardware cannot
+prefetch.
+
+| contraction | naive kernel | permute + GEMM |
+|---|---|---|
+| n=16 d=10 (width 9) | 1.0 ms | 0.7 ms |
+| n=20 d=12 (width 13) | 8.7 ms | 3.2 ms |
+| n=24 d=12 (width 13) | 11.6 ms | 3.1 ms |
+| n=28 d=14 (width 13) | 77.5 ms | **16.7 ms** |
+
+The advantage grows with size, which is the signature of removing per-element
+overhead rather than shaving a constant. Two details carry most of it: operands
+already in the right order skip the permutation entirely, which is about half of
+them in a circuit network; and a zero row of the left operand skips a whole pass
+over the right one, which matters because gate tensors are mostly zeros — a CNOT
+has four non-zero entries out of sixteen.
+
+**Planning, not arithmetic, is now the cost.** At n=28 the contraction takes 17 ms
+against 957 ms to choose the order. Further kernel work would not show up; better
+planning would.
+
+### Working with the network directly
+
+The pieces are exposed so a network can be built, planned and contracted
+separately — which is what you want when substituting a planner, or contracting
+one network against many output bitstrings.
+
+| Function | Purpose |
+|---|---|
+| `circuitNetwork(circuit, bitstring)` | Build the `Tensor[]` for ⟨bitstring\|U\|0…0⟩. A SWAP costs nothing — it is a relabelling, not a tensor. |
+| `planContraction(indexSets, opts?)` | Search for an order. Takes only the index sets, so planning never touches the data. |
+| `contractNetwork(tensors, plan)` | Execute a plan, returning the remaining tensor. |
+| `contractPair(a, b)` | Contract two tensors over their shared indices. |
+| `permuteTensor(tensor, order)` | Reorder indices, returning the tensor unchanged when it already matches. |
+| `planContractionPartitioned(indexSets, opts?)` | Recursive bisection planner. |
+| `planBest(indexSets, opts?)` | Best of the available planners, with `strategy` naming the winner. |
+| `evaluatePlan(indexSets, steps)` | Score a plan's width and cost without contracting. |
+
+```typescript
+const net  = circuitNetwork(circuit, '0'.repeat(n))
+const plan = planContraction(net.map(t => t.indices), { restarts: 64 })
+const out  = contractNetwork(net, plan)   // out.indices === [] — a scalar
+```
+
+## Expectation values by Pauli path
+
+`pauliPathExpectation(circuit, observable, options?)` computes ⟨ψ|O|ψ⟩ for a Pauli
+observable without ever building a state. It propagates the observable *backward*
+through the circuit in the Heisenberg picture — ⟨ψ|O|ψ⟩ = ⟨0|U†OU|0⟩ — and reads
+the result off against |0…0⟩.
+
+```typescript
+import { pauliPathExpectation } from '@kirkelliott/ket'
+
+const { value, peakTerms, droppedWeight, truncated } =
+  pauliPathExpectation(ansatz, [{ coeff: 1, ops: 'ZZ' + 'I'.repeat(118) }])
+```
+
+The cost model is unlike the other backends. A Clifford gate maps one Pauli to
+±one Pauli, at any width, so width is close to free; only rotations branch, and
+each branch carries a cos/sin factor, so terms decay and can be truncated. What
+costs is the number of surviving terms, which is set by the observable's light
+cone rather than the qubit count:
+
+| n | time | peak terms |
+|---|---|---|
+| 8 | 1.1 ms | 63 |
+| 16 | 1.9 ms | 63 |
+| 30 | 3.5 ms | 63 |
+| 60 | 8.4 ms | 63 |
+| 120 | 27.6 ms | 63 |
+
+Two QAOA layers with a two-local observable. A statevector needs 127 ms at n=16
+and is impossible past ~24.
+
+**It answers ⟨O⟩, not a distribution.** There is no sampling and no state; for
+shots use another backend. A deep circuit of arbitrary rotations still grows
+exponentially in terms — this is efficient for wide, shallow or heavily-Clifford
+circuits, which is what VQE and QAOA ansatze are.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `threshold` | `1e-10` | Discard terms with coefficient below this magnitude. |
+| `maxTerms` | `Infinity` | Hard cap on simultaneous terms; smallest dropped first. |
+| `maxWeight` | `Infinity` | Discard terms acting non-trivially on more than this many qubits. |
+| `noise` | — | `{ p1, p2 }` depolarizing rates, as in `DmNoiseParams`. |
+
+### Truncating
+
+Term count grows roughly ten-fold per circuit layer, so the choice of truncation
+is what decides whether a depth is reachable. Measured on a 60-qubit kicked-Ising
+circuit with a single-site `Z` observable:
+
+| depth 6, n = 60 | terms | time | ⟨Z⟩ |
+|---|---|---|---|
+| `threshold: 1e-8` | 62,626 | 8,665 ms | 0.0809 |
+| `maxWeight: 6` | 5,087 | 1,186 ms | 0.0808 |
+| `noise: { p1: 0.005, p2: 0.02 }`, `threshold: 1e-3` | 541 | 124 ms | 0.0523 |
+
+Weight truncation is 7× faster here and agrees to the fourth decimal, because a
+high-weight Pauli reaches the |0…0⟩ readout through more cancelling paths and
+contributes little.
+
+Modelling the device's **noise** is the bigger lever, and it is not an
+approximation of the ideal circuit — it is a better model of the hardware. A
+depolarizing channel damps a weight-w Pauli geometrically in w, so terms die off
+instead of proliferating: 70× faster here, and the answer it gives (0.0523) is
+what the noisy device would produce, not what a perfect one would.
+
+Truncation is reported, not hidden: `droppedWeight` is the summed magnitude of
+every discarded coefficient, an upper bound on the error in `value`.
+
+Supported gates: `h`, `x`, `y`, `z`, `s`, `sdg`, `t`, `tdg`, `rx`, `ry`, `rz`,
+`u1`, `p`, `cnot`, `cz`, `swap`. Anything else is refused by name rather than
+approximated.
+
 ## Algorithms
 
 ```typescript
