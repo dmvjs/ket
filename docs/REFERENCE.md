@@ -870,6 +870,16 @@ need all 2ⁿ. `sampleByContraction` instead resolves the qubits a block at a ti
 each block from one contraction of the circuit against its own conjugate:
 
 ```typescript
+const d = circuit.runContraction({ shots: 1000, blockSize: 8 })
+d.backend   // 'tensor-network'
+d.probs     // a Distribution, as every other backend returns
+```
+
+`sampleByContraction(circuit, opts)` is the same run with the contraction
+diagnostics attached — the width it reached, and how many contractions the light
+cone let it skip:
+
+```typescript
 import { sampleByContraction } from '@kirkelliott/ket'
 
 const { counts, width, contractions } =
@@ -891,27 +901,39 @@ outcomes, normalised by its own sum.
 
 This is exact sampling from circuits no other representation reaches:
 
-| circuit | shots | width | contractions | time |
+| circuit | shots | width | 1 worker | 8 workers |
 |---|---|---|---|---|
-| 100 qubits, depth 4 | 1,000 | 7 | 257 | 1.3 s |
-| 200 qubits, depth 4 | 1,000 | 9 | 385 | 4.3 s |
-| **400 qubits, depth 4** | 1,000 | 9 | 785 | **19.5 s** |
-| 400 qubits, depth 6 | 1,000 | 11 | 3,117 | 68 s |
+| 30 qubits, depth 4 | 1,000 | 7 | 1.1 s | 0.5 s |
+| 60 qubits, depth 4 | 1,000 | 7 | 6.3 s | **1.6 s** |
+| 100 qubits, depth 4 | 1,000 | 7 | 20.3 s | **5.0 s** |
+| 200 qubits, depth 4 | 1,000 | 9 | 67.3 s | **16.8 s** |
 
-Two things make that affordable. The network's *structure* does not depend on the
-values sampled, so each block is planned once and replayed for every shot. And a
-block's conditional can only depend on decided qubits inside its **backward light
-cone** — outside it there is no path through the circuit and so no correlation —
-so the cache is keyed on those bits alone. On a 200-qubit depth-4 circuit that is
-the difference between 23,105 contractions and 385, and 76 s against 4.3 s, with
-the samples bit-for-bit the same.
+Shots are independent given the circuit, and each draws from a stream seeded by
+its **global** index, so slicing them across threads reproduces the
+single-threaded run exactly rather than merely to within shot noise:
+`runContraction({ workers: 8 })` and `workers: 1` return bit-identical
+distributions. Measured 4.0× on 16 cores.
+
+Each block is planned once and replayed for every shot, since the network's
+structure does not depend on the values sampled. Planning is about 5% of a run;
+the contractions are the rest.
 
 The limit is the doubling. Joining ψ to its conjugate roughly doubles the
 contraction width, and memory is 2^width, so this is affordable exactly where
-contraction already wins and hopeless where it already loses. Depth is what ends
-it: the cone widens with depth, cache hits collapse, and the width doubles on top.
-Past about depth 8 this is not the right tool, and no amount of tuning changes
-that.
+contraction already wins and hopeless where it already loses. Depth ends it: the
+conditionals stop repeating, and the width doubles on top. Past about depth 6
+this is not the right tool.
+
+> **A note on a wrong idea, kept because it is instructive.** An earlier version
+> of this conditioned each block only on the decided qubits inside its backward
+> light cone, reasoning that nothing outside can correlate with the block. That
+> is true of the *marginal* and false of the conditional. Two qubits with no
+> ancestry between them are still correlated through a shared ancestor:
+> `h(5).cnot(5,1).cnot(5,0)` puts q0 and q1 in perfect agreement, yet walking
+> backward from q1 never reaches q0. It made sampling 60× faster and it was
+> wrong, and it passed every brickwork test because a contiguous band of decided
+> qubits screens off whatever lies beyond it — a property of that geometry, not
+> a licence the rule had. Every decided qubit is conditioned on now.
 
 ### Diagonal gates do not cut their wires
 
@@ -1934,7 +1956,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,462 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,468 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

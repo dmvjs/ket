@@ -8304,6 +8304,37 @@ describe('runMps — worker pool', () => {
     expect(out).toBe('done')
   }, 40_000)
 
+  it.runIf(built)('runContraction: workers cannot change the answer', async () => {
+    // Shots seed their own stream from a global index, so slicing them across
+    // threads must reproduce the single-threaded run exactly — not merely to
+    // within shot noise. Any drift means the split is not the scheduling-only
+    // change it claims to be.
+    const out = await inChild(`
+      const c = new Circuit(10).h(0).cnot(0,1).ry(0.7,2).cz(2,3).rx(0.4,4)
+        .cnot(4,5).t(6).cz(6,7).ry(1.1,8).cnot(8,9).h(3)
+      const runs = [1, 2, 3, 4].map(w =>
+        c.runContraction({ shots: 2000, blockSize: 3, seed: 11, workers: w }))
+      const ref = runs[0].probs
+      let worst = 0
+      for (const r of runs.slice(1)) {
+        for (const k of new Set([...Object.keys(ref), ...Object.keys(r.probs)])) {
+          worst = Math.max(worst, Math.abs((ref[k] ?? 0) - (r.probs[k] ?? 0)))
+        }
+      }
+      console.log(runs.every(r => r.backend === 'tensor-network') ? 'diff ' + worst : 'wrong backend')
+    `)
+    expect(out).toBe('diff 0')
+  }, 60_000)
+
+  it.runIf(built)('runContraction: a parallel run still exits the host process', async () => {
+    const out = await inChild(`
+      const c = new Circuit(8).h(0).cnot(0,1).ry(0.5,2).cz(2,3)
+      c.runContraction({ shots: 200, blockSize: 2, seed: 4, workers: 2 })
+      console.log('done')
+    `)
+    expect(out).toBe('done')
+  }, 40_000)
+
   it.runIf(built)('survives CLI flags the parent cannot pass to a worker', async () => {
     // Workers inherit execArgv by default; --input-type is rejected for a
     // file-backed worker, which used to surface as a five-minute wait.

@@ -4,7 +4,7 @@
 
 ### Added — exact shot sampling from a contraction
 
-`sampleByContraction(circuit, { shots, blockSize })` samples bitstrings from a
+`circuit.runContraction({ shots })` samples bitstrings from a
 circuit by contracting it against its own conjugate, resolving qubits a block at
 a time. Closing a qubit's shared wire with |v⟩ conditions on it, an identity cap
 leaves it open and returns ψ(x)·conj(ψ(x)) — the probability — and leaving it
@@ -12,20 +12,24 @@ alone marginalises it away, so the conditional chain is exact with no rejection
 step.
 
 Until now contraction returned one amplitude, which is no use for sampling: you
-would need all 2ⁿ. This is what makes it a backend rather than a spot check.
+would need all 2ⁿ. It returns a `Distribution` with `backend: 'tensor-network'`,
+like every other backend; `sampleByContraction` is the same run with the
+contraction diagnostics — the width reached, and how many contractions ran.
 
-| circuit | shots | width | time |
+| circuit | shots | 1 worker | 8 workers |
 |---|---|---|---|
-| 100 qubits, depth 4 | 1,000 | 7 | 1.3 s |
-| 200 qubits, depth 4 | 1,000 | 9 | 4.3 s |
-| **400 qubits, depth 4** | 1,000 | 9 | **19.5 s** |
+| 60 qubits, depth 4 | 1,000 | 6.3 s | **1.6 s** |
+| 100 qubits, depth 4 | 1,000 | 20.3 s | **5.0 s** |
+| 200 qubits, depth 4 | 1,000 | 67.3 s | **16.8 s** |
 
-Two things make it affordable. The network's structure does not depend on the
-values sampled, so each block is planned once and replayed. And a block's
-conditional can only depend on decided qubits in its **backward light cone**, so
-the conditional cache is keyed on those bits rather than the whole prefix — on
-200 qubits at depth 4 that is 385 contractions instead of 23,105, and 4.3 s
-instead of 76 s, for bit-for-bit identical samples.
+`runContraction({ workers })` slices the shots. Each shot draws from a stream
+seeded by its global index, so a slice reproduces exactly the shots the
+single-threaded run would have produced — `workers: 8` and `workers: 1` return
+bit-identical distributions, and the option is a scheduling choice rather than a
+numerical one. Measured 4.0× on 16 cores.
+
+Each block is planned once and replayed for every shot, since the network's
+structure does not depend on the values sampled.
 
 The limit is the doubling: joining ψ to its conjugate roughly doubles the
 contraction width, so this is affordable exactly where contraction already wins.
@@ -34,7 +38,7 @@ top. Past about depth 8 it is the wrong tool.
 
 ### Tests
 
-2,462, up from 2,456.
+2,468, up from 2,456.
 
 ## 0.9.1
 

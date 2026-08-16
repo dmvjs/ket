@@ -472,7 +472,8 @@ function buildWires(
   }
 
   const json = circuit.toJSON()
-  for (const raw of json.ops) {
+  for (let opIndex = 0; opIndex < json.ops.length; opIndex++) {
+    const raw = json.ops[opIndex]
     const op = raw as Record<string, unknown>
     const kind = op['kind'] as string
     if (kind === 'barrier') continue
@@ -1283,7 +1284,7 @@ export interface ContractionSample {
  */
 function conjugateOnto(bra: { tensors: Tensor[]; wire: string[] }, ketWire: readonly string[]): Tensor[] {
   const rename = new Map<string, string>()
-  bra.wire.forEach((b, q) => rename.set(b, ketWire[q]!))
+  bra.wire.forEach((b, q) => { const k = ketWire[q]; if (k !== undefined) rename.set(b, k) })
   return bra.tensors.map(t => {
     const data = new Float64Array(t.data.length)
     for (let i = 0; i < t.data.length; i += 2) {
@@ -1294,42 +1295,28 @@ function conjugateOnto(bra: { tensors: Tensor[]; wire: string[] }, ketWire: read
   })
 }
 
-/**
- * Qubits whose values the marginal on `block` can possibly depend on.
- *
- * Walking the ops backwards and collecting everything that touches the growing
- * set gives the block's backward light cone. Outside it there is no path through
- * the circuit and so no correlation: conditioning on those qubits cannot move
- * this block's distribution.
- *
- * That is worth knowing because it is the difference between a cache keyed on
- * every decided bit — which never hits twice on a flat distribution — and one
- * keyed on a handful, which hits constantly. Shallow circuits have small cones,
- * and shallow circuits are the whole regime this method is good for.
- */
-function backwardCone(circuit: Circuit, block: readonly number[]): Set<number> {
-  const cone = new Set<number>(block)
-  const ops = circuit.toJSON().ops as Record<string, unknown>[]
+/** ψ joined to conj(ψ): the half of the network every block shares. */
+interface DoubledNetwork { tensors: Tensor[]; wire: string[]; next: () => string }
 
-  for (let i = ops.length - 1; i >= 0; i--) {
-    const op = ops[i]!
-    const kind = op['kind'] as string
-    const touched: number[] =
-      kind === 'single' ? [op['q'] as number]
-      : kind === 'cnot' || kind === 'controlled' ? [op['control'] as number, op['target'] as number]
-      : kind === 'swap' ? [op['a'] as number, op['b'] as number]
-      : []
-    if (touched.some(q => cone.has(q))) for (const q of touched) cone.add(q)
-  }
-  return cone
+function doubledNetwork(circuit: Circuit): DoubledNetwork {
+  const ket = buildWires(circuit, 'k')
+  const bra = buildWires(circuit, 'b')
+  return { tensors: [...ket.tensors, ...conjugateOnto(bra, ket.wire)], wire: ket.wire, next: ket.next }
 }
 
 /** The reusable structure for one block of a chained conditional sample. */
 interface BlockPlan {
-  tensors: Tensor[]
+  /** Planning template. Never mutated, and never contracted directly. */
+  tensors: readonly Tensor[]
   plan: ContractionPlan
-  /** Rank-1 closers for already-decided qubits, mutated per shot. */
-  closers: { qubit: number; data: Float64Array }[]
+  /**
+   * Where each decided qubit's closer sits, and the two tensors it can be.
+   *
+   * Both are built up front, so conditioning is a choice between them rather
+   * than a write into the network. A plan addresses tensors by slot, so
+   * substituting at the same slot leaves the plan valid.
+   */
+  closers: { qubit: number; slot: number; zero: Tensor; one: Tensor }[]
   block: number[]
   openIndices: string[]
 }
@@ -1347,24 +1334,27 @@ interface BlockPlan {
  *   later    → nothing, so the index is summed and the qubit is marginalised out
  */
 function blockPlanFor(
-  circuit: Circuit, decided: readonly number[], block: readonly number[],
+  base: DoubledNetwork, decided: readonly number[], block: readonly number[],
   restarts: number, seed: number,
 ): BlockPlan {
-  const ket = buildWires(circuit, 'k')
-  const bra = buildWires(circuit, 'b')
-  const tensors = [...ket.tensors, ...conjugateOnto(bra, ket.wire)]
+  // The circuit half is identical for every block — only the closers and caps
+  // appended below differ — so the tensors are shared by reference and just the
+  // array is per block. Rebuilding them per block cost 457 MB at 400 qubits.
+  const { wire, next } = base
+  const tensors = [...base.tensors]
 
-  const closers: { qubit: number; data: Float64Array }[] = []
+  const closers: BlockPlan['closers'] = []
   for (const q of decided) {
-    const data = new Float64Array([1, 0, 0, 0])
-    tensors.push({ indices: [ket.wire[q]!], data })
-    closers.push({ qubit: q, data })
+    const indices = [wire[q]!]
+    const zero: Tensor = { indices, data: Float64Array.from([1, 0, 0, 0]) }
+    closers.push({ qubit: q, slot: tensors.length, zero, one: { indices, data: Float64Array.from([0, 0, 1, 0]) } })
+    tensors.push(zero)
   }
 
   const openIndices: string[] = []
   for (const q of block) {
-    const out = ket.next()
-    tensors.push({ indices: [out, ket.wire[q]!], data: matrixOf('id', undefined)! })
+    const out = next()
+    tensors.push({ indices: [out, wire[q]!], data: matrixOf('id', undefined)! })
     openIndices.push(out)
   }
 
@@ -1399,8 +1389,26 @@ export function sampleByContraction(
     shots?: number; seed?: number; blockSize?: number; restarts?: number
   } = {},
 ): ContractionSample {
-  const n = circuit.qubits
   if (!Number.isInteger(shots) || shots < 1) throw new TypeError(`shots must be a positive integer, got ${shots}`)
+  return sampleShotRange(circuit, { seed, blockSize, restarts }, 0, shots)
+}
+
+/**
+ * Shots `lo` up to `hi` of the same run.
+ *
+ * Split out so the range can be handed to a worker. Each shot draws from a
+ * stream seeded by its **global** index, so a range produces exactly the shots
+ * it would have produced in a single-threaded run — splitting the work cannot
+ * move the answer, and `workers` is a scheduling choice rather than a numerical
+ * one. Not part of the public API; `contraction.worker.ts` is its only caller.
+ */
+export function sampleShotRange(
+  circuit: Circuit,
+  { seed = 1, blockSize = 4, restarts = 32 }: { seed?: number; blockSize?: number; restarts?: number },
+  lo: number, hi: number,
+): ContractionSample {
+  const n = circuit.qubits
+  const shots = hi - lo
   if (!Number.isInteger(blockSize) || blockSize < 1 || blockSize > 16)
     throw new TypeError(`blockSize must be an integer in 1..16, got ${blockSize}`)
 
@@ -1409,68 +1417,90 @@ export function sampleByContraction(
     blocks.push(Array.from({ length: Math.min(blockSize, n - q) }, (_, j) => q + j))
   }
 
-  const plans = blocks.map((block, b) =>
-    blockPlanFor(circuit, blocks.slice(0, b).flat(), block, restarts, seed))
+  // Every decided qubit is conditioned on, and the cache is keyed on all of them.
+  //
+  // An earlier version kept only the decided qubits inside the block's backward
+  // light cone, on the reasoning that nothing outside it can correlate with the
+  // block. That is true of the *marginal* and false of the conditional, which is
+  // what this needs: two qubits with no ancestry between them are still
+  // correlated through a shared ancestor, and conditioning on one then moves the
+  // other. `h(5).cnot(5,1).cnot(5,0)` is the whole counterexample — walking back
+  // from q1 never reaches q0, yet they are perfectly correlated. It survived
+  // every brickwork test because a contiguous band of decided qubits screens off
+  // whatever lies beyond it, which is a property of that geometry and not
+  // something the rule was entitled to assume.
+  const base = doubledNetwork(circuit)
+  const decidedBits: number[][] = []
+  const seenBefore: number[] = []
+  const plans = blocks.map(block => {
+    decidedBits.push([...seenBefore])
+    const bp = blockPlanFor(base, seenBefore, block, restarts, seed)
+    seenBefore.push(...block)
+    return bp
+  })
   const width = Math.max(...plans.map(p => p.plan.width))
 
-  // Which already-decided qubits each block's conditional can actually depend on.
-  // Normalising by the total turns the joint into the conditional, and the
-  // conditional is flat in every qubit outside the cone — so two prefixes that
-  // agree on the cone give the same answer, whatever they do elsewhere.
-  const coneBits = blocks.map((block, b) => {
-    const cone = backwardCone(circuit, block)
-    return blocks.slice(0, b).flat().filter(q => cone.has(q))
-  })
-
-  // A resolved prefix determines the next conditional exactly, so it is worth
-  // contracting once however many shots walk through it.
-  const cache = new Map<string, Float64Array>()
-  let contractions = 0
-
-  const conditional = (b: number, prefix: string): Float64Array => {
-    const key = `${b}:${coneBits[b]!.map(q => prefix[q]).join('')}`
-    const hit = cache.get(key)
-    if (hit) return hit
-
+  // One conditional per distinct set of decided values, per block.
+  //
+  // The shots advance in lockstep rather than one chain at a time, so every shot
+  // that agrees on the decided qubits shares a single contraction — and the
+  // contractions for a block are all available at once, which is what makes them
+  // divisible across threads.
+  const conditionalFor = (b: number, bits: Uint8Array, off: number): Float64Array => {
+    // Substitution, not mutation: the template is untouched and the network
+    // handed to `contractNetwork` is this call's alone.
     const bp = plans[b]!
-    for (const c of bp.closers) {
-      const bit = prefix[c.qubit] === '1' ? 1 : 0
-      c.data[0] = bit ? 0 : 1; c.data[2] = bit ? 1 : 0
-    }
-    const out = contractNetwork(bp.tensors, bp.plan)
-    contractions++
+    const live = bp.tensors.slice()
+    for (const c of bp.closers) live[c.slot] = bits[off + c.qubit] ? c.one : c.zero
 
-    const ordered = permuteTensor(out, bp.openIndices)
+    const ordered = permuteTensor(contractNetwork(live, bp.plan), bp.openIndices)
     const k = 1 << bp.block.length
     const probs = new Float64Array(k)
     for (let j = 0; j < k; j++) probs[j] = Math.max(0, ordered.data[2 * j]!)
-    cache.set(key, probs)
     return probs
   }
 
-  const rand = makePrng(seed)
-  const counts = new Map<string, number>()
+  // Each shot draws from its own stream, so a shot's outcome depends on its
+  // index and nothing else — the result cannot drift with how the work is
+  // scheduled or split.
+  const rngs = Array.from({ length: shots }, (_, s) => makePrng((seed + (lo + s) * 0x9e3779b1) >>> 0))
+  const bits = new Uint8Array(shots * n)
+  let contractions = 0
 
-  for (let s = 0; s < shots; s++) {
-    let prefix = ''
-    for (let b = 0; b < blocks.length; b++) {
-      const probs = conditional(b, prefix)
+  for (let b = 0; b < blocks.length; b++) {
+    const decided = decidedBits[b]!
+    const groups = new Map<string, number[]>()
+    for (let s = 0; s < shots; s++) {
+      let key = ''
+      for (const q of decided) key += bits[s * n + q]!
+      const g = groups.get(key)
+      if (g) g.push(s); else groups.set(key, [s])
+    }
+
+    const block = blocks[b]!
+    for (const members of groups.values()) {
+      const probs = conditionalFor(b, bits, members[0]! * n)
+      contractions++
+
       let total = 0
       for (const p of probs) total += p
-      // A zero-probability prefix cannot be reached, so this cannot fire unless
-      // the conditional chain has gone wrong.
+      // Every decided prefix was itself drawn with non-zero probability, so this
+      // cannot fire unless the conditional chain has gone wrong.
       if (!(total > 0)) throw new Error(`sampleByContraction: conditional at block ${b} has zero weight`)
 
-      let r = rand() * total
-      let pick = probs.length - 1
-      for (let j = 0; j < probs.length; j++) { r -= probs[j]!; if (r <= 0) { pick = j; break } }
-
-      const bitsOfBlock = blocks[b]!.length
-      let chunk = ''
-      for (let j = bitsOfBlock - 1; j >= 0; j--) chunk += (pick >> j) & 1
-      prefix += chunk
+      for (const s of members) {
+        let r = rngs[s]!() * total
+        let pick = probs.length - 1
+        for (let j = 0; j < probs.length; j++) { r -= probs[j]!; if (r <= 0) { pick = j; break } }
+        for (let j = 0; j < block.length; j++) bits[s * n + block[j]!] = (pick >> (block.length - 1 - j)) & 1
+      }
     }
-    counts.set(prefix, (counts.get(prefix) ?? 0) + 1)
+  }
+
+  const counts = new Map<string, number>()
+  for (let s = 0; s < shots; s++) {
+    const outcome = bits.subarray(s * n, s * n + n).join('')
+    counts.set(outcome, (counts.get(outcome) ?? 0) + 1)
   }
 
   return { counts, width, contractions, blockSize }

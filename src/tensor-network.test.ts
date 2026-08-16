@@ -524,20 +524,41 @@ describe('tensor network — sampling', () => {
     expect(total).toBe(200)
   })
 
-  it('the light cone keeps the conditional cache small without changing it', () => {
-    // Same circuit, same seed: whatever the cache does, the samples must be the
-    // ones the chain would have produced anyway. The cone only decides how often
-    // a conditional is recomputed, never what it is.
-    let c = new Circuit(24)
-    for (let i = 0; i < 24; i++) c = c.h(i)
-    for (let d = 0; d < 3; d++) {
-      for (let i = d % 2; i + 1 < 24; i += 2) c = c.cz(i, i + 1)
-      for (let i = 0; i < 24; i++) c = c.rx(0.6, i)
+  it('conditions on every decided qubit, not just the causally near ones', () => {
+    // The counterexample that killed a light-cone optimisation here. q0 and q1
+    // are both copies of q5, but q5's gate onto q0 comes *after* its gate onto
+    // q1, so walking backward from q1 never reaches q0. They are nonetheless
+    // perfectly correlated: only |000000> and |110001> exist.
+    //
+    // Dropping q0 from q1's conditioning draws them independently, which reaches
+    // an impossible prefix and then finds a conditional of zero weight. Marginal
+    // independence is not conditional independence, and the chain needs the
+    // second one.
+    const c = new Circuit(6).h(5).cnot(5, 1).cnot(5, 0)
+    const shots = 20000
+    const got = sampleByContraction(c, { shots, blockSize: 1, seed: 7 })
+
+    expect([...got.counts.keys()].sort()).toEqual(['000000', '110001'])
+    for (const outcome of ['000000', '110001']) {
+      expect(Math.abs(got.counts.get(outcome)! / shots - 0.5)).toBeLessThan(0.02)
     }
-    const got = sampleByContraction(c, { shots: 2000, blockSize: 4, seed: 7, restarts: 4 })
-    // 6 blocks x 2000 shots is 12,000 conditionals if nothing is shared.
-    expect(got.contractions).toBeLessThan(400)
-    expect([...got.counts.values()].reduce((a, b) => a + b, 0)).toBe(2000)
+  })
+
+  it('stays exact when a swap moves qubits across the circuit', () => {
+    // Swaps relabel wires, so any reasoning about which qubits a block depends
+    // on has to follow them. A chain of them is where that goes wrong.
+    let c = new Circuit(8).h(0).h(1).ry(0.6, 2)
+    for (let i = 0; i + 1 < 8; i++) c = c.swap(i, i + 1)
+    c = c.cnot(0, 7).rz(0.5, 7).cz(3, 6).rx(0.9, 4)
+
+    const exact = c.exactProbs()
+    const shots = 30000
+    const got = sampleByContraction(c, { shots, blockSize: 2, seed: 13 })
+    for (const outcome of got.counts.keys()) expect(exact[outcome] ?? 0).toBeGreaterThan(0)
+    for (const [outcome, p] of Object.entries(exact)) {
+      expect(Math.abs((got.counts.get(outcome) ?? 0) / shots - p), `|${outcome}⟩`)
+        .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+    }
   })
 
   it('rejects nonsense parameters', () => {
@@ -545,5 +566,40 @@ describe('tensor network — sampling', () => {
     expect(() => sampleByContraction(c, { shots: 0 })).toThrow(/positive integer/)
     expect(() => sampleByContraction(c, { blockSize: 0 })).toThrow(/1\.\.16/)
     expect(() => sampleByContraction(c, { blockSize: 17 })).toThrow(/1\.\.16/)
+  })
+})
+
+describe('Circuit.runContraction — contraction as a first-class backend', () => {
+  it('returns a Distribution shaped like every other backend', () => {
+    const c = new Circuit(6).h(0).ry(0.7, 1).cnot(0, 2).cz(1, 4).rx(0.45, 5).cnot(3, 5)
+    const shots = 40000
+    const d = c.runContraction({ shots, seed: 3 })
+
+    expect(d.backend).toBe('tensor-network')
+    expect(d.qubits).toBe(6)
+    expect(d.shots).toBe(shots)
+    expect(d.truncated).toBe(false)
+
+    const exact = c.exactProbs()
+    for (const [outcome, p] of Object.entries(exact)) {
+      expect(Math.abs((d.probs[outcome] ?? 0) - p), `|${outcome}⟩`)
+        .toBeLessThan(4 * Math.sqrt(Math.max(p * (1 - p), 1e-6) / shots) + 1e-3)
+    }
+    // The bit order must be the one every other backend reports.
+    expect(Object.keys(d.probs).every(k => k.length === 6)).toBe(true)
+  })
+
+  it('agrees with run() on the same circuit', () => {
+    const c = new Circuit(5).h(0).cnot(0, 1).ry(0.9, 2).cz(2, 3).rx(0.3, 4)
+    const a = c.run({ shots: 40000, seed: 5 })
+    const b = c.runContraction({ shots: 40000, seed: 5 })
+    for (const outcome of new Set([...Object.keys(a.probs), ...Object.keys(b.probs)])) {
+      expect(Math.abs((a.probs[outcome] ?? 0) - (b.probs[outcome] ?? 0)), `|${outcome}⟩`).toBeLessThan(0.01)
+    }
+  })
+
+  it('rejects unknown options like the other backends', () => {
+    expect(() => new Circuit(2).h(0).runContraction({ shot: 10 } as never))
+      .toThrow(/unknown option 'shot'/)
   })
 })
