@@ -297,7 +297,10 @@ Exact simulation costs 2^t terms and runs out near t = 18. `targetError` costs
 2^0.228t/δ² instead — 30,495 terms for 50 T gates at δ=0.3, fewer than an exact
 t=15 run.
 
-Measured at n=100, δ=0.3 on a 64 GB machine, one run per process:
+Measured at n=100, δ=0.3 on a 64 GB machine, one run per process, **one shot** —
+so these are the cost of building the decomposition, which is what grows with t.
+Sampling is charged separately and is flat in t: at t=50 a shot costs ~43ms, so the
+default 1024 shots turns the 5.6s below into about 49s.
 
 | t | terms | time | peak RSS |
 |---|---|---|---|

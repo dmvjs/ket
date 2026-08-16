@@ -163,7 +163,7 @@ circuit.simulate({ shots: 1024 })   // picks a backend; d.backend says which
 | MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 10ms |
 | Density matrix | O(4ⁿ) sparse | mixed states and noise, n≈12 |
 | Clifford stabilizer | O(n²) | 1,024 qubits in milliseconds |
-| Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s |
+| Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s to build + 43ms/shot |
 
 Stabilizer rank is the unusual one: its cost is exponential in the *non-Clifford*
 gate count, not the width, so it goes where a statevector cannot. See
