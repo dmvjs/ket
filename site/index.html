@@ -4,13 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket — Quantum Computing in JavaScript · dmvjs</title>
-<meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Five exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
+<meta name="description" content="A general-purpose quantum circuit simulator for TypeScript. Seven exact backends — statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path — cross-verified against each other, 14 interchange formats, gate-decomposed Shor's, IonQ native compilation, zero dependencies.">
 <meta property="og:title" content="ket — quantum circuit simulation for TypeScript">
-<meta property="og:description" content="Five exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,456 tests.">
+<meta property="og:description" content="Seven exact backends that agree to floating-point precision. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies, 2,456 tests.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ket — quantum circuit simulation for TypeScript">
-<meta name="twitter:description" content="Five exact backends, cross-verified. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies.">
+<meta name="twitter:description" content="Seven exact backends, cross-verified. 14 interchange formats. Gate-decomposed Shor's. IonQ native gates. Zero dependencies.">
 <style>
   :root {
     --bg: #080a10; --card: #0c0e18; --border: #1a1d2e;
@@ -148,12 +148,12 @@
   </a>
 </div>
 <h1>ket</h1>
-<p class="subtitle">Quantum circuit simulation for TypeScript · five exact backends · 14 interchange formats · zero dependencies · 2,456 tests · v0.9.1</p>
+<p class="subtitle">Quantum circuit simulation for TypeScript · seven exact backends · 14 interchange formats · zero dependencies · 2,456 tests · v0.9.1</p>
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════ -->
 <div class="hero">
   <div class="hero-copy">
-    <p>A general-purpose quantum circuit simulator for TypeScript and JavaScript. Five backends, 14 import/export formats, and no dependencies — install it and a Bell state is three lines away.</p>
+    <p>A general-purpose quantum circuit simulator for TypeScript and JavaScript. Seven backends, 14 import/export formats, and no dependencies — install it and a Bell state is three lines away.</p>
     <div class="hero-install"><code>npm install @kirkelliott/ket</code></div>
     <p class="hero-note">Node ≥ 22, or straight from a CDN in the browser. No Python, no build step, no toolchain.</p>
   </div>
@@ -200,7 +200,7 @@ q1: ────⊕──</div>
 </div>
 
 <!-- ═══ BACKENDS ═══════════════════════════════════════════════ -->
-<div class="section-title">Five backends, one API</div>
+<div class="section-title">Seven backends, one API</div>
 <p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
   ket matches its representation to the circuit instead of committing to one, so the same API stays
   efficient across shapes that usually need different tools. Pick a backend explicitly when you want to.
@@ -208,10 +208,10 @@ q1: ────⊕──</div>
 <div class="card" style="margin-bottom:1.25rem">
   <table class="bench-table">
     <tr><th>Backend</th><th>Call</th><th>Memory</th><th>Best for</th><th>Measured</th></tr>
-    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20, 1024 shots — &lt;1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127, 1024 shots — 10ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — &lt;1ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 4ms evolve + 57ms/shot</td></tr><tr><td><b>Stabilizer rank</b></td><td><code style="color:var(--accent2)">runStabilizerRank()</code></td><td style="color:var(--muted)">O(2<sup>0.228t</sup>·n²/8)</td><td style="color:var(--muted)">Clifford+T beyond statevector width</td><td>100q, 50 T — 5.6s build + 43ms/shot</td></tr>
+    <tr><td><b>Statevector</b></td><td><code style="color:var(--accent2)">run()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Exact amplitudes to ~20 qubits</td><td>GHZ-20, 1024 shots — &lt;1ms</td></tr><tr><td><b>MPS / tensor</b></td><td><code style="color:var(--accent2)">runMps()</code></td><td style="color:var(--muted)">O(n·χ²), χ grows on demand</td><td style="color:var(--muted)">Low-entanglement circuits, 50+ qubits</td><td>GHZ-127, 1024 shots — 10ms</td></tr><tr><td><b>Density matrix</b></td><td><code style="color:var(--accent2)">dm()</code></td><td style="color:var(--muted)">sparse → dense, automatic</td><td style="color:var(--muted)">Mixed states and exact noise channels</td><td>GHZ-8 + noise — &lt;1ms</td></tr><tr><td><b>Clifford</b></td><td><code style="color:var(--accent2)">runClifford()</code></td><td style="color:var(--muted)">O(n²) tableau</td><td style="color:var(--muted)">Clifford circuits, QEC thresholds</td><td>GHZ-1024 — 4ms evolve + 57ms/shot</td></tr><tr><td><b>Stabilizer rank</b></td><td><code style="color:var(--accent2)">runStabilizerRank()</code></td><td style="color:var(--muted)">O(2<sup>0.228t</sup>·n²/8)</td><td style="color:var(--muted)">Clifford+T beyond statevector width</td><td>100q, 50 T — 5.6s build + 43ms/shot</td></tr><tr><td><b>Tensor network</b></td><td><code style="color:var(--accent2)">amplitudeByContraction()</code></td><td style="color:var(--muted)">O(2<sup>width</sup>), width = treewidth not n</td><td style="color:var(--muted)">Wide, shallow circuits at any qubit count</td><td>400q depth 4 — 362ms</td></tr><tr><td><b>Pauli path</b></td><td><code style="color:var(--accent2)">pauliPathExpectation()</code></td><td style="color:var(--muted)">O(terms), set by the light cone</td><td style="color:var(--muted)">⟨O⟩ without ever building a state</td><td>120q QAOA layer — 28ms</td></tr>
   </table>
   <p class="desc" style="margin-bottom:0">
-    The statevector starts as a sparse map and promotes itself to a flat <code>Float64Array</code> past ⅛ fill.
+    The statevector starts as a sparse map and promotes itself to a flat <code>Float64Array</code> past 1/64 fill.
     MPS bond dimension χ is exact by default and grows on demand — <code>maxBond</code> is an initial
     allocation, not a cap.
   </p>

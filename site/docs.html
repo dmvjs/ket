@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket API reference · dmvjs</title>
-<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, five backends, zero dependencies.">
+<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, seven backends, zero dependencies.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/material-darker.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
@@ -310,7 +310,7 @@
 <div class="section" style="margin-bottom:2.5rem">
   <h1>ket</h1>
   <p class="lead">
-    TypeScript quantum circuit simulator. Immutable API, five backends (statevector, MPS, density matrix, Clifford, stabilizer rank), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
+    TypeScript quantum circuit simulator. Immutable API, seven backends (statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
   </p>
 </div>
 
@@ -627,7 +627,7 @@ d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
       <h4>MPS / Tensor Network</h4>
       <div class="method">circuit.runMps({ shots, maxBond? })</div>
       <div class="mem">O(n·χ²)</div>
-      <p>Low-entanglement circuits, 50+ qubits. Exact by default — <code>maxBond</code> is an initial allocation, not a cap, and χ grows as the circuit demands. GHZ-50 runs in milliseconds at χ=2; GHZ-127 samples 1024 shots in 186 ms. Supports mid-circuit measure/reset/if, and spreads work across cores with <code>workers</code>.</p>
+      <p>Low-entanglement circuits, 50+ qubits. Exact by default — <code>maxBond</code> is an initial allocation, not a cap, and χ grows as the circuit demands. GHZ-50 runs in milliseconds at χ=2; GHZ-127 samples 1024 shots in 10 ms. Supports mid-circuit measure/reset/if, and spreads work across cores with <code>workers</code>.</p>
     </div>
     <div class="backend-card">
       <h4>Density Matrix</h4>
@@ -647,9 +647,23 @@ d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
       <div class="mem">O(2<sup>0.228t</sup> · n²/8)</div>
       <p>Clifford+T at 100+ qubits. Cost is exponential in the <i>non-Clifford</i> count <i>t</i>, not the width, so it goes where a statevector cannot. Exact runs stop near t=18; setting <code>targetError</code> derives a term budget from the circuit&rsquo;s stabilizer extent and reaches t=50 in seconds. <code>maxTGates({ qubits, targetError, memoryBytes })</code> gives the memory bound; runtime binds sooner. Approximate runs set <code>Distribution.truncated</code>, and <code>estimateNorm()</code> measures the damage &mdash; an exact decomposition of a unitary circuit has &#8214;&psi;&#8214;&sup2; = 1, so drift from 1 is the cost.</p>
     </div>
+    <div class="backend-card">
+      <h4>Tensor Network Contraction</h4>
+      <div class="method">amplitudeByContraction(circuit, bitstring)</div>
+      <div class="mem">O(2<sup>width</sup>), width = treewidth not n</div>
+      <p>Wide, shallow circuits. Contracts the circuit to a scalar, so cost follows the largest intermediate tensor rather than the qubit count &mdash; a statevector is the special case where the width is n. 400 qubits at depth 4 in 362&nbsp;ms; 40 qubits at depth 24 in 543&nbsp;ms. Diagonal gates (<code>cz</code>, <code>rz</code>, <code>t</code>&hellip;) sit on their wires as hyper-indices instead of cutting them, which is what makes depth reachable at all. <code>amplitudeBatchByContraction</code> leaves qubits open with <code>?</code> and returns all 2<sup>k</sup> amplitudes from one contraction &mdash; 65,536 in 76&nbsp;ms &mdash; and <code>amplitudeBySlicedContraction</code> trades independent repeats for memory. Planning is exposed separately: <code>planContraction</code>, <code>planContractionPartitioned</code>, <code>planBest</code>.</p>
+    </div>
+    <div class="backend-card">
+      <h4>Pauli Path</h4>
+      <div class="method">pauliPathExpectation(circuit, observable)</div>
+      <div class="mem">O(terms), set by the light cone</div>
+      <p>Expectation values &#10216;O&#10217; for a Pauli observable without ever building a state, by carrying the observable backward through the circuit. Clifford gates never branch, so a Clifford circuit costs one term per gate at any width. A 120-qubit QAOA layer takes 28&nbsp;ms. <code>threshold</code>, <code>maxTerms</code> and <code>maxWeight</code> truncate, and <code>droppedWeight</code> bounds how far the answer can have moved; <code>noise</code> damps coefficients so truncation costs less.</p>
+    </div>
   </div>
 
-  <p>All backends accept an <code>initialState</code> option to start from an arbitrary computational basis state:</p>
+  <p>The last two are not shot samplers &mdash; contraction returns amplitudes and Pauli path returns an expectation value, so neither is reachable from <code>simulate()</code>. Call them directly.</p>
+
+  <p>All shot-based backends accept an <code>initialState</code> option to start from an arbitrary computational basis state:</p>
   <pre><code class="language-typescript">circuit.run({ initialState: '110' })
 circuit.runMps({ shots: 1000, initialState: '110' })
 circuit.statevector({ initialState: '110' })</code></pre>

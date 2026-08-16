@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Quantum circuits in TypeScript — simulate locally, then run on real hardware.**
-Immutable API, five backends, zero dependencies.
+Immutable API, seven backends, zero dependencies.
 
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
@@ -150,7 +150,7 @@ is correct, and today's hardware cannot run it.
 
 ## Beyond the statevector
 
-A statevector costs 2ⁿ and stops near 24 qubits. ket carries four other
+A statevector costs 2ⁿ and stops near 24 qubits. ket carries six other
 representations and routes to the cheapest exact one automatically:
 
 ```typescript
