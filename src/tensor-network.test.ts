@@ -218,9 +218,13 @@ describe('tensor network — slicing', () => {
   })
 
   it('buys memory, and for less than the naive doubling', () => {
-    const idx = circuitNetwork(layered(10, 8), '0'.repeat(10)).map(t => t.indices)
-    const base = planContraction(idx, { restarts: 6 })
+    // The baseline must be planned with the effort `sliceContraction` spends on
+    // its own base plan, or the width it "gains" is really just the better plan
+    // more restarts found, with nothing sliced at all.
+    const idx = circuitNetwork(layered(14, 16), '0'.repeat(14)).map(t => t.indices)
+    const base = planContraction(idx, { restarts: 24, seed: 1 })
     const s = sliceContraction(idx, { targetWidth: base.width - 1, restarts: 2 })
+    expect(s.sliced.length).toBeGreaterThan(0)
     expect(s.width).toBeLessThan(base.width)
     // Two slices of a narrower contraction cost less than twice the original:
     // removing an index does not merely shrink the work, it removes some of it.
@@ -257,21 +261,21 @@ describe('tensor network — slice selection reaches a target', () => {
     // Selection by peak coverage rather than immediate width reduction: the peak
     // is held by several intermediates, so progress is made by emptying that set
     // even on steps where the width itself does not yet move.
-    const n = 10
-    const c = deep(n, 8)
+    const n = 14
+    const c = deep(n, 16)
     const b = '0'.repeat(n)
-    const sliced = amplitudeBySlicedContraction(c, b, { targetWidth: 4, restarts: 3 })
+    const sliced = amplitudeBySlicedContraction(c, b, { targetWidth: 8, restarts: 3 })
     const want = c.amplitude(b)
 
-    expect(sliced.width).toBeLessThanOrEqual(4)
+    expect(sliced.width).toBeLessThanOrEqual(8)
     expect(sliced.sliced.length).toBeGreaterThan(1)
     expect(sliced.re).toBeCloseTo(want.re, 9)
     expect(sliced.im).toBeCloseTo(want.im, 9)
   })
 
   it('costs far less than the naive 2^k the slice count suggests', () => {
-    const idx = circuitNetwork(deep(12, 8), '0'.repeat(12)).map(t => t.indices)
-    const s = sliceContraction(idx, { targetWidth: 4, restarts: 2 })
+    const idx = circuitNetwork(deep(14, 16), '0'.repeat(14)).map(t => t.indices)
+    const s = sliceContraction(idx, { targetWidth: 6, restarts: 2 })
     expect(s.slices).toBeGreaterThan(4)
     // Every slice doubles the repeats but each is a smaller contraction, so the
     // real overhead lands well under the slice count.
@@ -377,5 +381,74 @@ describe('tensor network — batched amplitudes', () => {
     const c = new Circuit(3).h(0)
     expect(() => amplitudeBatchByContraction(c, '??')).toThrow(/must have 3 characters/)
     expect(() => amplitudeBatchByContraction(c, '?X0')).toThrow(/only 0, 1 and \?/)
+  })
+})
+
+describe('tensor network — diagonal gates as hyper-indices', () => {
+  const deepCZ = (n: number, depth: number): Circuit => {
+    let c = new Circuit(n)
+    for (let i = 0; i < n; i++) c = c.h(i)
+    for (let d = 0; d < depth; d++) {
+      for (let i = d % 2; i + 1 < n; i += 2) c = c.cz(i, i + 1)
+      for (let i = 0; i < n; i++) c = c.rz(0.3 + 0.01 * i, i).rx(0.7, i)
+    }
+    return c
+  }
+
+  it('a diagonal gate sits on its wire instead of renaming it', () => {
+    // Two CZs and an rz add tensors but no new indices: a diagonal gate does not
+    // cut a wire, so the only fresh index in this circuit comes from the h.
+    const plain = circuitNetwork(new Circuit(2).h(0), '00')
+    const withDiagonals = circuitNetwork(new Circuit(2).h(0).cz(0, 1).rz(0.4, 0).cz(0, 1), '00')
+    const indicesOf = (net: { indices: string[] }[]): Set<string> =>
+      new Set(net.flatMap(t => t.indices))
+
+    expect(withDiagonals.length).toBeGreaterThan(plain.length)   // more tensors
+    expect(indicesOf(withDiagonals).size).toBe(indicesOf(plain).size)   // same indices
+  })
+
+  it('keeps a CZ layer from doubling the width', () => {
+    // Pins the mechanism by its consequence. Without hyper-indices these widths
+    // were 13, 17 and 23 — each unit of width is a doubling of memory.
+    for (const [depth, bound] of [[12, 9], [16, 12], [20, 15]] as const) {
+      const idx = circuitNetwork(deepCZ(40, depth), '0'.repeat(40)).map(t => t.indices)
+      expect(planContraction(idx, { restarts: 16 }).width).toBeLessThanOrEqual(bound)
+    }
+  })
+
+  it('an open wire ending in a diagonal gate still comes back', () => {
+    // The regression the identity cap exists for. A trailing rz/z/t shares the
+    // wire's index rather than renaming it, so without the cap the open wire is
+    // held by two tensors, looks contractible, and is summed away — a silently
+    // wrong amplitude rather than an error.
+    for (const trailing of ['rz', 'z', 't', 's'] as const) {
+      let c = new Circuit(3).h(0).cnot(0, 1).ry(0.4, 2).cz(0, 2)
+      c = trailing === 'rz' ? c.rz(0.9, 0) : c[trailing](0)
+      c = trailing === 'rz' ? c.rz(0.5, 1) : c[trailing](1)
+
+      const batch = amplitudeBatchByContraction(c, '??0')
+      for (let k = 0; k < 4; k++) {
+        const bits = [(k >> 1) & 1, k & 1]
+        const want = c.amplitude(`${bits[0]}${bits[1]}0`)
+        const got = batch.at(bits)
+        expect(got.re, `${trailing} k=${k}`).toBeCloseTo(want.re, 12)
+        expect(got.im, `${trailing} k=${k}`).toBeCloseTo(want.im, 12)
+      }
+    }
+  })
+
+  it('contractPair keeps a batch index instead of summing it', () => {
+    // Shared index 'b' is held elsewhere, so it survives as a batch index: the
+    // result is elementwise along b, not summed over it.
+    const a = { indices: ['b'], data: Float64Array.from([2, 0, 3, 0]) }
+    const c = { indices: ['b'], data: Float64Array.from([5, 0, 7, 0]) }
+    const batched = contractPair(a, c, new Set(['b']))
+    expect(batched.indices).toEqual(['b'])
+    expect(Array.from(batched.data)).toEqual([10, 0, 21, 0])
+
+    // Without the keep set the same pair is a full contraction: 2*5 + 3*7 = 31.
+    const summed = contractPair(a, c)
+    expect(summed.indices).toEqual([])
+    expect(Array.from(summed.data)).toEqual([31, 0])
   })
 })

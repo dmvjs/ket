@@ -841,25 +841,67 @@ of a contraction whose width is n.
 
 | n, depth 4 | width | operations | time |
 |---|---|---|---|
-| 20 | 4 | 2.7e3 | 18 ms |
-| 40 | 4 | 5.5e3 | 24 ms |
-| 160 | 4 | 2.2e4 | 99 ms |
-| 400 | 4 | 5.6e4 | 230 ms |
+| 20 | 4 | 1.2e3 | 27 ms |
+| 40 | 4 | 2.5e3 | 39 ms |
+| 160 | 4 | 1.0e4 | 149 ms |
+| 400 | 4 | 2.6e4 | 362 ms |
 
 Width stays flat as n grows and rises with **depth** instead, which is where the
 real limit is:
 
 | n = 40 | width | operations | time |
 |---|---|---|---|
-| depth 4 | 4 | 5.5e3 | 24 ms |
-| depth 8 | 7 | 6.8e4 | 51 ms |
-| depth 12 | 13 | 2.2e6 | 87 ms |
-| depth 16 | 17 | 1.2e8 | 282 ms |
+| depth 4 | 2 | 2.5e3 | 31 ms |
+| depth 8 | 5 | 1.2e4 | 81 ms |
+| depth 12 | 8 | 6.4e4 | 130 ms |
+| depth 16 | 11 | 5.4e5 | 185 ms |
+| depth 20 | 14 | 7.9e6 | 260 ms |
+| depth 24 | 17 | 1.3e8 | 543 ms |
 
 So this wins decisively on wide shallow circuits and loses to a statevector once
 depth pushes the width past n. A single call returns **one amplitude**, not a
 distribution — but `amplitudeBatchByContraction` leaves chosen qubits open and
 returns all 2^k at once, which is what makes sampling practical.
+
+### Diagonal gates do not cut their wires
+
+Depth is the wall, and most of what builds it is bookkeeping rather than physics.
+A gate that is diagonal in the computational basis does not mix basis states, so
+it does not need to cut its wire and start a new index — it can sit on the index
+already there. That makes the index a **hyper-index**, held by three tensors or
+more instead of two, and it stops a layer of CZs from doubling the index count.
+
+It applies to `z`, `s`, `t`, `rz`, `u1`/`p` and their inverses, and to any
+controlled version of those — `cz`, `cs`, `cp`, `crz`. A CZ becomes four numbers
+on two existing indices rather than a rank-4 tensor cutting both wires.
+
+The effect on width is large, because width is what memory is exponential in:
+
+| circuit | width before | width after | memory |
+|---|---|---|---|
+| n=40 depth 12 | 13 | **8** | 32× less |
+| n=40 depth 16 | 17 | **11** | 64× less |
+| n=40 depth 20 | 23 | **14** | 512× less |
+| n=30 depth 30 | 27 | **20** | 128× less |
+
+In wall-clock, 40 qubits at depth 20 goes from 5.4 s to 260 ms, and depth 24 —
+previously out of reach — lands at 543 ms.
+
+A hyper-index changes what a contraction step means. An index shared by two
+tensors is summed away, but one still held by a third has to survive the step, so
+it becomes a **batch index**: both operands are addressed at the same value and
+the output keeps it, which is a matrix product run once per assignment. That is
+the only change to the kernel, and `contractPair` takes the set of indices to
+keep as its third argument.
+
+The cost is planning time. A hyper-index makes every pair of tensors holding it
+a contraction candidate, so the candidate graph is denser — a 400-qubit depth-4
+plan takes 362 ms against 230 ms before, for a width of 2 instead of 4. Planning
+stays well under a second at every size measured here.
+
+This moves the wall; it does not remove it. Width still grows with depth — 20 at
+depth 30, 26 at depth 40, 34 at depth 50 on 30 qubits — and 2^width is still
+2^width. Past that point the tool is slicing.
 
 ### The order is the algorithm
 
@@ -869,7 +911,7 @@ contraction itself. It runs randomized greedy with restarts, minimising width
 first — width sets memory, and memory is what makes a contraction impossible.
 
 Planning dominates runtime at large n — contracting a 400-qubit depth-4 circuit is
-5.6e4 operations, microseconds of arithmetic, and effectively all of the 230 ms
+2.6e4 operations, microseconds of arithmetic, and effectively all of the 362 ms
 goes on choosing the order.
 
 Three planners are available, and which one wins is a property of the network:
@@ -935,14 +977,20 @@ The doubling is a worst case, and the gap widens with the slice count, because a
 slice is not merely a smaller copy of the same contraction — removing an index
 also removes work that was being repeated inside it:
 
-| circuit | width | sliced | slices | actual overhead |
-|---|---|---|---|---|
-| n=20 d=12 → target 9 | 12 → **9** | 5 | 32 | **4.7×** |
-| n=20 d=12 → target 7 | 12 → **7** | 9 | 512 | **26.9×** |
-| n=40 d=12 → target 10 | 13 → **11** | 3 | 8 | **4.8×** |
+| circuit | width | sliced | slices | memory | actual overhead |
+|---|---|---|---|---|---|
+| n=40 d=20 → target 13 | 14 → **13** | 1 | 2 | 2× less | **1.14×** |
+| n=30 d=30 → target 19 | 20 → **19** | 2 | 4 | 2× less | **1.43×** |
+| n=20 d=12 → target 5 | 8 → **5** | 9 | 512 | 8× less | **168×** |
 
-The middle row is the point: **32× less memory for 27× more work**, against a
-naive expectation of 512×, and every one of those 512 contractions is independent.
+The first two rows are the point: half the memory for 14–43% more work, and every
+one of those contractions is independent. The last row is the honest other half —
+returns fall off, and past a few indices slicing is paying a lot for a little.
+
+These are smaller gains than the same table showed before diagonal gates became
+hyper-indices, and for a good reason: slicing exploits redundancy in the
+contraction, and a network that is already 6 width narrower has less of it left
+to give. The memory came out of the network instead.
 
 Selection ranks candidates by how many of the widest intermediates carry them.
 Width alone is the wrong signal — a peak held by six intermediates does not fall
@@ -1836,7 +1884,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,452 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,456 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

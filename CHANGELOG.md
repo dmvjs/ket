@@ -82,10 +82,10 @@ the contraction **width** — the largest intermediate tensor — which follows 
 circuit's connectivity rather than its qubit count. A statevector is the special
 case where the width is n.
 
-A depth-4 circuit contracts at width 4 whether it is 20 qubits or 400, so a
-400-qubit amplitude takes 29 s where a statevector needs 2⁴⁰⁰. Width grows with
-depth instead — 4, 8, 13, 17 at depths 4, 8, 12, 16 on 40 qubits — which is where
-the real limit sits. It returns one amplitude, not a distribution.
+A depth-4 circuit contracts at width 2 whether it is 20 qubits or 400, so a
+400-qubit amplitude takes 362 ms where a statevector needs 2⁴⁰⁰. Width grows with
+depth instead — 2, 5, 8, 11 at depths 4, 8, 12, 16 on 40 qubits — which is where
+the real limit sits.
 
 Planning is exposed separately, because the order *is* the algorithm: the same
 network contracted well or badly differs by orders of magnitude. Three planners
@@ -142,8 +142,10 @@ are independent — the mechanism by which contractions too large for any machin
 are spread across many.
 
 The doubling is a worst case: one sliced index bought half the memory for
-1.27–1.53× the work on the circuits measured, because removing an index also
-removes work that was being repeated inside the contraction.
+1.14–1.78× the work on the circuits measured, because removing an index also
+removes work that was being repeated inside the contraction. Returns fall off
+after a few indices — 9 sliced indices on a 20-qubit depth-12 network buy 8× the
+memory for 168× the work.
 
 Selection ranks candidates by how many of the widest intermediates carry them,
 and measures progress on `(width, count of intermediates at that width)`. Width
@@ -160,6 +162,52 @@ as trustworthy as the planner is repeatable: with too few restarts it measures
 planner variance instead of the slice and stops early, reaching width 11 where 24
 restarts reach 7. It stops at `maxSliced` and reports the width it reached rather
 than the one requested.
+
+### Changed — diagonal gates no longer cut their wires
+
+Depth is what makes a contraction impossible, and most of the width building it
+was bookkeeping. A gate diagonal in the computational basis does not mix basis
+states, so it does not need to cut its wire and start a fresh index — it sits on
+the index already there. The index is then held by three tensors or more, and a
+layer of CZs stops doubling the index count.
+
+Applies to `z`, `s`, `t`, `rz`, `u1`/`p` and inverses, and to any controlled
+version — `cz`, `cs`, `cp`, `crz`.
+
+| circuit | width before | width after | time before | time after |
+|---|---|---|---|---|
+| n=40 depth 12 | 13 | **8** | 87 ms | 130 ms |
+| n=40 depth 16 | 17 | **11** | 282 ms | 185 ms |
+| n=40 depth 20 | 23 | **14** | 5.4 s | **260 ms** |
+| n=40 depth 24 | — | **17** | out of reach | **543 ms** |
+| n=30 depth 30 | 27 | **20** | > 60 s | **2.8 s** |
+
+Width falling by 6 is 64× less memory and 64× less arithmetic, which is why
+depth 24 at 40 qubits went from unreachable to half a second.
+
+An index still held by a third tensor cannot be summed when two of its holders
+contract, so it survives as a **batch index**: both operands are addressed at the
+same value and the result keeps it — a matrix product run once per assignment.
+`contractPair` takes the indices to keep as a third argument; `planContraction`,
+`evaluatePlan` and the slicing profiler apply the same rule when they replay a
+plan over index sets.
+
+Open wires get an identity cap so an index held once still means an output. A
+trailing diagonal gate shares its wire's index rather than renaming it, and
+without the cap `amplitudeBatchByContraction` would have summed an open wire away
+instead of returning it.
+
+The cost is planning time: a hyper-index makes every pair of tensors holding it a
+candidate, so the candidate graph is denser and a 400-qubit depth-4 plan takes
+362 ms against 230 ms — for a width of 2 instead of 4.
+
+This moves the wall rather than removing it. Width still grows with depth — 20 at
+depth 30, 26 at depth 40, 34 at depth 50 on 30 qubits.
+
+Three slicing tests were re-aimed at deeper circuits. They had been asserting
+that slicing was *needed* on networks that no longer need it, and one asserted
+overhead is always above 1, which is no longer true — slicing a hyper-index
+removes it from every tensor holding it at once.
 
 ### Added — many amplitudes from one contraction
 
@@ -257,7 +305,7 @@ a near-miss where there is one:
 
 ### Tests
 
-2,452, up from 2,154.
+2,456, up from 2,154.
 
 ## 0.9.0
 

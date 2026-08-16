@@ -73,6 +73,7 @@ export function planContraction(
     // so a step costs the merged tensor's degree rather than a scan of every
     // pair. Rescanning was O(tensors x candidates) per step: at n=28 that made
     // planning 957ms against 17ms of actual contraction.
+    const held = holdCounts(network)
     const holders = new Map<string, Set<number>>()
     live.forEach((idx, i) => {
       for (const x of idx!) {
@@ -99,12 +100,17 @@ export function planContraction(
     const version = new Int32Array(live.length)
     const heap = new MinHeap()
 
+    // A shared index only leaves the network when this pair holds the last two
+    // copies of it; while a third tensor still carries it the index survives the
+    // step as a batch index. Work is 2^|union| either way — it is the *rank* of
+    // the result that a hyper-index changes, and rank is what sets memory.
     const scoreOf = (a: number, b: number): { score: number; outRank: number; cost: number } => {
       const A = live[a]!, B = live[b]!
-      let shared = 0
-      for (const x of A) if (B.has(x)) shared++
-      const outRank = A.size + B.size - 2 * shared
-      const cost = size(A.size + B.size - shared)
+      let shared = 0, summed = 0
+      for (const x of A) if (B.has(x)) { shared++; if (held.get(x) === 2) summed++ }
+      const union = A.size + B.size - shared
+      const outRank = union - summed
+      const cost = size(union)
       return { score: outRank + Math.log2(cost) * 0.001 + rand() * jitter, outRank, cost }
     }
 
@@ -144,8 +150,12 @@ export function planContraction(
       const { outRank, cost: stepCost } = scoreOf(a, b)
       const A = live[a]!, B = live[b]!
       const merged = new Set<string>()
-      for (const x of A) if (!B.has(x)) merged.add(x)
-      for (const x of B) if (!A.has(x)) merged.add(x)
+      for (const x of A) if (!B.has(x) || held.get(x)! > 2) merged.add(x)
+      for (const x of B) if (!A.has(x) || held.get(x)! > 2) merged.add(x)
+
+      for (const x of A) held.set(x, held.get(x)! - 1)
+      for (const x of B) held.set(x, held.get(x)! - 1)
+      for (const x of merged) held.set(x, held.get(x)! + 1)
 
       live[a] = merged
       live[b] = undefined
@@ -261,45 +271,82 @@ export function permuteTensor(t: Tensor, order: readonly string[]): Tensor {
  * The zero test in the middle loop is not a micro-optimisation here. Gate tensors
  * are mostly zeros — a CNOT is 4 non-zero entries out of 16 — so skipping a zero
  * row of the left operand skips an entire pass over the right one.
+ *
+ * `keep` names shared indices that must survive rather than be summed, because
+ * some third tensor still holds them — a hyper-index. Those become batch indices:
+ * both operands are addressed at the same value and the output carries it, so the
+ * matrix product runs once per assignment over a contiguous block of each operand.
  */
-export function contractPair(a: Tensor, b: Tensor): Tensor {
+export function contractPair(a: Tensor, b: Tensor, keep?: ReadonlySet<string>): Tensor {
   const shared = a.indices.filter(i => b.indices.includes(i))
+  const batch = keep && keep.size ? shared.filter(i => keep.has(i)) : []
+  const summed = batch.length ? shared.filter(i => !keep!.has(i)) : shared
   const aFree = a.indices.filter(i => !shared.includes(i))
   const bFree = b.indices.filter(i => !shared.includes(i))
 
-  const A = permuteTensor(a, [...aFree, ...shared])
-  const B = permuteTensor(b, [...shared, ...bFree])
+  const A = permuteTensor(a, [...batch, ...aFree, ...summed])
+  const B = permuteTensor(b, [...batch, ...summed, ...bFree])
 
+  const G = 1 << batch.length
   const M = 1 << aFree.length
-  const K = 1 << shared.length
+  const K = 1 << summed.length
   const N = 1 << bFree.length
-  const data = new Float64Array(M * N * 2)
+  const data = new Float64Array(G * M * N * 2)
 
-  for (let i = 0; i < M; i++) {
-    const aRow = i * K
-    const cRow = i * N
-    for (let k = 0; k < K; k++) {
-      const ar = A.data[2 * (aRow + k)]!
-      const ai = A.data[2 * (aRow + k) + 1]!
-      if (ar === 0 && ai === 0) continue
-      const bRow = k * N
-      for (let j = 0; j < N; j++) {
-        const br = B.data[2 * (bRow + j)]!
-        const bi = B.data[2 * (bRow + j) + 1]!
-        data[2 * (cRow + j)] = (data[2 * (cRow + j)] ?? 0) + ar * br - ai * bi
-        data[2 * (cRow + j) + 1] = (data[2 * (cRow + j) + 1] ?? 0) + ar * bi + ai * br
+  for (let g = 0; g < G; g++) {
+    const aBase = g * M * K
+    const bBase = g * K * N
+    const cBase = g * M * N
+    for (let i = 0; i < M; i++) {
+      const aRow = aBase + i * K
+      const cRow = cBase + i * N
+      for (let k = 0; k < K; k++) {
+        const ar = A.data[2 * (aRow + k)]!
+        const ai = A.data[2 * (aRow + k) + 1]!
+        if (ar === 0 && ai === 0) continue
+        const bRow = bBase + k * N
+        for (let j = 0; j < N; j++) {
+          const br = B.data[2 * (bRow + j)]!
+          const bi = B.data[2 * (bRow + j) + 1]!
+          data[2 * (cRow + j)] = (data[2 * (cRow + j)] ?? 0) + ar * br - ai * bi
+          data[2 * (cRow + j) + 1] = (data[2 * (cRow + j) + 1] ?? 0) + ar * bi + ai * br
+        }
       }
     }
   }
 
-  return { indices: [...aFree, ...bFree], data }
+  return { indices: [...batch, ...aFree, ...bFree], data }
+}
+
+/**
+ * How many live tensors hold each index.
+ *
+ * A shared index may only be summed when the pair contracting it holds the last
+ * two copies; while a third tensor still carries it, it is a hyper-index and has
+ * to survive the step.
+ */
+function holdCounts(tensors: readonly (readonly string[])[]): Map<string, number> {
+  const held = new Map<string, number>()
+  for (const idx of tensors) for (const x of idx) held.set(x, (held.get(x) ?? 0) + 1)
+  return held
 }
 
 /** Contract a whole network following a plan. */
 export function contractNetwork(tensors: readonly Tensor[], plan: ContractionPlan): Tensor {
   const live: (Tensor | undefined)[] = tensors.slice()
+  const held = holdCounts(tensors.map(t => t.indices))
+
   for (const [a, b] of plan.steps) {
-    live[a] = contractPair(live[a]!, live[b]!)
+    const A = live[a]!, B = live[b]!
+    const keep = new Set<string>()
+    for (const x of A.indices) if (B.indices.includes(x) && (held.get(x) ?? 0) > 2) keep.add(x)
+
+    const merged = contractPair(A, B, keep)
+    for (const x of A.indices) held.set(x, held.get(x)! - 1)
+    for (const x of B.indices) held.set(x, held.get(x)! - 1)
+    for (const x of merged.indices) held.set(x, (held.get(x) ?? 0) + 1)
+
+    live[a] = merged
     live[b] = undefined
   }
   const remaining = live.filter((t): t is Tensor => t !== undefined)
@@ -334,11 +381,40 @@ function matrixOf(name: string, params: readonly number[] | undefined): Float64A
   }
 }
 
+/** Gates that are diagonal in the computational basis. */
+const DIAGONAL_1Q = new Set(['id', 'z', 's', 'sdg', 'si', 't', 'tdg', 'ti', 'rz', 'u1', 'p'])
+
+/** diag(d00, d11) as a rank-1 tensor's data, or null when the gate is not diagonal. */
+function diagonalOf(name: string, params: readonly number[] | undefined): Float64Array | null {
+  if (!DIAGONAL_1Q.has(name)) return null
+  const m = matrixOf(name, params)
+  return m ? Float64Array.from([m[0]!, m[1]!, m[6]!, m[7]!]) : null
+}
+
+/**
+ * A controlled-diagonal gate as a rank-2 tensor over [control, target].
+ *
+ * Controlling a diagonal gate leaves it diagonal, so a CZ or a CPHASE never
+ * cuts either wire — the whole gate is 4 numbers on the two existing indices.
+ */
+function controlledDiagonalOf(name: string, params: readonly number[] | undefined): Float64Array | null {
+  if (!name.startsWith('c')) return null
+  const base = diagonalOf(name.slice(1), params)
+  if (!base) return null
+  return Float64Array.from([1, 0, 1, 0, base[0]!, base[1]!, base[2]!, base[3]!])
+}
+
 /**
  * Build the tensor network for ⟨bitstring|circuit|0…0⟩.
  *
  * Each wire carries an index that is renamed every time a gate touches it, so
  * index identity encodes the circuit's connectivity and nothing else has to.
+ *
+ * Diagonal gates are the exception, and they are why deep circuits are reachable
+ * at all. A diagonal gate does not mix basis states, so it does not cut its
+ * wires: it sits on the indices already there, shared with whatever produced and
+ * consumes them. That makes those indices *hyper-indices*, held by three tensors
+ * or more, and it stops a CZ layer from doubling the index count.
  */
 export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
   const n = circuit.qubits
@@ -368,6 +444,8 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
     if (kind === 'single') {
       const q = op['q'] as number
       const meta = op['meta'] as { name: string; params?: number[] }
+      const diag = diagonalOf(meta.name, meta.params)
+      if (diag) { tensors.push({ indices: [wire[q]!], data: diag }); continue }
       const mat = matrixOf(meta.name, meta.params)
       if (!mat) throw new TypeError(`circuitNetwork does not support gate '${meta.name}'`)
       const out = next()
@@ -380,9 +458,11 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
       wire[c] = oc; wire[t] = ot
     } else if (kind === 'controlled') {
       const meta = op['meta'] as { name: string; params?: number[] }
+      const c = op['control'] as number, t = op['target'] as number
+      const cdiag = controlledDiagonalOf(meta.name, meta.params)
+      if (cdiag) { tensors.push({ indices: [wire[c]!, wire[t]!], data: cdiag }); continue }
       const base = matrixOf(meta.name.replace(/^c/, ''), meta.params)
       if (!base) throw new TypeError(`circuitNetwork does not support gate '${meta.name}'`)
-      const c = op['control'] as number, t = op['target'] as number
       const oc = next(), ot = next()
       tensors.push({ indices: [oc, ot, wire[c]!, wire[t]!], data: controlledTensor(base) })
       wire[c] = oc; wire[t] = ot
@@ -403,6 +483,18 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
     if (ch === '?') continue
     const bit = ch === '1' ? 1 : 0
     tensors.push({ indices: [wire[q]!], data: Float64Array.from(bit ? [0, 0, 1, 0] : [1, 0, 0, 0]) })
+  }
+
+  // An open wire gets an identity cap, in ascending qubit order. A trailing
+  // diagonal gate shares the wire's index rather than renaming it, so without
+  // the cap an open wire can end on an index two tensors hold — which the
+  // contraction would sum away instead of returning. The cap restores the
+  // invariant the rest of the module relies on: an index held once is an output.
+  for (let q = 0; q < n; q++) {
+    if (bitstring[q] !== '?') continue
+    const out = next()
+    tensors.push({ indices: [out, wire[q]!], data: matrixOf('id', undefined)! })
+    wire[q] = out
   }
   return tensors
 }
@@ -778,6 +870,7 @@ export function evaluatePlan(
   steps: readonly ContractionStep[],
 ): { width: number; cost: number } {
   const live: (Set<string> | undefined)[] = network.map(idx => new Set(idx))
+  const held = holdCounts(network)
   let width = Math.max(0, ...live.map(s => s!.size))
   let cost = 0
   for (const [a, b] of steps) {
@@ -786,8 +879,11 @@ export function evaluatePlan(
     for (const x of A) if (B.has(x)) shared++
     cost += 2 ** (A.size + B.size - shared)
     const merged = new Set<string>()
-    for (const x of A) if (!B.has(x)) merged.add(x)
-    for (const x of B) if (!A.has(x)) merged.add(x)
+    for (const x of A) if (!B.has(x) || held.get(x)! > 2) merged.add(x)
+    for (const x of B) if (!A.has(x) || held.get(x)! > 2) merged.add(x)
+    for (const x of A) held.set(x, held.get(x)! - 1)
+    for (const x of B) held.set(x, held.get(x)! - 1)
+    for (const x of merged) held.set(x, held.get(x)! + 1)
     width = Math.max(width, merged.size)
     live[a] = merged
     live[b] = undefined
@@ -904,6 +1000,7 @@ function planProfile(
   steps: readonly ContractionStep[],
 ): { width: number; peakCount: number; cost: number; peakIndices: Map<string, number> } {
   const live: (Set<string> | undefined)[] = network.map(idx => new Set(idx))
+  const held = holdCounts(network)
   const sizes: number[] = []
   const holders: Set<string>[] = []
   let cost = 0
@@ -914,8 +1011,11 @@ function planProfile(
     for (const x of A) if (B.has(x)) shared++
     cost += 2 ** (A.size + B.size - shared)
     const merged = new Set<string>()
-    for (const x of A) if (!B.has(x)) merged.add(x)
-    for (const x of B) if (!A.has(x)) merged.add(x)
+    for (const x of A) if (!B.has(x) || held.get(x)! > 2) merged.add(x)
+    for (const x of B) if (!A.has(x) || held.get(x)! > 2) merged.add(x)
+    for (const x of A) held.set(x, held.get(x)! - 1)
+    for (const x of B) held.set(x, held.get(x)! - 1)
+    for (const x of merged) held.set(x, held.get(x)! + 1)
     live[a] = merged
     live[b] = undefined
     sizes.push(merged.size)
