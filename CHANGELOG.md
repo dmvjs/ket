@@ -1,5 +1,312 @@
 # Changelog
 
+## 0.9.1
+
+### Fixed — stabilizer-rank sampling was wrong on any support single-bit flips cannot cross
+
+`runStabilizerRank` returned a confident wrong distribution for a whole class of
+states. A 26-qubit GHZ came back as `P(|1…1⟩) = 1` against a true 1/2 — on every
+seed, with nothing to indicate a problem.
+
+**Results from 0.9.0 and earlier are wrong for any circuit whose support is not
+connected under single-bit flips, at n ≥ 23.** That class is not exotic: GHZ and
+cat states, W states, and stabilizer-code states all have parity- or
+weight-constrained support, and those are exactly what one points a stabilizer
+simulator at. Clifford-only circuits, connected-support circuits, and anything
+below n = 23 are unaffected — under that width the sampler enumerates exactly.
+
+The decomposition was never at fault. Forcing `method: 'exact'` on the same
+26-qubit state gave the right answer all along; only the Metropolis fallback was
+broken. Its single-bit-flip proposals cannot cross a zero-amplitude basis state,
+so the chain seeds on one component of the support and cannot leave it — for GHZ
+every neighbour of the seed is empty, so it emitted its starting state for every
+shot.
+
+A chain that accepts no move now probes for supported states elsewhere. Having
+accepted nothing it has proved every neighbour empty, so finding any other
+supported state is *proof* the samples are wrong rather than evidence of it, and
+it throws with an explanation instead of returning them. Detection costs 1–8 ms
+even at n = 100. A genuine point mass, where the frozen chain is correct, still
+returns normally.
+
+Two tests were passing against the degenerate output — they asserted only that
+shots came back and that samples lay in the GHZ support, both true of a single
+repeated bitstring — and `benchmark/stabilizer-rank.ts` measured a run that never
+sampled at all. All corrected.
+
+### Fixed — MPS trajectories cleared the whole workspace on every shot
+
+`MpsTrajectory.reset()` zeroed the entire preallocated workspace per shot. The
+workspace is sized for `maxChi`, so at the default `maxBond = 64` each site holds
+262 KB while a χ = 2 state needs 128 bytes: a 50-qubit run paid **13 MB of memset
+per shot to clear 6 KB of live data**. It now clears only the extent the previous
+shot used.
+
+That was both a single-threaded tax and the reason worker runs stopped scaling —
+every thread streamed those 13 MB at once and they contended on memory.
+
+- Single-threaded: **3.9× faster** (2038 ms → 518 ms, 50 qubits, 32k shots)
+- Worker scaling: **2.4× → 7.7×** on 16 cores
+- End to end at 8 workers: 848 ms → 73 ms
+- **127-qubit GHZ, 1024 shots: 186 ms → 10 ms**
+
+### Changed — sparse states promote to dense at 1/64 fill instead of 1/8
+
+The break-even between the sparse and dense kernels sits near 2ⁿ/100; promotion
+at 2ⁿ/8 was twelve times later than that, so every amplitude past the crossover
+paid a BigInt key, a boxed complex and a Map slot to build and was then copied
+into the dense buffer anyway.
+
+Measured across dense, sparse, partial-occupancy, QFT and Grover circuits at
+n = 10…22, `fill: 64` is faster everywhere and slower nowhere — 4.9× on a
+75%-occupancy state at n = 16, 4.2× at n = 22 (788 ms → 188 ms), 2.0× on QFT-16.
+Genuinely sparse states still never promote. Override with `dense: { fill }`.
+
+The `fill` option was also documented backwards: **higher** values promote sooner.
+
+### Changed — sparse kernel applies gates in place
+
+Diagonal gates (`z`, `s`, `t`, `rz`, `u1`, `p` and `cu1`) only scale amplitudes
+and cannot change the support, so they now skip the pairing machinery entirely —
+which per entry was a `Set` insert and lookup, three BigInt allocations and two
+extra Map lookups. The general path drops that `Set` too, and gates mutate the
+state rather than rebuilding the map, matching what the dense kernel already did.
+
+Grover-12 **1.8× faster**; QFT-20 1.2×.
+
+### Added — amplitudes by tensor-network contraction
+
+`amplitudeByContraction(circuit, bitstring)` computes ⟨x|U|0…0⟩ by treating the
+circuit as a tensor network and contracting it to a scalar. Cost is governed by
+the contraction **width** — the largest intermediate tensor — which follows the
+circuit's connectivity rather than its qubit count. A statevector is the special
+case where the width is n.
+
+A depth-4 circuit contracts at width 2 whether it is 20 qubits or 400, so a
+400-qubit amplitude takes 362 ms where a statevector needs 2⁴⁰⁰. Width grows with
+depth instead — 2, 5, 8, 11 at depths 4, 8, 12, 16 on 40 qubits — which is where
+the real limit sits.
+
+Planning is exposed separately, because the order *is* the algorithm: the same
+network contracted well or badly differs by orders of magnitude. Three planners
+ship — randomized greedy (`planContraction`), recursive bisection with
+Fiduccia–Mattheyses refinement (`planContractionPartitioned`), and `planBest`,
+which runs both and keeps the better.
+
+Neither planner dominates. Greedy wins on smaller circuits (width 7 against 8 at
+n=14, 5 against 6 at n=30); bisection pulls ahead as width grows, which is where
+the order matters most — 12 against 13 at n=40 d=12, **13 against 15 at n=50 d=14**
+(four times less memory), 15 against 17 at n=60 d=16. `planBest` runs both and
+keeps the better, which is cheap because `evaluatePlan` scores a plan without
+touching tensor data.
+
+Bisection needed two things to become competitive, both found by measuring rather
+than assuming. **Multilevel coarsening**: flat refinement cannot escape a local
+minimum unless some single-vertex move improves matters, and on these graphs none
+does; coarsening collapses clusters so one move relocates a whole region.
+**Searching the balance tolerance**: balanced halves are the wrong shape for a
+circuit, whose best order is a lopsided sweep, and forcing them cost 2–4 width.
+
+### Changed — contraction planning is heap-driven
+
+Candidate pairs now live in a min-heap with lazy invalidation, so each step costs
+the merged tensor's degree instead of a scan over every remaining pair. Planning a
+100-qubit network drops from 6,658 ms to 27 ms; a 60-qubit one from 5,182 ms to
+25 ms.
+
+Freezing a candidate's jittered score at push time means one restart explores
+slightly less than rescoring everything each step, costing 1–2 width on its own.
+Restarts are cheap now, so the default rises from 24 to 64, which recovers the
+quality and is still several times faster than the old default.
+
+### Changed — contraction kernel is a permute plus a matrix product
+
+A contraction over shared indices *is* a matrix product once those indices are
+contiguous, so both operands are permuted and multiplied rather than walked
+position by position with the index decomposition repeated per element.
+
+Between 1.4× and 4.6× faster, the advantage growing with contraction size:
+77.5 ms to 16.7 ms on a 28-qubit depth-14 network. Operands already in the right
+order skip the permutation, and a zero row of the left operand skips an entire
+pass over the right — worth having, since gate tensors are mostly zeros.
+
+Arithmetic is no longer the bottleneck: at that size the contraction is 17 ms
+against 957 ms of planning.
+
+### Added — contraction slicing
+
+`amplitudeBySlicedContraction` fixes a set of indices rather than summing over
+them, contracting once per assignment and adding the results. Each sliced index
+halves the memory and doubles the number of contractions, and those contractions
+are independent — the mechanism by which contractions too large for any machine
+are spread across many.
+
+The doubling is a worst case: one sliced index bought half the memory for
+1.14–1.78× the work on the circuits measured, because removing an index also
+removes work that was being repeated inside the contraction. Returns fall off
+after a few indices — 9 sliced indices on a 20-qubit depth-12 network buy 8× the
+memory for 168× the work.
+
+Selection ranks candidates by how many of the widest intermediates carry them,
+and measures progress on `(width, count of intermediates at that width)`. Width
+alone is the wrong signal: a peak held by six intermediates does not fall when an
+index leaves five of them, so a width-only rule stalls after a single slice.
+Emptying the peak set is the step before the width moves.
+
+That reaches real targets — width 12 down to 7 on a 20-qubit depth-12 circuit,
+**32× less memory for 27× more work** against a naive 512×, with every slice
+independent.
+
+Candidates are scored by planning the reduced network, so the comparison is only
+as trustworthy as the planner is repeatable: with too few restarts it measures
+planner variance instead of the slice and stops early, reaching width 11 where 24
+restarts reach 7. It stops at `maxSliced` and reports the width it reached rather
+than the one requested.
+
+### Changed — diagonal gates no longer cut their wires
+
+Depth is what makes a contraction impossible, and most of the width building it
+was bookkeeping. A gate diagonal in the computational basis does not mix basis
+states, so it does not need to cut its wire and start a fresh index — it sits on
+the index already there. The index is then held by three tensors or more, and a
+layer of CZs stops doubling the index count.
+
+Applies to `z`, `s`, `t`, `rz`, `u1`/`p` and inverses, and to any controlled
+version — `cz`, `cs`, `cp`, `crz`.
+
+| circuit | width before | width after | time before | time after |
+|---|---|---|---|---|
+| n=40 depth 12 | 13 | **8** | 87 ms | 130 ms |
+| n=40 depth 16 | 17 | **11** | 282 ms | 185 ms |
+| n=40 depth 20 | 23 | **14** | 5.4 s | **260 ms** |
+| n=40 depth 24 | — | **17** | out of reach | **543 ms** |
+| n=30 depth 30 | 27 | **20** | > 60 s | **2.8 s** |
+
+Width falling by 6 is 64× less memory and 64× less arithmetic, which is why
+depth 24 at 40 qubits went from unreachable to half a second.
+
+An index still held by a third tensor cannot be summed when two of its holders
+contract, so it survives as a **batch index**: both operands are addressed at the
+same value and the result keeps it — a matrix product run once per assignment.
+`contractPair` takes the indices to keep as a third argument; `planContraction`,
+`evaluatePlan` and the slicing profiler apply the same rule when they replay a
+plan over index sets.
+
+Open wires get an identity cap so an index held once still means an output. A
+trailing diagonal gate shares its wire's index rather than renaming it, and
+without the cap `amplitudeBatchByContraction` would have summed an open wire away
+instead of returning it.
+
+The cost is planning time: a hyper-index makes every pair of tensors holding it a
+candidate, so the candidate graph is denser and a 400-qubit depth-4 plan takes
+362 ms against 230 ms — for a width of 2 instead of 4.
+
+This moves the wall rather than removing it. Width still grows with depth — 20 at
+depth 30, 26 at depth 40, 34 at depth 50 on 30 qubits.
+
+Three slicing tests were re-aimed at deeper circuits. They had been asserting
+that slicing was *needed* on networks that no longer need it, and one asserted
+overhead is always above 1, which is no longer true — slicing a hyper-index
+removes it from every tensor holding it at once.
+
+### Added — many amplitudes from one contraction
+
+`amplitudeBatchByContraction(circuit, pattern)` takes `?` for a qubit to leave
+open. The wire is not closed off, so the contraction ends on a tensor over those
+qubits rather than a scalar, and one contraction yields every amplitude matching
+the pattern.
+
+At 60 qubits and depth 10, **65,536 amplitudes in 76 ms** against a projected
+~3,299 s one at a time. That is not a constant factor — contracting per bitstring
+repeats the whole network each time, and the batch does it once.
+
+This is what makes contraction usable for sampling rather than for spot checks.
+The open indices widen every intermediate carrying them, so batch size trades
+against contraction width — the same currency slicing spends, which is why the
+two belong together.
+
+### Added — expectation values by Pauli-path propagation
+
+`pauliPathExpectation(circuit, observable)` computes ⟨ψ|O|ψ⟩ for a Pauli
+observable without building a state, by carrying the observable backward through
+the circuit in the Heisenberg picture.
+
+The cost model is unlike the other backends: a Clifford gate maps one Pauli to
+±one Pauli at any width, so width is nearly free, and only rotations branch. What
+costs is the surviving term count, which is set by the observable's light cone
+rather than the qubit count. Two QAOA layers with a two-local observable hold at
+63 terms from 8 qubits to 120, so **120 qubits takes 28 ms** where a statevector
+needs 127 ms at 16 and is out of reach past ~24.
+
+It answers ⟨O⟩ only — no sampling, no state — which is what VQE and QAOA actually
+want. Truncation is reported rather than hidden: `droppedWeight` bounds the error
+in the returned value, and unsupported gates are refused by name.
+
+Truncation runs along two axes, and both matter at depth. `maxWeight` discards
+Pauli terms above a given weight; `noise: { p1, p2 }` damps terms by the same
+depolarizing convention the density-matrix backend uses, validated against exact
+`Tr(ρP)` at n ≤ 4. On a 60-qubit kicked-Ising circuit at depth 6, where an
+exact-ish run holds 62,626 terms in 8.7 s, `maxWeight: 6` gets the same answer to
+four decimals in 1.2 s, and modelling the device noise takes 124 ms — the latter
+being a better model of real hardware rather than a worse one of ideal hardware.
+
+### Added — one conformance battery for every backend
+
+`src/conformance.test.ts` replaces eight hand-written per-backend test blocks
+with a single battery that all six backends run through: agreement with the
+analytic oracle, normalisation, seed determinism, and support containment.
+
+It also carries invariants that hold **past statevector reach**, which is where
+the stabilizer-rank bug lived and why nothing caught it — a GHZ state is two
+outcomes at 1/2 each at any width, no oracle required. Adding a backend now means
+declaring what it accepts and how it samples.
+
+The contract it encodes: **a backend may decline a circuit; it may not answer one
+wrongly.** A refusal passes, provided it explains itself.
+
+### Changed — published figures corrected to measured values
+
+Several numbers in the README, reference and site did not survive measurement:
+
+- Multi-core speedup was quoted as 4× and had never been measured; it is 3.8× at
+  4 workers and 7.1× at 8, on 16 cores.
+- `exactProbs()` examples promised `{ '00': 0.5, '11': 0.5 }`; it returns
+  `0.4999999999999999`, one ulp below, because 1/√2 is not representable in a
+  double. The arithmetic is unchanged — rounding inside `exactProbs()` would hide
+  real numerical error in the method people use to check correctness. "Exact"
+  means free of sampling variance, not free of float error.
+- The GHZ fidelity chart was labelled `P(|0…0⟩ + |11…1⟩)` but plots the
+  probability of an error-free run (52%); landing on one of the two ideal
+  outcomes is 46.9% ± 1.5% over 4096 shots. Both figures are now given.
+- The stabilizer-rank headline is the cost of building the decomposition at one
+  shot. Sampling is flat in t and charged separately: ~43 ms/shot at t = 50, so
+  the default 1024 shots turns 5.6 s into about 49 s.
+- The Clifford figure had the same problem: "GHZ-1024 — 3997 ms" was a 64-shot
+  run with the shot count left off. Evolving the tableau takes 4 ms; each shot
+  costs ~57 ms, because sampling 1,024 qubits is the expensive part. Both are now
+  stated. The MPS, statevector and density-matrix rows were also re-measured.
+- Bundle sizes in the reference were stale (429/195/196 KB → 431/196/197 KB).
+
+### Fixed — option objects silently ignored unknown keys
+
+Destructuring drops any key a method does not name, so a wrong option changed
+behaviour without complaint. Passing `delta` to `runStabilizerRank`, whose option
+is `targetError`, left the run exact rather than sparsified — a different
+simulation, no warning, and plausible numbers out the other end. It is how a
+benchmark in this very release cycle came to "disprove" a documented figure that
+was in fact correct.
+
+`run`, `runMps`, `runClifford`, `runStabilizerRank`, `simulate`, `statevector`
+and `dm` now reject keys they do not read, listing the valid ones and suggesting
+a near-miss where there is one:
+
+    runMps: unknown option 'maxbond' — did you mean 'maxBond'? Valid options:
+    shots, seed, maxBond, truncErr, maxChi, initialState, noise, workers.
+
+### Tests
+
+2,456, up from 2,154.
+
 ## 0.9.0
 
 ### Fixed — OpenQASM import mis-parsed multi-register programs, silently
@@ -94,7 +401,7 @@ unguarded, they threw on every `runMps` call in the browser.
 
 ### Tests
 
-2,152, up from 2,012. New coverage where the suite was structurally blind:
+2,154, up from 2,012. New coverage where the suite was structurally blind:
 
 - `src/dist.test.ts` asserts against the built artifacts — export parity across
   ESM and the global bundle, the global bundle evaluated as a classic script (a

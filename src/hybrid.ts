@@ -37,11 +37,20 @@ import {
  * Default promotion point: at least 1/8 full.
  *
  * The dense kernel measured ~100x cheaper per amplitude than the sparse one, so
- * break-even sits near 2ⁿ/100. Promoting at 2ⁿ/8 is deliberately late: it keeps
- * genuinely sparse circuits on the path that suits them and only switches when
- * the state is unambiguously dense. Override per call via `RunOptions.dense`.
+ * break-even sits near 2ⁿ/100, and this promotes just short of it. Promoting at
+ * 2ⁿ/8 instead — twelve times later than break-even — was measurably expensive:
+ * every amplitude added past the crossover costs a BigInt key, a boxed complex
+ * and a Map slot to build, and then gets copied into the dense buffer anyway.
+ *
+ * Measured across dense, sparse, partial-occupancy, QFT and Grover circuits at
+ * n = 10…22, fill = 64 is faster than fill = 8 everywhere and never slower: 4.3x
+ * on a 75%-occupancy state at n = 16, 3.9x at n = 22 (766ms -> 195ms), 1.9x on
+ * QFT-16, and identical on genuinely sparse states, which still never promote.
+ * Going further to 128 over-promotes and regresses at n = 18, so this sits at 64.
+ *
+ * Override per call via `RunOptions.dense`.
  */
-export const DEFAULT_SV_POLICY: DensePolicy = { fill: 8, maxQubits: MAX_DENSE_QUBITS }
+export const DEFAULT_SV_POLICY: DensePolicy = { fill: 64, maxQubits: MAX_DENSE_QUBITS }
 
 /** Resolve caller-supplied statevector dense options against the defaults. */
 export const svPolicy = (opts?: DenseOptions): DensePolicy => resolvePolicy(opts, DEFAULT_SV_POLICY)
@@ -63,8 +72,16 @@ export const simZero = (n: number, policy: DensePolicy = DEFAULT_SV_POLICY): Sim
   ({ kind: 'sparse', sv: new Map([[0n, { re: 1, im: 0 }]]), n, policy })
 
 /** Wrap an existing sparse state. */
+/**
+ * Adopt a sparse state, copying it first.
+ *
+ * Sparse gates mutate the map they are given, matching what the dense kernel has
+ * always done. The copy is what makes that safe: it draws the ownership line at
+ * the point the simulation takes the state, so a caller-supplied initial state is
+ * never written through.
+ */
 export const simFromSparse = (sv: StateVector, n: number, policy: DensePolicy = DEFAULT_SV_POLICY): SimState =>
-  ({ kind: 'sparse', sv, n, policy })
+  ({ kind: 'sparse', sv: new Map(sv), n, policy })
 
 /** True once the state has densified enough to be worth moving. */
 function shouldPromote(sv: StateVector, n: number, policy: DensePolicy): boolean {

@@ -306,13 +306,29 @@ describe('Circuit.runStabilizerRank', () => {
   })
 
   it('runs at 60 qubits, far past statevector reach', () => {
-    let c = new Circuit(60).h(0)
-    for (let q = 0; q < 59; q++) c = c.cnot(q, q + 1)
+    // Support must be connected under single-bit flips for the Metropolis path to
+    // sample it. A GHZ ladder is not: its support is {0…0, 1…1}, the chain freezes
+    // at whichever end it seeds on, and every assertion below would still pass
+    // against a single repeated bitstring. An H wall plus a CNOT layer is wide,
+    // costs the same in terms (they come from the T gates), and is traversable.
+    let c = new Circuit(60)
+    for (let q = 0; q < 60; q++) c = c.h(q)
     for (let i = 0; i < 8; i++) c = c.t(i * 7 % 60)
+    for (let q = 0; q + 1 < 60; q += 2) c = c.cnot(q, q + 1)
     const d = c.runStabilizerRank({ shots: 64, seed: 6, maxTerms: 64, burnIn: 40, thin: 4 })
     expect(d.backend).toBe('stabilizer-rank')
     expect(d.shots).toBe(64)
-    expect(Object.keys(d.probs).length).toBeGreaterThan(0)
+    // The real assertion: the chain moved. A frozen chain returns exactly one.
+    expect(Object.keys(d.probs).length).toBeGreaterThan(1)
+  })
+
+  it('refuses to sample a support single-bit flips cannot cross', () => {
+    // 60-qubit GHZ: the chain seeds on one end and can never reach the other, so
+    // it would report P = 1 for a state whose true probability is 1/2.
+    let c = new Circuit(60).h(0)
+    for (let q = 0; q < 59; q++) c = c.cnot(q, q + 1)
+    expect(() => c.runStabilizerRank({ shots: 64, seed: 6, burnIn: 40, thin: 4 }))
+      .toThrow(/support is not connected under single-bit flips/)
   })
 })
 
@@ -427,16 +443,26 @@ describe('StabilizerRank — Metropolis fallback', () => {
   })
 
   it('seeds from a term, so a sparse state stays on its support', () => {
-    // GHZ support is 2 of 2^40 states; a uniformly random seed would never land
-    // on it. Every sample must be all-zeros or all-ones, never a random string.
+    // Support is the 4 states with q0 = q1 free and the rest pinned to |0⟩ — 4 of
+    // 2^40, so a uniformly random seed would never land on it, and the two free
+    // bits keep it connected so the chain can actually move.
+    const n = 40
+    const sr = new StabilizerRank(n).h(0).h(1).t(0).t(1)
+    for (const x of sr.sample(40, makePrng(9), { method: 'metropolis', burnIn: 20, thin: 3 })) {
+      const tail = Array.from(x.slice(2)).reduce((a, b) => a + b, 0)
+      expect(tail, 'every qubit past the first two must be |0⟩').toBe(0)
+    }
+  })
+
+  it('rejects a GHZ support rather than sampling one component of it', () => {
+    // The seed lands on the support (otherwise this throws "could not seed"), and
+    // then cannot move: both halves are 40 flips apart.
     const n = 40
     const sr = new StabilizerRank(n).h(0)
     for (let q = 0; q < n - 1; q++) sr.cx(q, q + 1)
     sr.t(0).t(3)
-    for (const x of sr.sample(40, makePrng(9), { method: 'metropolis', burnIn: 20, thin: 3 })) {
-      const ones = x.reduce((a, b) => a + b, 0)
-      expect(ones === 0 || ones === n, `sample must lie in the GHZ support, got ${ones} ones`).toBe(true)
-    }
+    expect(() => sr.sample(40, makePrng(9), { method: 'metropolis', burnIn: 20, thin: 3 }))
+      .toThrow(/support is not connected under single-bit flips/)
   })
 
   it('auto routes to exact for small circuits and Metropolis for wide ones', () => {

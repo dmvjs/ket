@@ -29,11 +29,22 @@ const T = Number(process.env.T ?? 50)
 const QUBITS = Number(process.env.QUBITS ?? 100)
 const DELTA = Number(process.env.DELTA ?? 0.3)
 
-/** GHZ chain plus `t` T gates — entangled across the full width, cheap to build. */
+/**
+ * H wall, `t` T gates, then a CNOT layer — entangled across the full width and
+ * cheap to build. Term count comes from the T gates alone, so this costs exactly
+ * what a GHZ chain of the same t would.
+ *
+ * Not a GHZ chain, deliberately. That support is {0…0, 1…1}, which single-bit
+ * flips cannot cross, so the Metropolis sampler freezes on whichever end it seeds
+ * and reports one bitstring for every shot. The decomposition timings this
+ * benchmark exists to measure were unaffected, but the shots it drew alongside
+ * them were degenerate, and the sampler now rejects that circuit outright.
+ */
 function circuit(n: number, t: number): Circuit {
-  let c = new Circuit(n).h(0)
-  for (let i = 0; i < n - 1; i++) c = c.cnot(i, i + 1)
+  let c = new Circuit(n)
+  for (let i = 0; i < n; i++) c = c.h(i)
   for (let i = 0; i < t; i++) c = c.t((i * 7) % n)
+  for (let i = 0; i + 1 < n; i += 2) c = c.cnot(i, i + 1)
   return c
 }
 

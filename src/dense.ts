@@ -57,8 +57,8 @@ export const MAX_DENSE_QUBITS = 24
  */
 export interface DenseOptions {
   /**
-   * Promote once the state exceeds `1 / fill` of full occupancy. Lower values
-   * promote sooner. Default 8 for statevectors, 32 for density matrices.
+   * Promote once the state exceeds `1 / fill` of full occupancy. Higher values
+   * promote sooner. Default 64 for statevectors, 32 for density matrices.
    */
   fill?: number
   /**

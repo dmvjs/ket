@@ -1595,6 +1595,29 @@ function toTrajOps(flatOps: readonly FlatOp[]): TrajOp[] {
   return out
 }
 
+/**
+ * Reject option keys the method does not read.
+ *
+ * An unrecognised option is silently ignored by destructuring, so a typo or a
+ * wrong name does not fail — it quietly selects different behaviour. Passing
+ * `delta` to `runStabilizerRank`, whose option is `targetError`, leaves the run
+ * exact rather than sparsified: a different simulation, no warning, plausible
+ * numbers. That is the same silently-wrong-answer failure this library rejects
+ * everywhere else, so option objects are checked too.
+ */
+function checkOptions(opts: object | undefined, allowed: readonly string[], where: string): void {
+  if (!opts) return
+  for (const key of Object.keys(opts)) {
+    if (allowed.includes(key)) continue
+    // Suggest a near-miss when the name is close, so typos read as typos.
+    const near = allowed.find(a => a.toLowerCase() === key.toLowerCase())
+      ?? allowed.find(a => a.toLowerCase().startsWith(key.toLowerCase().slice(0, 4)))
+    throw new TypeError(
+      `${where}: unknown option '${key}'${near ? ` — did you mean '${near}'?` : '.'} ` +
+      `Valid options: ${allowed.join(', ')}.`)
+  }
+}
+
 /** Divide `shots` as evenly as possible into `n` slices. */
 function distributeShots(shots: number, n: number): number[] {
   const base = Math.floor(shots / n)
@@ -2421,7 +2444,9 @@ export class Circuit {
    *
    * @param initialState Optional starting computational basis state as a bitstring (q0 leftmost).
    */
-  statevector({ initialState, dense }: { initialState?: string; dense?: DenseOptions } = {}): Map<bigint, Complex> {
+  statevector(options: { initialState?: string; dense?: DenseOptions } = {}): Map<bigint, Complex> {
+    checkOptions(options, ['initialState', 'dense'], 'statevector')
+    const { initialState, dense } = options
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
     }
@@ -4538,7 +4563,9 @@ export class Circuit {
   // ── Execution ────────────────────────────────────────────────────────────
 
   /** Run the circuit and return a probability distribution. */
-  run({ shots = 1024, seed, noise, initialState, dense }: RunOptions = {}): Distribution {
+  run(options: RunOptions = {}): Distribution {
+    checkOptions(options, ['shots', 'seed', 'noise', 'initialState', 'dense'], 'run')
+    const { shots = 1024, seed, noise, initialState, dense } = options
     const policy = svPolicy(dense)
     const rng  = makePrng(seed)
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
@@ -4661,7 +4688,9 @@ export class Circuit {
    * state to start from; `noise` a device name or explicit rates; and `workers` a
    * trajectory worker count for the noisy path.
    */
-  runMps({ shots = 1024, seed, maxBond = 64, truncErr = 0, maxChi = Infinity, initialState, noise: noiseRaw, workers: numWorkers = 0 }: MpsRunOptions = {}): Distribution {
+  runMps(options: MpsRunOptions = {}): Distribution {
+    checkOptions(options, ['shots', 'seed', 'maxBond', 'truncErr', 'maxChi', 'initialState', 'noise', 'workers'], 'runMps')
+    const { shots = 1024, seed, maxBond = 64, truncErr = 0, maxChi = Infinity, initialState, noise: noiseRaw, workers: numWorkers = 0 } = options
     // Resolve noise: named device profile → NoiseParams, or use as-is
     const noise: NoiseParams | undefined =
       noiseRaw == null          ? undefined :
@@ -5492,7 +5521,9 @@ export class Circuit {
    * `DEVICES`, e.g. `'ibm_sherbrooke'`, `'h1-1'`) or `{ p1?, p2?, pMeas? }`
    * depolarizing and readout error rates.
    */
-  runClifford({ shots = 1024, seed, noise }: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
+  runClifford(options: { shots?: number; seed?: number; noise?: string | NoiseParams } = {}): Distribution {
+    checkOptions(options, ['shots', 'seed', 'noise'], 'runClifford')
+    const { shots = 1024, seed, noise } = options
     // ── Validate: check all ops are Clifford (recursing into if bodies) ─────
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
@@ -5677,10 +5708,14 @@ export class Circuit {
    * // 60 qubits with 10 T gates — far beyond statevector reach
    * new Circuit(60).h(0).cnot(0, 1).t(2).runStabilizerRank({ shots: 1000 })
    */
-  runStabilizerRank({
-    shots = 1024, seed, maxTerms, targetError, burnIn = 200, thin = 20,
-    method = 'auto', exactBudget = 1 << 22, workers: numWorkers = 0,
-  }: StabilizerRankRunOptions = {}): Distribution {
+  runStabilizerRank(options: StabilizerRankRunOptions = {}): Distribution {
+    checkOptions(options,
+      ['shots', 'seed', 'maxTerms', 'targetError', 'burnIn', 'thin', 'method', 'exactBudget', 'workers'],
+      'runStabilizerRank')
+    const {
+      shots = 1024, seed, maxTerms, targetError, burnIn = 200, thin = 20,
+      method = 'auto', exactBudget = 1 << 22, workers: numWorkers = 0,
+    } = options
     const ops = this.#toSrOps()
     // An explicit cap wins; otherwise a target error sets the budget, and with
     // neither the run is exact.
@@ -5900,7 +5935,9 @@ export class Circuit {
    * d.peakChi   // 2
    * ```
    */
-  simulate({ shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense, maxBond = 64, truncErr = 0, maxChi = Infinity }: SimulateOptions = {}): Distribution {
+  simulate(options: SimulateOptions = {}): Distribution {
+    checkOptions(options, ['shots', 'seed', 'noise', 'initialState', 'statevectorLimit', 'dense', 'maxBond', 'truncErr', 'maxChi'], 'simulate')
+    const { shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense, maxBond = 64, truncErr = 0, maxChi = Infinity } = options
     const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
 
@@ -6207,6 +6244,7 @@ export class Circuit {
    *                       `{ p1?, p2? }` noise parameters.
    */
   dm(options?: { noise?: DmNoiseParams | string; dense?: DenseOptions }): DensityMatrix {
+    checkOptions(options, ['noise', 'dense'], 'dm')
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('dm() requires a pure circuit — remove measure/reset/if ops')
     }

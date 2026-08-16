@@ -567,15 +567,27 @@ export class MpsTrajectory {
 
   /** Reset to |0...0⟩. Sets all tensors to T[0][0][0]=1 with chiL=chiR=1. */
   reset(): void {
+    // Clear only the region the previous shot actually used, not the whole
+    // workspace. The workspace is sized for `maxChi`, but a low-entanglement
+    // circuit occupies a tiny corner of it: at the default maxChi = 64 each site
+    // holds 262 KB while a χ = 2 state needs 128 bytes, so zeroing everything
+    // costs ~2000× the necessary memory traffic. On a 50-qubit GHZ that was 13 MB
+    // of memset per shot — a 4× single-threaded tax, and, because every worker
+    // streams it concurrently, the reason trajectory runs stopped scaling past
+    // two threads.
+    //
+    // Bond dimensions are read before they are reset, so the lambda pass runs first.
+    for (let b = 0; b < this.n - 1; b++) {
+      const lam = this.bondLambda[b]!
+      lam.fill(0, 0, Math.min(this.chiR[b]!, lam.length))
+      lam[0] = 1
+    }
     for (let q = 0; q < this.n; q++) {
-      this.data[q]!.fill(0)
-      this.data[q]![0] = 1
+      const d = this.data[q]!
+      d.fill(0, 0, Math.min(this.chiL[q]! * 2 * this.chiR[q]! * 2, d.length))
+      d[0] = 1
       this.chiL[q] = 1
       this.chiR[q] = 1
-    }
-    for (let b = 0; b < this.n - 1; b++) {
-      this.bondLambda[b]!.fill(0)
-      this.bondLambda[b]![0] = 1
     }
   }
 

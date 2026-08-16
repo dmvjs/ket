@@ -1,6 +1,6 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, five backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",

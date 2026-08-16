@@ -45,23 +45,46 @@ export type Gate4x4 = [
  *   new[x₁] = c·old[x₀] + d·old[x₁]
  */
 export function applySingle(sv: StateVector, q: number, [[a, b], [c, d]]: Gate2x2): StateVector {
-  const next: StateVector = new Map()
   const mask = 1n << BigInt(q)
-  const seen = new Set<bigint>()
 
-  for (const idx of sv.keys()) {
-    const base = idx & ~mask // idx with bit q = 0
-    if (seen.has(base)) continue
-    seen.add(base)
-
-    const amp0 = sv.get(base) ?? ZERO
-    const amp1 = sv.get(base | mask) ?? ZERO
-
-    accumulate(next, base,        add(mul(a, amp0), mul(b, amp1)))
-    accumulate(next, base | mask, add(mul(c, amp0), mul(d, amp1)))
+  // Diagonal gates — b = c = 0 — move no amplitude between basis states and so
+  // cannot change the support: every entry is simply scaled by a or d. Taking
+  // that path avoids the pairing machinery entirely, which per entry is a Set
+  // insert and lookup, three BigInt allocations and two extra Map gets. Worth a
+  // special case because diagonal gates are most of what QFT and the standard
+  // VQE ansatze are built from: z, s, sdg, t, tdg, rz, u1, p, r2/r4/r8, vz.
+  if (isNegligible(b) && isNegligible(c)) {
+    for (const [idx, amp] of sv) {
+      const scaled = mul((idx & mask) === 0n ? a : d, amp)
+      if (isNegligible(scaled)) sv.delete(idx)
+      else sv.set(idx, scaled)
+    }
+    return sv
   }
 
-  return next
+  // Two passes. The first only reads, so membership is judged against the state
+  // as it was: each pair {base, base|mask} is claimed by its bit-0 member, or by
+  // a bit-1 key whose partner is absent. Deciding this while mutating would be
+  // wrong — an entry that cancels to zero is deleted, and its partner would then
+  // look like an orphan and apply the gate a second time.
+  const bases: bigint[] = []
+  for (const idx of sv.keys()) {
+    if ((idx & mask) === 0n) bases.push(idx)
+    else if (!sv.has(idx ^ mask)) bases.push(idx ^ mask)
+  }
+
+  for (const base of bases) {
+    const hi = base | mask
+    const amp0 = sv.get(base) ?? ZERO
+    const amp1 = sv.get(hi)   ?? ZERO
+
+    const out0 = add(mul(a, amp0), mul(b, amp1))
+    const out1 = add(mul(c, amp0), mul(d, amp1))
+    if (isNegligible(out0)) sv.delete(base); else sv.set(base, out0)
+    if (isNegligible(out1)) sv.delete(hi);   else sv.set(hi, out1)
+  }
+
+  return sv
 }
 
 /**
@@ -211,26 +234,42 @@ export function applyCsrSwap(sv: StateVector, control: number, a: number, b: num
  */
 export function applyControlled(sv: StateVector, control: number, target: number, [[a,b],[c,d]]: Gate2x2): StateVector {
   if (control === target) throw new TypeError(`control and target qubits must differ (got ${control})`)
-  const next: StateVector = new Map()
   const cmask = 1n << BigInt(control)
   const tmask = 1n << BigInt(target)
-  const seen  = new Set<bigint>()
 
-  for (const [idx, amp] of sv) {
-    if ((idx & cmask) === 0n) {
-      accumulate(next, idx, amp)
-      continue
+  // Diagonal target — b = c = 0 — scales each amplitude where it sits and leaves
+  // the support alone, so no pairing is needed. `cu1` is this case, and QFT is
+  // built almost entirely from `cu1`. Control-clear entries are untouched.
+  if (isNegligible(b) && isNegligible(c)) {
+    for (const [idx, amp] of sv) {
+      if ((idx & cmask) === 0n) continue
+      const scaled = mul((idx & tmask) === 0n ? a : d, amp)
+      if (isNegligible(scaled)) sv.delete(idx)
+      else sv.set(idx, scaled)
     }
-    const base = idx & ~tmask
-    if (seen.has(base)) continue
-    seen.add(base)
-    const amp0 = sv.get(base)         ?? ZERO
-    const amp1 = sv.get(base | tmask) ?? ZERO
-    accumulate(next, base,         add(mul(a, amp0), mul(b, amp1)))
-    accumulate(next, base | tmask, add(mul(c, amp0), mul(d, amp1)))
+    return sv
   }
 
-  return next
+  // As in applySingle: collect the pairs while the state is still untouched,
+  // then apply. Only control-set entries participate.
+  const bases: bigint[] = []
+  for (const idx of sv.keys()) {
+    if ((idx & cmask) === 0n) continue
+    if ((idx & tmask) === 0n) bases.push(idx)
+    else if (!sv.has(idx ^ tmask)) bases.push(idx ^ tmask)
+  }
+
+  for (const base of bases) {
+    const hi = base | tmask
+    const amp0 = sv.get(base) ?? ZERO
+    const amp1 = sv.get(hi)   ?? ZERO
+    const out0 = add(mul(a, amp0), mul(b, amp1))
+    const out1 = add(mul(c, amp0), mul(d, amp1))
+    if (isNegligible(out0)) sv.delete(base); else sv.set(base, out0)
+    if (isNegligible(out1)) sv.delete(hi);   else sv.set(hi, out1)
+  }
+
+  return sv
 }
 
 /**

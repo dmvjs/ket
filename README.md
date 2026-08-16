@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Quantum circuits in TypeScript — simulate locally, then run on real hardware.**
-Immutable API, five backends, zero dependencies.
+Immutable API, seven backends, zero dependencies.
 
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
@@ -150,7 +150,7 @@ is correct, and today's hardware cannot run it.
 
 ## Beyond the statevector
 
-A statevector costs 2ⁿ and stops near 24 qubits. ket carries four other
+A statevector costs 2ⁿ and stops near 24 qubits. ket carries six other
 representations and routes to the cheapest exact one automatically:
 
 ```typescript
@@ -160,10 +160,12 @@ circuit.simulate({ shots: 1024 })   // picks a backend; d.backend says which
 | Backend | Cost | Reaches |
 |---|---|---|
 | Statevector | sparse → dense, automatic | ~20 qubits exactly |
-| MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 186ms |
+| MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 10ms |
 | Density matrix | O(4ⁿ) sparse | mixed states and noise, n≈12 |
-| Clifford stabilizer | O(n²) | 1,024 qubits in milliseconds |
-| Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s |
+| Clifford stabilizer | O(n²) | 1,024 qubits: 4ms to evolve, 57ms/shot |
+| Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s to build + 43ms/shot |
+| Pauli path | O(terms), terms set by the light cone | ⟨O⟩ only — 120-qubit QAOA layer, 28ms |
+| Tensor network | O(2^width), width = treewidth not n | amplitudes — 400 qubits, depth 4, 362ms |
 
 Stabilizer rank is the unusual one: its cost is exponential in the *non-Clifford*
 gate count, not the width, so it goes where a statevector cannot. See
@@ -177,11 +179,11 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,152 tests.** Analytic correctness against known amplitudes — gate
+- **2,456 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.
-- **Zero dependencies.** 196 KB minified, total.
+- **Zero dependencies.** 215 KB minified, total.
 
 ## Documentation
 
