@@ -9,10 +9,12 @@ import * as G from './gates.js'
 import { Gate2x2, Gate4x4, StateVector } from './statevector.js'
 import {
   simClone, simCNOT, simCollapse, simControlled, simCsrSwap, simCSwap, simDecay,
-  simFromSparse, simNorm2, simProbabilities, simProbOne, simSample, simScale,
+  simFromSparse, simNorm2, simProbsEach, simProbOne, simSample, simScale,
   simScaleBranch, simSingle, simSWAP, simToffoli, simToSparse, simTwo, simUnitary,
-  simForEach, simKind, simZero, svPolicy, type SimState,
+  simForEach, simKind, simSampleEach, simZero, svPolicy, SERIAL_RUNTIME,
+  type DenseRuntime, type SimState,
 } from './hybrid.js'
+import { acquireDensePool, resolveWorkerCount } from './dense-parallel.js'
 import type { DenseOptions, DensePolicy } from './dense.js'
 import { Complex, ZERO } from './complex.js'
 import { controlledGate, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
@@ -133,10 +135,13 @@ function svFromBitstring(s: string, qubits: number): StateVector {
  *
  * Returns the raw `SimState` so callers that only need probabilities can read a
  * dense state directly instead of paying to materialise a `Map` of 2ⁿ entries.
- * Callers wanting the public sparse form should use {@link simulatePure}.
+ * Callers wanting the public sparse form pass the result through
+ * {@link simToSparse}.
  */
-function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVector, policy?: DensePolicy): SimState {
-  let s: SimState = init ? simFromSparse(init, qubits, policy) : simZero(qubits, policy)
+function simulatePureState(
+  ops: readonly Op[], qubits: number, init?: StateVector, policy?: DensePolicy, rt?: DenseRuntime,
+): SimState {
+  let s: SimState = init ? simFromSparse(init, qubits, policy, rt) : simZero(qubits, policy, rt)
   for (const op of flattenOps(ops)) {
     switch (op.kind) {
       case 'single':     s = simSingle(s, op.q, op.gate); break
@@ -155,9 +160,26 @@ function simulatePureState(ops: readonly Op[], qubits: number, init?: StateVecto
   return s
 }
 
-/** Simulate a pure circuit and return the statevector in its public sparse form. */
-function simulatePure(ops: readonly Op[], qubits: number, init?: StateVector, policy?: DensePolicy): StateVector {
-  return simToSparse(simulatePureState(ops, qubits, init, policy))
+/**
+ * Bits of every byte value, low bit first — `REV_BYTE[v]` is 8 chars, `[k]` = bit k.
+ *
+ * `exactProbs` keys its result by bitstring, so a fully dense state needs one key
+ * built per amplitude — 2²² of them at n = 22. The obvious spelling,
+ * `i.toString(2).padStart(n, '0').split('').reverse().join('')`, costs four
+ * allocations and an n-element array round trip *each*, and measured 2.9s of a
+ * 3.8s call. A byte at a time off this table is one concatenation instead.
+ */
+const REV_BYTE: readonly string[] = Array.from({ length: 256 }, (_, v) => {
+  let s = ''
+  for (let b = 0; b < 8; b++) s += (v >> b) & 1
+  return s
+})
+
+/** The low `width` bits of `v`, low bit first. Empty for `width <= 0`. */
+function revBits(v: number, width: number): string {
+  let s = ''
+  for (let b = 0; b < width; b++) s += (v >> b) & 1
+  return s
 }
 
 /** Read a classical register as a little-endian integer (bit 0 = LSB). */
@@ -1513,6 +1535,47 @@ function workerFailure(worker: any, index: number, label: string): Error {
   )
 }
 
+// ─── Dense statevector parallelism ────────────────────────────────────────────
+
+/**
+ * Resolve a `workers` request into a {@link DenseRuntime}.
+ *
+ * Degrades to the serial runtime rather than failing whenever threads are not
+ * actually available — a browser has no `worker_threads`, and running from the
+ * TypeScript sources means `dist/dense.worker.js` does not exist yet. Both are
+ * warned about once, because silently ignoring an explicit `workers: 8` and
+ * running 8x slower is worse than the noise.
+ *
+ * The returned `release` detaches the pool but leaves the threads alive: spawn
+ * is ~20ms each, and a second run reuses them.
+ */
+function denseRuntime(workers: number | undefined, label: string): { rt: DenseRuntime; release: () => void } {
+  const noop = { rt: SERIAL_RUNTIME, release: () => {} }
+  if (workers === undefined) return noop
+  const count = resolveWorkerCount(workers)
+  if (count < 1) return noop            // workers: 1 means "this thread only"
+
+  // `import.meta` is empty in the IIFE global build, so `import.meta.url` may be
+  // undefined. It has to be tested before being used as a base — `new URL(path,
+  // undefined)` throws, which would turn a `workers` option that should have
+  // degraded quietly into a hard failure in the one build that can never honour
+  // it. Resolving the worker only when there is both a base to resolve against
+  // and a thread API to use it keeps every host on the fallback instead.
+  const base = import.meta.url
+  const runnable = wt !== null && base !== undefined && !base.endsWith('.ts')
+  const pool = runnable ? acquireDensePool(count, new URL('./dense.worker.js', base)) : null
+  if (pool === null) {
+    console.warn(
+      `[ket] ${label}: workers option ignored — ` +
+      (wt === null
+        ? 'this host has no worker_threads, so the single-threaded path is used'
+        : 'build the bundle first (npm run build) to enable parallel gates'),
+    )
+    return noop
+  }
+  return { rt: { exec: pool, shared: true }, release: () => pool.detach() }
+}
+
 // ─── MPS trajectory helpers ───────────────────────────────────────────────────
 
 /**
@@ -1638,11 +1701,27 @@ export interface RunOptions {
   initialState?: string
   /**
    * Tune when the statevector switches from its sparse map to a dense
-   * `Float64Array`. Defaults promote at 1/8 fill and refuse to allocate beyond
-   * 24 qubits (256 MiB). Lower `maxQubits` on a constrained machine; raise it to
-   * trade memory for speed on a large one.
+   * `Float64Array`. Defaults promote at 1/64 fill and refuse to allocate beyond
+   * 26 qubits (1 GiB) without being asked. Lower `maxQubits` on a constrained
+   * machine; raise it — up to the architectural limit of 30 — to trade memory
+   * for speed on a large one.
    */
   dense?: DenseOptions
+  /**
+   * Threads to spread each dense gate across, including the calling one. Default
+   * 1 (no threads). Clamped to the core count.
+   *
+   * A dense gate moves the whole state through memory and does ~12 flops per 64
+   * bytes on the way, so one core saturates at its own memory bandwidth long
+   * before it runs out of arithmetic. Splitting the gate is what reaches the rest
+   * of the machine's: measured 36 GB/s on one thread against 184 GB/s on eight.
+   *
+   * Only helps where it can: states that stay sparse never use it, gates below
+   * ~2^16 work items stay serial because the thread rendezvous costs more than
+   * the gate, and hosts without `worker_threads` — browsers — fall back to the
+   * single-threaded path with a warning. Results are bit-identical either way.
+   */
+  workers?: number
 }
 
 export interface SimulateOptions {
@@ -2444,9 +2523,11 @@ export class Circuit {
    *
    * @param initialState Optional starting computational basis state as a bitstring (q0 leftmost).
    */
-  statevector(options: { initialState?: string; dense?: DenseOptions } = {}): Map<bigint, Complex> {
-    checkOptions(options, ['initialState', 'dense'], 'statevector')
-    const { initialState, dense } = options
+  statevector(
+    options: { initialState?: string; dense?: DenseOptions; workers?: number } = {},
+  ): Map<bigint, Complex> {
+    checkOptions(options, ['initialState', 'dense', 'workers'], 'statevector')
+    const { initialState, dense, workers } = options
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('statevector() requires a pure circuit — remove measure/reset/if ops')
     }
@@ -2455,7 +2536,12 @@ export class Circuit {
       throw new TypeError(`statevector() requires bound parameters. Call bind({ ${[...unbound].map(p => `${p}: value`).join(', ')} }) first.`)
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
-    return simulatePure(this.#ops, this.qubits, init, svPolicy(dense))
+    const { rt, release } = denseRuntime(workers, 'statevector')
+    try {
+      return simToSparse(simulatePureState(this.#ops, this.qubits, init, svPolicy(dense), rt))
+    } finally {
+      release()
+    }
   }
 
   /**
@@ -4564,8 +4650,8 @@ export class Circuit {
 
   /** Run the circuit and return a probability distribution. */
   run(options: RunOptions = {}): Distribution {
-    checkOptions(options, ['shots', 'seed', 'noise', 'initialState', 'dense'], 'run')
-    const { shots = 1024, seed, noise, initialState, dense } = options
+    checkOptions(options, ['shots', 'seed', 'noise', 'initialState', 'dense', 'workers'], 'run')
+    const { shots = 1024, seed, noise, initialState, dense, workers } = options
     const policy = svPolicy(dense)
     const rng  = makePrng(seed)
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
@@ -4589,19 +4675,17 @@ export class Circuit {
     // pay a full re-simulation per shot.
     const terminal = noiseParams ? null : terminalMeasurements(flattenOps(this.#ops))
     if (terminal) {
-      // Sampling only needs probabilities, so skip materialising the sparse map.
-      const state  = simulatePureState(this.#ops, this.qubits, init, policy)
-      const probs  = simProbabilities(state)
-      const sorted = Array.from(probs.entries()).toSorted(([a], [b]) => (a < b ? -1 : 1))
-
-      const cdf: { idx: bigint; cumP: number }[] = []
-      let cum = 0
-      for (const [idx, p] of sorted) {
-        cum += p
-        cdf.push({ idx, cumP: cum })
+      // Sampling only needs a cumulative distribution, so skip materialising the
+      // sparse map: `simSampler` builds the CDF straight out of whichever
+      // representation the state ended in, allocating one BigInt per shot rather
+      // than one per amplitude. See the note on `Sampler` in hybrid.ts.
+      const { rt, release } = denseRuntime(workers, 'run')
+      let state: SimState
+      try {
+        state = simulatePureState(this.#ops, this.qubits, init, policy, rt)
+      } finally {
+        release()
       }
-      const last = cdf.at(-1)
-      if (last) last.cumP = 1.0
 
       // Pre-resolve each terminal measurement to (bit mask, target creg slot) so
       // the per-shot loop is a shift and a test rather than a map lookup.
@@ -4612,25 +4696,29 @@ export class Circuit {
       })).filter((r): r is { mask: bigint; acc: number[]; bit: number } => r.acc !== undefined)
 
       const counts = new Map<bigint, number>()
-      for (let i = 0; i < shots; i++) {
-        const r  = rng()
-        let lo   = 0
-        let hi   = cdf.length - 1
-        while (lo < hi) {
-          const mid = (lo + hi) >> 1
-          if (cdf[mid]!.cumP < r) lo = mid + 1
-          else hi = mid
-        }
-        const idx = cdf[lo]?.idx ?? 0n
+      simSampleEach(state, shots, rng, idx => {
         counts.set(idx, (counts.get(idx) ?? 0) + 1)
         // A terminal measurement just reads its qubit's bit out of the sample.
         for (const { mask, acc, bit } of readouts) if ((idx & mask) !== 0n) acc[bit]! += 1
-      }
+      })
 
       return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector', undefined, simKind(state))
     }
 
     // ── Per-shot path: noise or mid-circuit ops — one full simulation per shot ──
+    //
+    // Deliberately not split across threads. Each shot builds its own state, so
+    // a within-gate pool would re-attach every worker to a fresh buffer once per
+    // shot — thousands of handshakes to parallelise gates that are individually
+    // small. The parallelism that fits this path is across shots, which is what
+    // runMps does and what this should grow later. Saying so beats accepting the
+    // option and quietly ignoring it.
+    if (workers !== undefined && resolveWorkerCount(workers) > 0) {
+      console.warn(
+        '[ket] run: workers option ignored — parallel gates apply to the terminal-measurement path only, ' +
+        'and this circuit uses noise or mid-circuit measurement, which simulates each shot separately.',
+      )
+    }
     const counts = new Map<bigint, number>()
     const pMeas  = noiseParams?.pMeas ?? 0
     // Shots are independent but structurally identical, so they all promote at
@@ -4908,18 +4996,49 @@ export class Circuit {
    *
    * Keys are standard bitstrings (q0 leftmost). Only non-negligible amplitudes are included.
    * Throws for circuits containing mid-circuit measure, reset, or conditional ops.
+   *
+   * `workers` splits each dense gate across threads exactly as it does for
+   * {@link statevector} — this runs the same pure simulation and differs only in
+   * what it reads off the end of it. See {@link RunOptions.workers}.
    */
-  exactProbs({ initialState, dense }: { initialState?: string; dense?: DenseOptions } = {}): Readonly<Record<string, number>> {
+  exactProbs(
+    options: { initialState?: string; dense?: DenseOptions; workers?: number } = {},
+  ): Readonly<Record<string, number>> {
+    checkOptions(options, ['initialState', 'dense', 'workers'], 'exactProbs')
+    const { initialState, dense, workers } = options
     if (this.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError('exactProbs() requires a pure circuit — no measure, reset, or if ops')
     }
     const init = initialState !== undefined ? svFromBitstring(initialState, this.qubits) : undefined
     // Read probabilities off the raw state — a dense result never materialises a Map.
-    const state = simulatePureState(this.#ops, this.qubits, init, svPolicy(dense))
-    const out: Record<string, number> = {}
-    for (const [idx, p] of simProbabilities(state)) {
-      out[idx.toString(2).padStart(this.qubits, '0').split('').reverse().join('')] = p
+    const { rt, release } = denseRuntime(workers, 'exactProbs')
+    let state: SimState
+    try {
+      state = simulatePureState(this.#ops, this.qubits, init, svPolicy(dense), rt)
+    } finally {
+      release()
     }
+    const out: Record<string, number> = {}
+    const n = this.qubits
+    // Keys are q0-leftmost, so a key is just the index's bits low to high. Indices
+    // arrive ascending, which means everything above the low byte is unchanged for
+    // 256 consecutive amplitudes — caching that tail leaves one concatenation per
+    // key. Narrow states take the direct route; there is no volume to optimise and
+    // the byte table would overshoot `n`.
+    let tailOf = -1
+    let tail   = ''
+    simProbsEach(state, (idx, p) => {
+      if (typeof idx !== 'number') {
+        // Sparse state: indices are unbounded, so they stay BigInt and there are
+        // only as many as the support, not 2ⁿ.
+        out[idx.toString(2).padStart(n, '0').split('').reverse().join('')] = p
+        return
+      }
+      if (n <= 8) { out[revBits(idx, n)] = p; return }
+      const hi = idx >>> 8
+      if (hi !== tailOf) { tailOf = hi; tail = revBits(hi, n - 8) }
+      out[REV_BYTE[idx & 255]! + tail] = p
+    })
     return Object.freeze(out)
   }
 

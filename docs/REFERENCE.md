@@ -230,7 +230,7 @@ GHZ chain at any width still stays on MPS at χ=2.
 The probe covers circuits both backends can build once and sample, which includes
 terminal measurements. Noisy circuits and genuine mid-circuit feedback re-simulate
 per shot and go straight to MPS, and circuits past the dense ceiling
-(`dense.maxQubits`, 24 by default) skip it too — there is no statevector to fall
+(`dense.maxQubits`, 26 by default) skip it too — there is no statevector to fall
 back to.
 
 ```typescript
@@ -370,7 +370,22 @@ circuit.dm({ noise: 'forte-1', dense: { fill: 64 } })    // promote sooner
 | Field | Statevector default | Density matrix default | Meaning |
 |---|---|---|---|
 | `fill` | 64 | 32 | Promote once the state exceeds `1 / fill` of full occupancy. **Higher** values promote sooner. |
-| `maxQubits` | 24 | 12 | Largest qubit count for which a dense buffer is allocated at all. Beyond it the sparse path is used however full the state gets. Both defaults correspond to a 256 MiB buffer. |
+| `maxQubits` | 26 | 12 | Largest qubit count for which a dense buffer is allocated *without being asked*. Beyond it the sparse path is used however full the state gets. The statevector default is a 1 GiB buffer, the density-matrix default 256 MiB. |
+
+`maxQubits` is itself capped at **30** for the statevector, and that ceiling
+cannot be raised: the dense kernels address amplitudes with int32 arithmetic,
+which overflows at 31 qubits and would leave every loop running zero times on an
+untouched buffer. A policy above 30 throws `RangeError` rather than accepting a
+value it cannot honour.
+
+The gap between the default (26) and the ceiling (30) is deliberate. A sparse
+entry costs ~100 bytes against 16 for a dense amplitude, so dense only becomes
+the *cheaper* way to hold a state above ~16% occupancy, while promotion fires at
+1/64 — 1.6%. In that band dense is faster but roughly ten times larger, so
+promotion buys speed with memory. That is a fair trade to make silently at 1 GiB
+and not at 16, which is what promoting a 30-qubit state at 1.6% fill would cost.
+Reaching the top of the range is therefore opt-in — `dense: { maxQubits: 30 }`,
+usually alongside [`workers`](#parallel-dense-gates).
 
 Accepted by `run()`, `simulate()`, `statevector()`, `exactProbs()` and `dm()`.
 `runMps()` and `runClifford()` do not take it — neither uses this representation.
@@ -388,6 +403,79 @@ takes 254 ms forced sparse against 13 ms on the default promoting path, with
 bit-identical probabilities. The two reasons to reach for it are a constrained
 environment that cannot afford the default ceiling, and a large machine where
 paying more memory to go faster is the right trade.
+
+### Parallel dense gates
+
+`workers: N` spreads each dense gate across `N` threads, counting the calling
+one, so `workers: 8` spawns 7 and runs 8-wide. The default is 1 — no threads.
+
+```typescript
+// A wide circuit that fills its state: raise the ceiling, then split the gates.
+circuit.run({ shots: 1024, seed: 7, workers: 8, dense: { maxQubits: 28 } })
+circuit.statevector({ workers: 8 })
+circuit.exactProbs({ workers: 8 })
+```
+
+A dense gate moves the whole state through memory and does ~12 flops per 64
+bytes on the way, so a single core saturates its own memory bandwidth long
+before it runs out of arithmetic. Splitting the gate is what reaches the rest of
+the machine's:
+
+| Threads | Effective bandwidth |
+|---|---|
+| 1 | 36 GB/s |
+| 2 | 68 GB/s |
+| 4 | 114 GB/s |
+| 8 | 184 GB/s |
+
+End to end on a 218-gate circuit at n = 26 that is 13.4 s → 1.5 s.
+
+**Results are bit-identical, not merely close.** Each kernel walks a flat work
+space in which distinct items touch disjoint amplitudes, so the threads share
+one buffer with no locking and any partition of the work reproduces the serial
+answer exactly. A seeded run returns the same counts either way.
+
+Accepted by `run()`, `statevector()` and `exactProbs()` — the three entry points
+that build one pure statevector and read something off it. `simulate()` and
+`dm()` reject it with a `TypeError`. `runMps()` and `runStabilizerRank()` have
+their own `workers` option that parallelises across shots and terms
+respectively — a different axis, described in their own sections.
+
+**`workers` speeds up the gates, not what comes after them.** `run()` samples
+the finished state directly and so keeps nearly all of the gain. The other two
+have to materialise a value of size 2ⁿ before they return — `statevector()` a
+`Map` with a `BigInt` key and a boxed `{re, im}` per amplitude, `exactProbs()` a
+bitstring key per amplitude — and that part is inherently serial. On a 195-gate
+circuit at n = 22 the gates themselves run 5.0× faster on 8 threads, but end to
+end that is ~1.9× for `statevector()` and ~1.6× for `exactProbs()`. If you are
+reaching for threads on a wide circuit, `run()` is the call that rewards them
+most.
+
+`workers` is a request, not a guarantee. It never errors when it cannot be
+honoured — the single-threaded path runs instead, and the result is unchanged.
+Cases where threads *could* have run but the host cannot provide them warn on
+`console.warn`, because silently ignoring an explicit `workers: 8` and running
+8× slower is worse than the noise:
+
+| Declined, with a warning | Why |
+|---|---|
+| Circuit uses noise or mid-circuit measurement | Those re-simulate per shot, so the parallel axis is shots, not gates — `runMps()` is the backend that splits that way. |
+| Browser, or any host without `worker_threads` | Nothing to spawn. |
+| Running from the TypeScript sources | The worker is resolved as `dense.worker.js` next to the bundle, so it does not exist yet. Run `npm run build` first. |
+| `dist/dense.worker.js` missing beside the bundle | Same resolution. Checked before any thread is started, so a bundle shipped without its side-car workers falls back at once instead of stalling on a barrier. |
+
+Two more cases are simply no-ops, and pass without comment because the option
+was applied and there was nothing for it to do:
+
+| Silently unused | Why |
+|---|---|
+| State never promotes to dense | There is no dense gate to split. Pair with `dense.maxQubits`, and check `Distribution.representation` is `'dense'`. |
+| Gate has fewer than 2¹⁶ work items | The thread rendezvous costs more than the gate. Single-qubit gates stay serial below n = 17. |
+
+`N` is clamped to the core count: asking for more threads than there are cores
+only adds barrier participants contending for the same memory controllers, which
+measures strictly slower. A non-integer or non-positive `N` throws `RangeError`.
+Requires Node ≥ 22.3, as all worker-backed parallelism here does.
 
 ## Gates
 
@@ -1812,11 +1900,13 @@ The statevector backend is a hybrid of two representations, and switches between
 
 It starts sparse: a `Map<bigint, Complex>` holding only basis states with non-zero amplitude. Gate application iterates the entries present rather than allocating a full transformation matrix, so a GHZ chain costs two amplitudes per gate no matter how wide it is. BigInt keys eliminate the 32-bit overflow that silently corrupts state at qubit index 31 in integer-based simulators.
 
-That representation stops paying once a state densifies — every gate then rebuilds a `Map`, allocates a `Set<bigint>` of visited keys, and boxes one `{re, im}` object per amplitude. So when the support exceeds 2ⁿ/8, the state is promoted once to a `DenseState`: a single contiguous `Float64Array` with real and imaginary parts interleaved, mutated in place. A gate becomes 2ⁿ unboxed f64 operations with no allocation, which V8 keeps in registers. Measured on a depth-4 random 16-qubit circuit, that is the difference between 1,254 ms and 16.5 ms.
+That representation stops paying once a state densifies — every gate then rebuilds a `Map`, allocates a `Set<bigint>` of visited keys, and boxes one `{re, im}` object per amplitude. So when the support exceeds 2ⁿ/64, the state is promoted once to a `DenseState`: a single contiguous `Float64Array` with real and imaginary parts interleaved, mutated in place. A gate becomes 2ⁿ unboxed f64 operations with no allocation, which V8 keeps in registers. Measured on a depth-4 random 16-qubit circuit, that is the difference between 1,254 ms and 16.5 ms.
 
-Promotion is one-way — a dense state is never demoted, since the fill test would cost a full scan per gate to avoid work the dense kernel is already fast at. It is also capped by default at 24 qubits (2²⁴ amplitudes × 16 bytes = 256 MiB); above that the sparse path stays in charge regardless of fill, because a dense buffer would be a worse problem than a slow one. Both the fill fraction and the ceiling are adjustable per call — see [Tuning sparse → dense promotion](#tuning-sparse--dense-promotion). Permutation gates (CNOT, SWAP, Toffoli, CSWAP) skip the fill test entirely — they cannot change the size of the support.
+Promotion is one-way — a dense state is never demoted, since the fill test would cost a full scan per gate to avoid work the dense kernel is already fast at. It is also capped by default at 26 qubits (2²⁶ amplitudes × 16 bytes = 1 GiB); above that the sparse path stays in charge regardless of fill, because a dense buffer nobody asked for would be a worse problem than a slow one. Both the fill fraction and the ceiling are adjustable per call, up to an architectural limit of 30 qubits — see [Tuning sparse → dense promotion](#tuning-sparse--dense-promotion). Permutation gates (CNOT, SWAP, Toffoli, CSWAP) skip the fill test entirely — they cannot change the size of the support.
 
 The two kernels are differentially tested against each other in `src/hybrid.test.ts`, gate by gate across every qubit ordering, so which one runs is never observable in a result.
+
+Once dense, a gate is bounded by memory bandwidth as much as by arithmetic, and one core cannot saturate a whole machine's. Each dense kernel therefore walks a flat *work space* — a range of integers in which distinct items provably touch disjoint amplitudes — which is what lets `workers: N` hand slices of the same buffer to several threads with no locking and still return a bit-identical state. See [Parallel dense gates](#parallel-dense-gates).
 
 `run()` adds a second decision on top. A circuit whose measurements are all *terminal* — no `reset`, no `if`, and no gate touching a qubit after it is measured — does not need re-simulating per shot: measuring in the computational basis is a dephasing channel, and dephasing a qubit nothing else will touch cannot change the joint outcome distribution. Such a circuit is built once and sampled, with each measurement reading a bit straight out of the sampled index. Anything else (noise, mid-circuit feedback, a gate on a measured qubit) still runs one full simulation per shot, because there the later gates genuinely depend on the collapse.
 

@@ -5,7 +5,8 @@ import { H, Rx, Ry, Rz, T, U3, X, Xy, Y, Z } from './gates.js'
 import {
   denseCNOT, denseControlled, denseCsrSwap, denseCSwap, denseNnz, denseProbabilities,
   denseSingle, denseSWAP, denseToffoli, denseTwo, denseUnitary, fromSparse,
-  guardSparseGrowth, MAX_DENSE_QUBITS, SPARSE_ENTRY_LIMIT, toSparse,
+  CDF_MAX_STATE, cdfSample, denseCdf, denseSampleEach, denseZero,
+  DENSE_QUBIT_LIMIT, guardSparseGrowth, MAX_DENSE_QUBITS, SPARSE_ENTRY_LIMIT, toSparse,
 } from './dense.js'
 import {
   applyCNOT, applyControlled, applyCsrSwap, applyCSwap, applySingle, applySWAP,
@@ -13,7 +14,7 @@ import {
 } from './statevector.js'
 import {
   simClone, simCollapse, simDecay, simFromSparse, simKind, simNnz, simNorm2,
-  simProbOne, simPromote, simSample, simScale, simScaleBranch, simSingle,
+  simProbOne, simPromote, simSample, simSampleEach, simScale, simScaleBranch, simSingle,
   simToSparse, simZero, svPolicy, DEFAULT_SV_POLICY, type SimState,
 } from './hybrid.js'
 
@@ -229,6 +230,17 @@ describe('hybrid — promotion policy', () => {
     let wide = new Circuit(30)
     for (let q = 0; q < 3; q++) wide = wide.h(q)
     expect(wide.statevector().size).toBe(8)
+  })
+
+  it('rejects a policy above the architectural limit rather than silently zeroing', () => {
+    // Past DENSE_QUBIT_LIMIT the kernels' int32 indexing overflows and every loop
+    // runs zero times, so an accepted-but-broken policy would return an untouched
+    // buffer with no error. The ceiling has to be refused at the door.
+    expect(DENSE_QUBIT_LIMIT).toBe(30)
+    expect(() => new Circuit(3).h(0).statevector({ dense: { maxQubits: DENSE_QUBIT_LIMIT + 1 } }))
+      .toThrow(/int32|at most 30/)
+    expect(() => new Circuit(3).h(0).statevector({ dense: { maxQubits: DENSE_QUBIT_LIMIT } }))
+      .not.toThrow()
   })
 })
 
@@ -869,6 +881,172 @@ describe('sparse kernel — diagonal fast path', () => {
     const dense  = c.statevector({ dense: { fill: 1e9 } })
     for (const [idx, z] of dense) {
       expect(sparse.get(idx)?.re ?? 0).toBeCloseTo(z.re, 10)
+    }
+  })
+})
+
+describe('sampling — streaming and CDF branches agree', () => {
+  /** Fully dense n-qubit state on an ordinary buffer. */
+  const denseFixture = (n: number, seed = 9) => {
+    const d = denseZero(n)
+    let s = seed >>> 0 || 1
+    const r = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000 }
+    let acc = 0
+    for (let i = 0; i < (1 << n); i++) {
+      const re = r() * 2 - 1, im = r() * 2 - 1
+      d.data[i << 1] = re; d.data[(i << 1) | 1] = im
+      acc += re * re + im * im
+    }
+    const f = 1 / Math.sqrt(acc)
+    for (let i = 0; i < d.data.length; i++) d.data[i]! *= f
+    return d
+  }
+  const prng = (seed: number) => {
+    let s = seed >>> 0 || 1
+    return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000 }
+  }
+  const histogram = (emit: (fn: (i: number) => void) => void) => {
+    const h = new Map<number, number>()
+    emit(i => h.set(i, (h.get(i) ?? 0) + 1))
+    return h
+  }
+
+  it('streams above the CDF threshold and tabulates below it', () => {
+    // The branch exists to bound memory: a full CDF costs 8 bytes per amplitude
+    // on top of the state, which is the wrong trade exactly where states are big.
+    expect(CDF_MAX_STATE).toBe(1 << 12)
+  })
+
+  it('produces the same histogram either way', () => {
+    // Streaming sorts the draws, so shot k no longer receives draw k — but the
+    // multiset of outcomes must be untouched, which is all a Distribution holds.
+    const n = 14                                    // 16384 amplitudes > CDF_MAX_STATE
+    expect(1 << n).toBeGreaterThan(CDF_MAX_STATE)
+    const d = denseFixture(n)
+    const shots = 5000
+
+    const streamed = histogram(emit => denseSampleEach(d, shots, prng(4242), emit))
+
+    const cdf = denseCdf(d)
+    const tabulated = histogram(emit => {
+      const rng = prng(4242)
+      for (let i = 0; i < shots; i++) emit(cdfSample(cdf, rng()))
+    })
+
+    expect([...streamed.values()].reduce((a, b) => a + b, 0)).toBe(shots)
+    expect(streamed.size).toBe(tabulated.size)
+    for (const [idx, count] of tabulated) {
+      expect(streamed.get(idx), `count at |${idx}⟩`).toBe(count)
+    }
+  })
+
+  it('emits exactly `shots` outcomes on both branches', () => {
+    for (const n of [6, 14]) {
+      const d = denseFixture(n, n)
+      for (const shots of [1, 7, 1000]) {
+        let seen = 0
+        denseSampleEach(d, shots, prng(n * 31 + shots), () => { seen++ })
+        expect(seen, `n=${n} shots=${shots}`).toBe(shots)
+      }
+    }
+  })
+
+  it('never falls off the end for draws arbitrarily close to 1', () => {
+    // Cumulative probability lands a few ulps below 1, so an unpinned final
+    // entry would leave the highest draws unmatched.
+    for (const n of [6, 14]) {
+      const d = denseFixture(n, 77)
+      const out: number[] = []
+      denseSampleEach(d, 3, () => 1 - Number.EPSILON, i => out.push(i))
+      expect(out).toHaveLength(3)
+      for (const i of out) {
+        expect(i).toBeGreaterThanOrEqual(0)
+        expect(i).toBeLessThan(1 << n)
+      }
+    }
+  })
+
+  it('simSampleEach agrees between sparse and promoted-dense states', () => {
+    const n = 5
+    const sparse = simFromSparse(spreadState(n), n)
+    const dense = simPromote(simFromSparse(spreadState(n), n))
+    const shots = 4000
+    const a = histogram(emit => simSampleEach(sparse, shots, prng(31337), i => emit(Number(i))))
+    const b = histogram(emit => simSampleEach(dense, shots, prng(31337), i => emit(Number(i))))
+    expect(a.size).toBe(b.size)
+    for (const [idx, count] of a) expect(b.get(idx), `|${idx}⟩`).toBe(count)
+  })
+})
+
+describe('exactProbs — bitstring key construction', () => {
+  /**
+   * The keys `exactProbs` returns, spelled the slow, obvious way.
+   *
+   * The shipped path builds them a byte at a time off a lookup table, reusing
+   * everything above the low byte across each run of 256 consecutive indices,
+   * because on a fully dense state it builds one key per amplitude. That is a
+   * worthwhile 2x on the call but it is also fiddly bit manipulation, so it is
+   * pinned here against the expression it replaced rather than against itself.
+   */
+  const spell = (idx: number, n: number): string =>
+    idx.toString(2).padStart(n, '0').split('').reverse().join('')
+
+  /** Widths bracketing the 8-bit table boundary, where the byte path splits. */
+  const WIDTHS = [1, 2, 7, 8, 9, 15, 16, 17]
+
+  it('matches the reference spelling at every width, dense and sparse', () => {
+    for (const n of WIDTHS) {
+      let k = new Circuit(n)
+      // h + t on every qubit fills the state, so every one of 2ⁿ keys is built.
+      for (let q = 0; q < n; q++) k = k.h(q).t(q)
+
+      const dense  = k.exactProbs({ dense: { fill: 1e9 } })       // promote at once
+      const sparse = k.exactProbs({ dense: { maxQubits: 0 } })    // never promote
+      expect(simKind(simPromote(simZero(n))), 'fixture sanity').toBe('dense')
+
+      // Every key is n wide and decodes back to its own index.
+      for (const key of Object.keys(dense)) {
+        expect(key, `n=${n}`).toHaveLength(n)
+        expect(/^[01]+$/.test(key), `n=${n} key ${key}`).toBe(true)
+      }
+      // And the whole map agrees with the reference, key for key and bit for bit.
+      const expected: Record<string, number> = {}
+      for (let i = 0; i < (1 << n); i++) {
+        const p = dense[spell(i, n)]
+        if (p !== undefined) expected[spell(i, n)] = p
+      }
+      expect(Object.keys(dense).toSorted()).toEqual(Object.keys(expected).toSorted())
+      expect(Object.keys(sparse).toSorted()).toEqual(Object.keys(dense).toSorted())
+      for (const key of Object.keys(dense)) {
+        expect(sparse[key], `n=${n} key ${key} across representations`).toBeCloseTo(dense[key]!, 12)
+      }
+    }
+  })
+
+  it('puts qubit 0 leftmost, so a key reads as q0q1…', () => {
+    // X on q0 only: all probability on |1 0 0 …⟩, which is '100…' with q0 first.
+    for (const n of [7, 8, 9, 17]) {
+      const probs = new Circuit(n).x(0).exactProbs({ dense: { fill: 1e9 } })
+      const key = '1'.padEnd(n, '0')
+      expect(probs[key], `n=${n}`).toBeCloseTo(1, 12)
+      expect(Object.keys(probs)).toEqual([key])
+    }
+    // X on the top qubit instead: the 1 lands on the right-hand end.
+    for (const n of [7, 8, 9, 17]) {
+      const probs = new Circuit(n).x(n - 1).exactProbs({ dense: { fill: 1e9 } })
+      const key = '0'.repeat(n - 1) + '1'
+      expect(probs[key], `n=${n}`).toBeCloseTo(1, 12)
+    }
+  })
+
+  it('agrees with amplitude() on a state wide enough to use the byte path', () => {
+    const n = 12
+    let k = new Circuit(n)
+    for (let q = 0; q < n; q++) k = k.h(q).rz(0.3 + q * 0.05, q)
+    const probs = k.exactProbs({ dense: { fill: 1e9 } })
+    for (const key of Object.keys(probs).slice(0, 40)) {
+      const a = k.amplitude(key)
+      expect(probs[key], `key ${key}`).toBeCloseTo(a.re * a.re + a.im * a.im, 12)
     }
   })
 })
