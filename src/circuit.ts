@@ -17,7 +17,7 @@ import {
 import { acquireDensePool, resolveWorkerCount } from './dense-parallel.js'
 import type { DenseOptions, DensePolicy } from './dense.js'
 import { Complex, ZERO } from './complex.js'
-import { controlledGate, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
+import { controlledGate, CNOT4, SWAP4, MpsTrajectory, applyTrajOps, type TrajOp } from './mps.js'
 import { wt } from './worker-shim.js'
 import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
@@ -26,7 +26,23 @@ import { makePrng } from './prng.js'
 import { StabilizerRank, buildSlice, countSplits, termBudget, type SrOp } from './stabilizer-rank.js'
 import { sampleFromOracle } from './stabilizer-sampling.js'
 
-// ─── Operation types ─────────────────────────────────────────────────────────
+/**
+ * Largest of a collection, by iteration.
+ *
+ * `Math.max(0, ...xs)` passes one argument per element, and V8 overflows the
+ * call stack past about 124,500 of them. That is reachable: `render()` on a
+ * 24-qubit `run({shots: 300000})` saw 297,359 distinct outcomes and threw
+ * `Maximum call stack size exceeded`, and the per-qubit uses below break on the
+ * wide chains MPS exists to handle. Empty gives 0 rather than `-Infinity`, which
+ * every caller here wants.
+ */
+const maxOf = (xs: Iterable<number>): number => {
+  let m = 0
+  for (const x of xs) if (x > m) m = x
+  return m
+}
+
+// ─── Operation types ───────────────────────────────────────────────────
 
 /** Serialization tag carried on ops that have an IonQ JSON representation. */
 type GateMeta = { name: string; params?: readonly number[] }
@@ -1927,7 +1943,7 @@ export class Distribution {
   /** ASCII bar chart of measurement outcomes. */
   render(): string {
     const entries = Object.entries(this.probs).toSorted(([a], [b]) => a.localeCompare(b))
-    const maxP    = Math.max(...entries.map(([, p]) => p))
+    const maxP    = maxOf(entries.map(([, p]) => p))
     const width   = 40
     const lines   = entries.map(([bs, p]) => {
       const bar   = '█'.repeat(Math.round((p / maxP) * width))
@@ -2145,6 +2161,11 @@ export interface GateCounts {
   byName: Record<string, number>
 }
 
+/** A circuit lowered to explicit one- and two-qubit matrices, as {@link Circuit.toOps} produces. */
+export type GateOp =
+  | { kind: 'one'; q: number; gate: Gate2x2 }
+  | { kind: 'two'; a: number; b: number; gate: Gate4x4 }
+
 /** Options for {@link Circuit.runStabilizerRank}. */
 export interface StabilizerRankRunOptions {
   /** Number of measurement shots. Default 1024. */
@@ -2182,27 +2203,90 @@ export interface StabilizerRankRunOptions {
   workers?: number
 }
 
+/**
+ * An append-only op array, shared between the circuits along one build chain.
+ *
+ * `Circuit` is immutable, and the obvious way to honour that — copy the op array
+ * on every gate — makes building an m-gate circuit cost O(m²). Measured, that is
+ * a throughput collapse from 500,000 gates/s at 2,000 gates to 10,000/s at
+ * 128,000, and on a 50,000-qubit GHZ chain it made *construction* ten times
+ * dearer than the analysis that followed it.
+ *
+ * So the array is shared and appended in place, with each circuit holding its own
+ * length. A circuit only ever reads `ops[0..len)`, and entries below its own
+ * length are never rewritten, so every circuit still sees exactly the sequence it
+ * was built with — the immutability is in what is *observable*, not in the
+ * allocation.
+ *
+ * `sealed` is what keeps that true once an array escapes. Two things can break
+ * sharing: appending to a circuit that is not at the tip (a branch), and handing
+ * the raw array to a caller who would then see it grow. Both set `sealed`, and a
+ * sealed store is copied rather than pushed to. Branching therefore costs one
+ * copy and continues linearly, which is the classic transient/persistent
+ * boundary.
+ */
+interface OpStore { ops: Op[]; sealed: boolean }
+
+/** Shared empty store: every `new Circuit(n)` starts from the same sealed array. */
+const EMPTY_OPS: readonly Op[] = []
+
 export class Circuit {
   readonly qubits: number
-  readonly #ops:   readonly Op[]
+  // Not `readonly`: #add writes these on the instance it is constructing, which is
+  // how a new circuit adopts a shared store without widening the constructor.
+  #store: OpStore
+  #len:   number
   readonly #cregs: ReadonlyMap<string, number>  // name → declared size
   readonly #gates: ReadonlyMap<string, Circuit>  // name → registered sub-circuit
 
   constructor(
     qubits: number,
-    ops:   readonly Op[]                 = [],
+    ops:   readonly Op[]                 = EMPTY_OPS,
     cregs: ReadonlyMap<string, number>   = new Map(),
     gates: ReadonlyMap<string, Circuit>  = new Map(),
   ) {
     this.qubits  = qubits
-    this.#ops    = ops
+    // A caller's array is adopted sealed, so it is never appended to. The first
+    // gate copies once; every gate after that is O(1).
+    this.#store  = { ops: ops as Op[], sealed: true }
+    this.#len    = ops.length
     this.#cregs  = cregs
     this.#gates  = gates
   }
 
+  /**
+   * This circuit's ops, as a sequence that cannot subsequently change.
+   *
+   * Returns the shared array directly when this circuit is at its tip — and seals
+   * it in the process, so no later gate can append to something a caller is
+   * holding. Off the tip it slices, which is the same O(n) the old
+   * copy-per-gate paid, only now once per read instead of once per gate.
+   */
+  get #ops(): readonly Op[] {
+    const store = this.#store
+    if (this.#len === store.ops.length) {
+      store.sealed = true
+      return store.ops
+    }
+    return store.ops.slice(0, this.#len)
+  }
+
   #add(op: Op): Circuit {
     this.#checkOp(op)
-    return new Circuit(this.qubits, [...this.#ops, op], this.#cregs, this.#gates)
+    const store = this.#store
+    let next: OpStore
+    if (!store.sealed && store.ops.length === this.#len) {
+      store.ops.push(op)          // at the tip of an unsealed chain: O(1)
+      next = store
+    } else {
+      const ops = store.ops.slice(0, this.#len)
+      ops.push(op)
+      next = { ops, sealed: false }
+    }
+    const out = new Circuit(this.qubits, EMPTY_OPS, this.#cregs, this.#gates)
+    out.#store = next
+    out.#len   = this.#len + 1
+    return out
   }
 
   #checkOp(op: Op): void {
@@ -4254,7 +4338,7 @@ export class Circuit {
       for (let q = minQ; q <= maxQ; q++) colOf[q] = col + 1
       placed.push({ op, col })
     }
-    const numCols = Math.max(0, ...colOf)
+    const numCols = maxOf(colOf)
 
     // cell[q][c] — quantikz command for each (qubit, column) slot; '' = absorbed by a spanning gate
     const cell: string[][] = Array.from({ length: n }, () =>
@@ -5222,7 +5306,7 @@ export class Circuit {
       placed.push({ op, col })
     }
 
-    const numCols = Math.max(0, ...colOf)
+    const numCols = maxOf(colOf)
     if (numCols === 0) {
       // Empty circuit: just wires
       const pw = `q${n - 1}: `.length
@@ -5335,7 +5419,7 @@ export class Circuit {
       for (let q = minQ; q <= maxQ; q++) colOf[q] = col + 1
       placed.push({ op, col })
     }
-    const numCols = Math.max(0, ...colOf)
+    const numCols = maxOf(colOf)
 
     // Per-column body widths (in px), based on label length
     const colPx = Array.from({ length: numCols }, (_, c) => {
@@ -5554,7 +5638,7 @@ export class Circuit {
     }
 
     processOps(this.#ops)
-    return Math.max(0, ...stepOf)
+    return maxOf(stepOf)
   }
 
   // ── Bloch sphere visualization ────────────────────────────────────────────
@@ -5644,8 +5728,25 @@ export class Circuit {
     checkOptions(options, ['shots', 'seed', 'noise'], 'runClifford')
     const { shots = 1024, seed, noise } = options
     // ── Validate: check all ops are Clifford (recursing into if bodies) ─────
-    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
+    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg', 'id', 'v', 'vi'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
+    const ROTATION        = new Set(['rx', 'ry', 'rz', 'u1', 'p'])
+
+    /**
+     * A rotation lands in the Clifford group only at multiples of π/2.
+     *
+     * `Rz(π/2)` is `S`, `Rz(π)` is `Z`, `Rx(π/2)` is `√X`. Rejecting these on the
+     * gate name refuses circuits that are entirely Clifford — the Trotter family
+     * fixes its coupling angle at −π/2, so `Rzz` is Clifford, and at the ends of a
+     * transverse-field sweep the whole circuit is. Returns the quarter-turn count
+     * mod 4, or null when the angle is not a Clifford one.
+     */
+    const quarterTurns = (theta: number): number | null => {
+      const k = theta / (Math.PI / 2)
+      const r = Math.round(k)
+      if (Math.abs(k - r) > 1e-9) return null
+      return ((r % 4) + 4) % 4
+    }
 
     const validateOps = (ops: readonly Op[]): void => {
       for (const op of flattenOps(ops)) {
@@ -5655,9 +5756,11 @@ export class Circuit {
           case 'if': validateOps(op.ops); break
           case 'single': {
             const name = op.meta?.name ?? '?'
-            if (!CLIFFORD_SINGLE.has(name))
-              throw new TypeError(`runClifford: gate '${name}' is not a Clifford gate`)
-            break
+            if (CLIFFORD_SINGLE.has(name)) break
+            if (ROTATION.has(name) && quarterTurns(op.meta?.params?.[0] ?? 0) !== null) break
+            throw new TypeError(ROTATION.has(name)
+              ? `runClifford: ${name}(${(op.meta?.params?.[0] ?? 0).toFixed(4)}) is not a Clifford angle`
+              : `runClifford: gate '${name}' is not a Clifford gate`)
           }
           case 'controlled': {
             const name = op.meta?.name ?? '?'
@@ -5735,6 +5838,22 @@ export class Circuit {
                 case 'z':  sim.z(op.q);  break
                 case 's':  sim.s(op.q);  break
                 case 'si': case 'sdg': sim.si(op.q); break
+                // √X = H·S·H, verified as an exact matrix identity in the suite.
+                case 'v':  sim.h(op.q); sim.s(op.q);  sim.h(op.q); break
+                case 'vi': sim.h(op.q); sim.si(op.q); sim.h(op.q); break
+                case 'id': break
+                default: {
+                  // A Clifford-angle rotation, already validated. Global phase is
+                  // unobservable here, so each is just its quarter-turn count.
+                  const k = quarterTurns(op.meta?.params?.[0] ?? 0)!
+                  const zTurn = (): void => { if (k === 1) sim.s(op.q); else if (k === 2) sim.z(op.q); else if (k === 3) sim.si(op.q) }
+                  if (name === 'rz' || name === 'u1' || name === 'p') zTurn()
+                  else if (name === 'rx') { sim.h(op.q); zTurn(); sim.h(op.q) }
+                  else if (name === 'ry') {
+                    // Ry(θ) = S·Rx(θ)·S†, since Y = S·X·S†.
+                    sim.s(op.q); sim.h(op.q); zTurn(); sim.h(op.q); sim.si(op.q)
+                  }
+                }
               }
               if (p1) cDep1(sim, op.q, p1)
               break
@@ -5835,7 +5954,7 @@ export class Circuit {
       shots = 1024, seed, maxTerms, targetError, burnIn = 200, thin = 20,
       method = 'auto', exactBudget = 1 << 22, workers: numWorkers = 0,
     } = options
-    const ops = this.#toSrOps()
+    const ops = this.toSrOps()
     // An explicit cap wins; otherwise a target error sets the budget, and with
     // neither the run is exact.
     const budget = maxTerms ?? (targetError === undefined ? Infinity : termBudget(ops, targetError))
@@ -5971,8 +6090,46 @@ export class Circuit {
     }
   }
 
-  /** Lower this circuit to the serializable op list the rank backend replays. */
-  #toSrOps(): SrOp[] {
+  /**
+   * Lower this circuit to explicit one- and two-qubit matrices.
+   *
+   * `toTrajOps` already normalises controlled gates and decomposes Toffoli and
+   * Fredkin, so this only has to reject what has no meaning on a pure state.
+   *
+   * Public because it is the seam every engine lowers through: the MPS, PEPS and
+   * symmetry backends all consume this form rather than re-walking the circuit.
+   */
+  toOps(): GateOp[] {
+    const out: GateOp[] = []
+    const walk = (ops: readonly TrajOp[]): void => {
+      for (const op of ops) {
+        switch (op.kind) {
+          case 'barrier': break
+          case 'single': out.push({ kind: 'one', q: op.q, gate: op.gate }); break
+          case 'cnot':   out.push({ kind: 'two', a: op.control, b: op.target, gate: CNOT4 }); break
+          case 'swap':   out.push({ kind: 'two', a: op.a, b: op.b, gate: SWAP4 }); break
+          case 'two':    out.push({ kind: 'two', a: op.a, b: op.b, gate: op.gate }); break
+          default:
+            throw new TypeError(
+              `toOps: ${op.kind} is not supported — this form evolves a pure state and has no ` +
+              `classical registers. Use run() or runMps() for mid-circuit measurement.`)
+        }
+      }
+    }
+    walk(toTrajOps(flattenOps(this.#ops)))
+    return out
+  }
+
+  /**
+   * Lower this circuit to the serializable op list the rank backend replays.
+   *
+   * Public for the same reason as {@link toOps}: it is the seam a caller needs
+   * to ask what a circuit costs this backend — `countSplits` on the result is the
+   * T-count that decides everything — without running the simulation to find out.
+   *
+   * @throws TypeError naming the gate, when the circuit is not Clifford+diagonal.
+   */
+  toSrOps(): SrOp[] {
     const out: SrOp[] = []
     const reject = (what: string): never => {
       throw new TypeError(
@@ -6057,8 +6214,25 @@ export class Circuit {
   simulate(options: SimulateOptions = {}): Distribution {
     checkOptions(options, ['shots', 'seed', 'noise', 'initialState', 'statevectorLimit', 'dense', 'maxBond', 'truncErr', 'maxChi'], 'simulate')
     const { shots = 1024, seed, noise, initialState, statevectorLimit = 20, dense, maxBond = 64, truncErr = 0, maxChi = Infinity } = options
-    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg'])
+    const CLIFFORD_SINGLE = new Set(['h', 'x', 'y', 'z', 's', 'si', 'sdg', 'id', 'v', 'vi'])
     const CLIFFORD_CTRL   = new Set(['cx', 'cy', 'cz'])
+    const ROTATION        = new Set(['rx', 'ry', 'rz', 'u1', 'p'])
+
+    /**
+     * A rotation lands in the Clifford group only at multiples of π/2.
+     *
+     * `Rz(π/2)` is `S`, `Rz(π)` is `Z`, `Rx(π/2)` is `√X`. Rejecting these on the
+     * gate name refuses circuits that are entirely Clifford — the Trotter family
+     * fixes its coupling angle at −π/2, so `Rzz` is Clifford, and at the ends of a
+     * transverse-field sweep the whole circuit is. Returns the quarter-turn count
+     * mod 4, or null when the angle is not a Clifford one.
+     */
+    const quarterTurns = (theta: number): number | null => {
+      const k = theta / (Math.PI / 2)
+      const r = Math.round(k)
+      if (Math.abs(k - r) > 1e-9) return null
+      return ((r % 4) + 4) % 4
+    }
 
     const isClifford = (ops: readonly Op[]): boolean => {
       for (const op of flattenOps(ops)) {
@@ -6066,7 +6240,15 @@ export class Circuit {
           case 'barrier': case 'measure': case 'reset': break
           case 'cnot': case 'swap': break
           case 'if': if (!isClifford(op.ops)) return false; break
-          case 'single':     if (!CLIFFORD_SINGLE.has(op.meta?.name ?? '')) return false; break
+          case 'single': {
+            const name = op.meta?.name ?? ''
+            if (CLIFFORD_SINGLE.has(name)) break
+            // A rotation at a multiple of π/2 is Clifford, so the tableau path is
+            // available. Deciding on the name alone sends an entirely Clifford
+            // circuit down the statevector route for no reason.
+            if (ROTATION.has(name) && quarterTurns(op.meta?.params?.[0] ?? 0) !== null) break
+            return false
+          }
           case 'controlled': if (!CLIFFORD_CTRL.has(op.meta?.name   ?? '')) return false; break
           default: return false
         }

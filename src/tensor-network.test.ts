@@ -452,3 +452,76 @@ describe('tensor network — diagonal gates as hyper-indices', () => {
     expect(Array.from(summed.data)).toEqual([31, 0])
   })
 })
+
+describe('tensor-network — the whole gate set contracts', () => {
+  /**
+   * The test whose absence let this drift.
+   *
+   * `circuitNetwork` rebuilds each gate's matrix from its serialized name, and
+   * that switch duplicated entries already in `gates.ts`. Nothing enumerated the
+   * two against each other, so eight gates — `v`, `vi`, `u2`, `u3`, `r2`, `r4`,
+   * `r8`, `srn` — plus the `toffoli`, `cswap` and `csrswap` op kinds were silently
+   * unsupported. That is not a small hole: `u3` is the universal single-qubit
+   * gate, and Shor's modular arithmetic is built from Fredkin gates, so the
+   * contraction attack disqualified itself from most circuits and from the one
+   * family it matters most on.
+   *
+   * The differential tests elsewhere compare backends on gates they all support,
+   * which is exactly why they never caught it. This one walks the API instead.
+   */
+  const CASES: [string, (c: Circuit) => Circuit][] = [
+    ['h', c => c.h(1)], ['x', c => c.x(1)], ['y', c => c.y(1)], ['z', c => c.z(1)],
+    ['s', c => c.s(1)], ['si', c => c.si(1)], ['t', c => c.t(1)], ['ti', c => c.ti(1)],
+    ['v', c => c.v(1)], ['vi', c => c.vi(1)], ['srn', c => c.srn(1)],
+    ['rx', c => c.rx(0.7, 1)], ['ry', c => c.ry(0.7, 1)], ['rz', c => c.rz(0.7, 1)],
+    ['u1', c => c.u1(0.7, 1)], ['u2', c => c.u2(0.3, 0.9, 1)], ['u3', c => c.u3(0.3, 0.9, 0.5, 1)],
+    ['r2', c => c.r2(1)], ['r4', c => c.r4(1)], ['r8', c => c.r8(1)],
+    ['cnot', c => c.cnot(0, 1)], ['cy', c => c.cy(0, 1)], ['cz', c => c.cz(0, 1)],
+    ['ch', c => c.ch(0, 1)], ['swap', c => c.swap(0, 1)],
+    ['xx', c => c.xx(0.6, 0, 1)], ['yy', c => c.yy(0.6, 0, 1)],
+    ['zz', c => c.zz(0.6, 0, 1)], ['xy', c => c.xy(0.6, 0, 1)],
+    ['ccx', c => c.ccx(0, 1, 2)], ['cswap', c => c.cswap(0, 1, 2)], ['csrswap', c => c.csrswap(0, 1, 2)],
+  ]
+
+  it.each(CASES)('%s contracts to the statevector amplitude, phase included', (name, apply) => {
+    // Scrambled first, so every amplitude is populated and a dropped phase shows.
+    // Probabilities would hide exactly the errors a wrong tensor produces.
+    const c = apply(new Circuit(3).h(0).h(1).h(2).t(0).ry(0.4, 1).rz(0.8, 2))
+    const sv = c.statevector()
+    for (const bits of ['000', '011', '101', '110', '111']) {
+      const idx = BigInt(parseInt([...bits].reverse().join(''), 2))
+      const want = sv.get(idx) ?? { re: 0, im: 0 }
+      const got = amplitudeByContraction(c, bits)
+      expect(got.re, `${name} re |${bits}⟩`).toBeCloseTo(want.re, 9)
+      expect(got.im, `${name} im |${bits}⟩`).toBeCloseTo(want.im, 9)
+    }
+  })
+
+  it('covers every gate the circuit API exposes', () => {
+    // A gate added without a case here should fail loudly rather than quietly
+    // becoming the next silent hole.
+    const covered = new Set(CASES.map(([n]) => n))
+    for (const g of ['u3', 'v', 'csrswap', 'cswap', 'ccx', 'r8']) {
+      expect(covered.has(g), `${g} is untested against contraction`).toBe(true)
+    }
+  })
+})
+
+describe('tensor network — networks past the spread-argument limit', () => {
+  /**
+   * `Math.max(0, ...xs)` passes one argument per element, and V8 throws
+   * `RangeError: Maximum call stack size exceeded` past about 124,500 of them.
+   * Every planner here seeded its width that way, so a larger network failed with
+   * a stack overflow instead of returning a width — and a 43-qubit Shor circuit
+   * is 191,583 tensors, well inside what callers ask about.
+   *
+   * 130,000 and not 200,000 because the limit is the thing under test: just past
+   * it is enough, and the old failure was identical either way. Only the seeding
+   * is exercised — planning 130,000 tensors is minutes of work and none of it
+   * touches the line that broke.
+   */
+  it('evaluatePlan seeds its width without spreading the network', () => {
+    const chain: string[][] = Array.from({ length: 130_000 }, (_, i) => [`x${i}`, `x${i + 1}`])
+    expect(evaluatePlan(chain, []).width).toBe(2)
+  })
+})

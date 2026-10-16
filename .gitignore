@@ -4,3 +4,4 @@ dist/
 
 # JetBrains per-user state. Lint rules live in .oxlintrc.json, not the IDE.
 .idea/
+site/ket.global.js

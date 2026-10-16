@@ -24,6 +24,8 @@
  */
 
 import type { Circuit } from './circuit.js'
+import * as G from './gates.js'
+import type { Gate4x4 } from './statevector.js'
 
 /** A tensor over `indices`, complex, stored re/im interleaved in row-major order. */
 export interface Tensor {
@@ -45,6 +47,22 @@ export interface ContractionPlan {
 }
 
 const size = (n: number): number => 2 ** n
+
+/**
+ * Largest of a collection, by iteration.
+ *
+ * `Math.max(0, ...xs)` passes one argument per element, and V8 overflows the
+ * call stack past about 124,500 of them. A 43-qubit Shor network is 191,583
+ * tensors, so every planner here reported `Maximum call stack size exceeded` on
+ * circuits of that size — an error where a width belongs, and one that reads as
+ * "not applicable" rather than "not measured". Nothing on this path is hot; the
+ * spread was only shorter to write.
+ */
+const maxOf = (xs: Iterable<number>): number => {
+  let m = 0
+  for (const x of xs) if (x > m) m = x
+  return m
+}
 
 /**
  * Search for a contraction order.
@@ -124,7 +142,7 @@ export function planContraction(
     }
 
     const steps: ContractionStep[] = []
-    let width = Math.max(0, ...live.map(t => t!.size))
+    let width = maxOf(live.map(t => t!.size))
     let cost = 0
     let remaining = live.length
 
@@ -377,8 +395,107 @@ function matrixOf(name: string, params: readonly number[] | undefined): Float64A
     case 'rx':  return m(c,0, 0,-s, 0,-s, c,0)
     case 'ry':  return m(c,0, -s,0, s,0, c,0)
     case 'u1': case 'p': return m(1,0, 0,0, 0,0, Math.cos(p), Math.sin(p))
-    default: return null
+    default: return fromGateTable(name, params)
   }
+}
+
+/**
+ * Last resort: build the matrix out of `gates.ts` instead of hand-copying it.
+ *
+ * The switch above duplicates entries that already exist in the gate table, and
+ * duplication is exactly how this drifted — `v`, `vi`, `u2`, `u3`, `r2`, `r4`,
+ * `r8` and `srn` were all missing, which silently disqualified the contraction
+ * attack from any circuit containing them. `u3` is the *universal* single-qubit
+ * gate, so that was most circuits.
+ *
+ * Falling through to the table means a gate added to ket is contractible the day
+ * it lands, with nothing here to remember to update.
+ */
+function fromGateTable(name: string, params: readonly number[] | undefined): Float64Array | null {
+  const table = G as unknown as Record<string, unknown>
+  // Aliases the serialiser emits that are not the table's own spelling.
+  const alias: Record<string, string> = {
+    srn: 'V', sx: 'V', srndg: 'Vi', sxdg: 'Vi', sdg: 'Si', tdg: 'Ti', p: 'U1',
+  }
+  const key = alias[name] ?? Object.keys(table).find(k => k.toLowerCase() === name.toLowerCase())
+  if (key === undefined) return null
+  const entry = table[key]
+  const gate = typeof entry === 'function'
+    ? (entry as (...a: number[]) => unknown)(...(params ?? []))
+    : entry
+  const rows = gate as readonly (readonly { re: number; im: number }[])[] | undefined
+  if (!Array.isArray(rows) || rows.length !== 2) return null
+  const out = new Float64Array(8)
+  for (let r = 0; r < 2; r++) {
+    for (let c2 = 0; c2 < 2; c2++) {
+      const v = rows[r]![c2]
+      if (v === undefined || typeof v.re !== 'number') return null
+      out[(r * 2 + c2) * 2] = v.re
+      out[(r * 2 + c2) * 2 + 1] = v.im
+    }
+  }
+  return out
+}
+
+/**
+ * Named two-qubit gates as a flat 4×4, row-major, |ab⟩ with `a` the high bit.
+ *
+ * Reconstructed from the serialized name and parameters rather than carried
+ * through, because that is all `toJSON` records for a named gate. A gate whose
+ * matrix cannot be rebuilt this way arrives as a `unitary` op instead, which
+ * carries its entries.
+ */
+function twoMatrixOf(name: string, params: readonly number[] | undefined): Float64Array | null {
+  const build = (g: Gate4x4): Float64Array => {
+    const d = new Float64Array(32)
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      d[8 * r + 2 * c] = g[r]![c]!.re
+      d[8 * r + 2 * c + 1] = g[r]![c]!.im
+    }
+    return d
+  }
+  const p0 = params?.[0] ?? 0
+  switch (name) {
+    case 'xx':     return build(G.Xx(p0))
+    case 'yy':     return build(G.Yy(p0))
+    case 'zz':     return build(G.Zz(p0))
+    case 'xy':     return build(G.Xy(p0))
+    case 'iswap':  return build(G.ISwap)
+    case 'srswap': return build(G.SrSwap)
+    case 'ms':     return build(G.Ms(p0, params?.[1] ?? 0))
+    default:       return null
+  }
+}
+
+/**
+ * A general two-qubit gate as a rank-4 tensor over [outA, outB, inA, inB].
+ *
+ * The 4×4's row index is the pair of output bits and its column index the pair of
+ * input bits, so this is a reshape and nothing more — but the bit order is the
+ * part that is easy to get backwards, and getting it backwards still produces a
+ * normalised state, just the wrong one.
+ */
+function twoQubitTensor(m: Float64Array): Float64Array {
+  const d = new Float64Array(16 * 2)
+  for (let oa = 0; oa < 2; oa++) for (let ob = 0; ob < 2; ob++)
+    for (let ia = 0; ia < 2; ia++) for (let ib = 0; ib < 2; ib++) {
+      const dst = ((oa * 2 + ob) * 2 + ia) * 2 + ib
+      const src = (oa * 2 + ob) * 4 + (ia * 2 + ib)
+      d[2 * dst] = m[2 * src]!
+      d[2 * dst + 1] = m[2 * src + 1]!
+    }
+  return d
+}
+
+/** An explicit `unitary` op's matrix, flattened row-major. */
+function flattenMatrix(rows: readonly (readonly [number, number])[][]): Float64Array {
+  const n = rows.length
+  const d = new Float64Array(n * n * 2)
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    d[2 * (r * n + c)] = rows[r]![c]![0]
+    d[2 * (r * n + c) + 1] = rows[r]![c]![1]
+  }
+  return d
 }
 
 /** Gates that are diagonal in the computational basis. */
@@ -470,6 +587,46 @@ export function circuitNetwork(circuit: Circuit, bitstring: string): Tensor[] {
       const a = op['a'] as number, b = op['b'] as number
       // A SWAP is just a relabelling — no tensor needed at all.
       const tmp = wire[a]!; wire[a] = wire[b]!; wire[b] = tmp
+    } else if (kind === 'two') {
+      const meta = op['meta'] as { name: string; params?: number[] }
+      const mat = twoMatrixOf(meta.name, meta.params)
+      if (!mat) throw new TypeError(`circuitNetwork does not support gate '${meta.name}'`)
+      const a = op['a'] as number, b = op['b'] as number
+      const oa = next(), ob = next()
+      tensors.push({ indices: [oa, ob, wire[a]!, wire[b]!], data: twoQubitTensor(mat) })
+      wire[a] = oa; wire[b] = ob
+    } else if (kind === 'toffoli' || kind === 'cswap' || kind === 'csrswap') {
+      // Shor's modular arithmetic is built from these, so without them the
+      // contraction attack silently sat out the one family it matters most on.
+      const qs = kind === 'toffoli'
+        ? [op['c1'] as number, op['c2'] as number, op['target'] as number]
+        : [op['control'] as number, op['a'] as number, op['b'] as number]
+      const data3 = kind === 'toffoli' ? toffoliTensor()
+                  : kind === 'cswap' ? cswapTensor() : csrSwapTensor()
+      const outs = [next(), next(), next()]
+      tensors.push({
+        indices: [outs[0]!, outs[1]!, outs[2]!, wire[qs[0]!]!, wire[qs[1]!]!, wire[qs[2]!]!],
+        data: data3,
+      })
+      for (let i = 0; i < 3; i++) wire[qs[i]!] = outs[i]!
+    } else if (kind === 'unitary') {
+      // The general escape hatch, and the one an RCS circuit's fSim arrives as.
+      const qs = op['qubits'] as number[]
+      const rows = op['matrix'] as (readonly [number, number])[][]
+      if (qs.length === 1) {
+        const out = next()
+        tensors.push({ indices: [out, wire[qs[0]!]!], data: flattenMatrix(rows) })
+        wire[qs[0]!] = out
+      } else if (qs.length === 2) {
+        const oa = next(), ob = next()
+        tensors.push({
+          indices: [oa, ob, wire[qs[0]!]!, wire[qs[1]!]!],
+          data: twoQubitTensor(flattenMatrix(rows)),
+        })
+        wire[qs[0]!] = oa; wire[qs[1]!] = ob
+      } else {
+        throw new TypeError(`circuitNetwork supports 1- and 2-qubit unitary ops, got ${qs.length} qubits`)
+      }
     } else {
       throw new TypeError(`circuitNetwork does not support op '${kind}'`)
     }
@@ -508,6 +665,59 @@ function cnotTensor(): Float64Array {
   }
   return d
 }
+
+/**
+ * A three-qubit permutation as a rank-6 tensor over [out…, in…].
+ *
+ * Toffoli and Fredkin are both permutations of the computational basis, so each
+ * is a 0/1 tensor with exactly one entry per input — `move` says where that input
+ * goes. Building them directly rather than decomposing into CNOTs keeps the
+ * network one tensor per gate: a Shor circuit is tens of thousands of these, and
+ * tripling the tensor count would cost the contraction planner far more than the
+ * rank-6 tensor costs to hold.
+ */
+function permTensor3(move: (a: number, b: number, c: number) => [number, number, number]): Float64Array {
+  const d = new Float64Array(64 * 2)
+  for (let i0 = 0; i0 < 2; i0++) for (let i1 = 0; i1 < 2; i1++) for (let i2 = 0; i2 < 2; i2++) {
+    const [o0, o1, o2] = move(i0, i1, i2)
+    d[2 * (((((o0 * 2 + o1) * 2 + o2) * 2 + i0) * 2 + i1) * 2 + i2)] = 1
+  }
+  return d
+}
+
+/**
+ * Fredkin's square root: a controlled-√SWAP, as a rank-6 tensor.
+ *
+ * Not a permutation, so it cannot go through {@link permTensor3}. With the
+ * control set, |01⟩ and |10⟩ mix through [[s, is], [is, s]] with s = 1/√2, while
+ * |00⟩ and |11⟩ — and everything with the control clear — pass through untouched.
+ * Transcribed from the dense kernel rather than the prose, so the two cannot
+ * disagree: out0 = s·in0 + i·s·in1, out1 = i·s·in0 + s·in1.
+ */
+function csrSwapTensor(): Float64Array {
+  const d = new Float64Array(64 * 2)
+  const at = (o0: number, o1: number, o2: number, i0: number, i1: number, i2: number): number =>
+    2 * (((((o0 * 2 + o1) * 2 + o2) * 2 + i0) * 2 + i1) * 2 + i2)
+  const s = Math.SQRT1_2
+  for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
+    d[at(0, a, b, 0, a, b)] = 1                       // control clear: identity
+  }
+  d[at(1, 0, 0, 1, 0, 0)] = 1                         // |c00> untouched
+  d[at(1, 1, 1, 1, 1, 1)] = 1                         // |c11> untouched
+  d[at(1, 0, 1, 1, 0, 1)] = s                         // <01|M|01> = s
+  d[at(1, 1, 0, 1, 0, 1) + 1] = s                     // <10|M|01> = i s
+  d[at(1, 0, 1, 1, 1, 0) + 1] = s                     // <01|M|10> = i s
+  d[at(1, 1, 0, 1, 1, 0)] = s                         // <10|M|10> = s
+  return d
+}
+
+/** Toffoli: flip the target when both controls are set. */
+const toffoliTensor = (): Float64Array =>
+  permTensor3((c1, c2, t) => [c1, c2, c1 === 1 && c2 === 1 ? t ^ 1 : t])
+
+/** Fredkin: swap the two targets when the control is set. */
+const cswapTensor = (): Float64Array =>
+  permTensor3((c, a, b) => (c === 1 ? [c, b, a] : [c, a, b]))
 
 /** A controlled-U as a rank-4 tensor, from U's 2×2 matrix. */
 function controlledTensor(u: Float64Array): Float64Array {
@@ -551,7 +761,11 @@ export function amplitudeByContraction(
   { restarts = 24, seed = 1 }: { restarts?: number; seed?: number } = {},
 ): AmplitudeResult {
   const tensors = circuitNetwork(circuit, bitstring)
-  const plan = planContraction(tensors.map(t => t.indices), { restarts, seed })
+  // planBest, not planContraction: the hardness attack prices this network with
+  // planBest, and on a 54-qubit RCS network that is width 12 against greedy's 14.
+  // Executing the worse plan would mean the reported cost of an attack was one a
+  // caller could not actually get by running it.
+  const plan = planBest(tensors.map(t => t.indices), { restarts, seed })
   const out = contractNetwork(tensors, plan)
   if (out.indices.length !== 0) throw new Error(`contraction left ${out.indices.length} open indices`)
   return { re: out.data[0]!, im: out.data[1]!, width: plan.width, cost: plan.cost, tensors: tensors.length }
@@ -871,7 +1085,7 @@ export function evaluatePlan(
 ): { width: number; cost: number } {
   const live: (Set<string> | undefined)[] = network.map(idx => new Set(idx))
   const held = holdCounts(network)
-  let width = Math.max(0, ...live.map(s => s!.size))
+  let width = maxOf(live.map(s => s!.size))
   let cost = 0
   for (const [a, b] of steps) {
     const A = live[a]!, B = live[b]!
@@ -899,12 +1113,24 @@ export function evaluatePlan(
  * does with its own set. Scoring is cheap because `evaluatePlan` replays a plan
  * over index sets without touching tensor data.
  *
- * On the circuit families measured here — shallow nearest-neighbour layers, and
- * random long-range pairings — greedy wins on width or ties, and wins on cost.
- * Recursive bisection is kept because it costs nothing to try, and because the
- * regime where partitioning pulls ahead (large networks with high treewidth,
- * where multilevel coarsening earns its keep) is not one greedy handles well
- * either.
+ * Which one wins is decided by the network, and on the published families it is
+ * usually bisection — by margins that dwarf the cost of trying both. Measured on
+ * the light cone of a single-site observable, greedy against partitioned:
+ *
+ *   IBM heavy-hex,  5 steps   w 20 → 19     cost 5.9e8  → 2.6e8
+ *   IBM heavy-hex, 10 steps   w 78 → 55     cost 2.9e33 → 1.4e24
+ *   IBM heavy-hex, 20 steps   w 183 → 127   cost 2.3e74 → 4.1e57
+ *   Google RCS,    depth 12   w 15 → 15     cost 3.6e6  → 5.0e6   (greedy wins)
+ *   Google RCS,    depth 20   w 39 → 30     cost 1.8e16 → 1.9e13
+ *
+ * Greedy holds its own only on the shallowest RCS instance. Sparse degree-3
+ * lattices are exactly the regime where multilevel coarsening earns its keep, and
+ * greedy's local choice walks into a corner it cannot see coming.
+ *
+ * The cost is planning time, and it is not small: on the 20-step heavy-hex network
+ * greedy plans in 349ms and bisection in 349s, a thousandfold. `planBest` pays
+ * both. On a deep circuit that makes *planning* the dominant cost of pricing a
+ * contraction, which is worth knowing before calling this in a loop.
  */
 export function planBest(
   network: readonly (readonly string[])[],
@@ -1022,7 +1248,7 @@ function planProfile(
     holders.push(merged)
   }
 
-  const width = Math.max(0, ...sizes, ...network.map(idx => idx.length))
+  const width = Math.max(maxOf(sizes), maxOf(network.map(idx => idx.length)))
   let peakCount = 0
   const peakIndices = new Map<string, number>()
   sizes.forEach((sz, i) => {
@@ -1126,16 +1352,28 @@ export function projectTensor(t: Tensor, fixed: ReadonlyMap<string, number>): Te
 }
 
 /**
- * Contract a network slice by slice and sum the results.
+ * Contract slices `[lo, hi)` and sum them.
  *
- * Each slice is independent, so this loop is the sequential form of what would
- * normally be distributed: nothing is shared between iterations but the running
- * total.
+ * This is the unit of distributable work. A slice reads only the network and the
+ * plan and writes only its own partial sum, so a range of them is a self-contained
+ * job: ship the network and two integers, get back one tensor. That is the whole
+ * reason slicing scales — the jobs never talk to each other, and the reduction at
+ * the end is addition.
+ *
+ * Splitting a contraction across ranges changes the *order* the partial sums are
+ * added in, which moves the result in the last bits or two. Any given partition is
+ * deterministic; two different partitions are not bitwise equal. Compare sliced
+ * results with a tolerance, never with `toBe`.
  */
-export function contractSliced(tensors: readonly Tensor[], sliced: SlicedPlan): Tensor {
+export function contractSliceRange(
+  tensors: readonly Tensor[], sliced: SlicedPlan, lo: number, hi: number,
+): Tensor {
+  if (!Number.isInteger(lo) || !Number.isInteger(hi)) throw new RangeError('contractSliceRange: lo and hi must be integers')
+  if (lo < 0 || hi > sliced.slices) throw new RangeError(`contractSliceRange: [${lo}, ${hi}) is outside [0, ${sliced.slices})`)
+
   let acc: Tensor | null = null
 
-  for (let s = 0; s < sliced.slices; s++) {
+  for (let s = lo; s < hi; s++) {
     const fixed = new Map<string, number>()
     sliced.sliced.forEach((name, k) => fixed.set(name, (s >> k) & 1))
     const projected = tensors.map(t => projectTensor(t, fixed))
@@ -1144,8 +1382,18 @@ export function contractSliced(tensors: readonly Tensor[], sliced: SlicedPlan): 
     for (let i = 0; i < part.data.length; i++) acc.data[i]! += part.data[i]!
   }
 
-  if (!acc) throw new Error('contractSliced: no slices')
+  if (!acc) throw new RangeError(`contractSliceRange: empty range [${lo}, ${hi})`)
   return acc
+}
+
+/**
+ * Contract a network slice by slice and sum the results.
+ *
+ * Each slice is independent, so this loop is the sequential form of what would
+ * normally be distributed: nothing is shared between iterations but the running
+ */
+export function contractSliced(tensors: readonly Tensor[], sliced: SlicedPlan): Tensor {
+  return contractSliceRange(tensors, sliced, 0, sliced.slices)
 }
 
 /** Amplitude via a sliced contraction, so width can be held under a memory budget. */

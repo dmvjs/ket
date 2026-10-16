@@ -19,11 +19,13 @@
  * workers option falls back to the single-threaded path, which is the same
  * behaviour as any non-Node host.
  */
-import type { Worker, receiveMessageOnPort } from 'node:worker_threads'
+import type { Worker, receiveMessageOnPort, parentPort } from 'node:worker_threads'
 
 type WorkerThreads = {
   Worker: typeof Worker
   receiveMessageOnPort: typeof receiveMessageOnPort
+  /** The channel back to the spawning thread — null on the main thread. */
+  parentPort: typeof parentPort
 }
 
 /** Node's synchronous builtin loader, absent on other hosts and before Node 22.3. */

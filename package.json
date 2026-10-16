@@ -1,8 +1,8 @@
 {
   "name": "@kirkelliott/ket",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "type": "module",
-  "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, five backends, 14 import/export formats, zero dependencies.",
+  "description": "General-purpose quantum circuit simulator. Immutable TypeScript API, eight backends, 14 import/export formats, zero dependencies.",
   "author": "kirkelliott",
   "license": "MIT",
   "repository": {
@@ -50,9 +50,10 @@
     "lint": "oxlint",
     "test": "vitest run",
     "dev": "vitest",
-    "deploy:site": "node scripts/check-site-version.ts && node scripts/check-docs.ts && aws s3 sync site/ s3://dmvjs.com/ket/ --exclude '.DS_Store' --exclude 'README.md' && aws cloudfront create-invalidation --distribution-id E2NLJQLRPS1ZY5 --paths '/ket/*'",
-    "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test",
-    "check:docs": "node scripts/check-site-version.ts && node scripts/check-docs.ts"
+    "deploy:site": "node scripts/check-site-version.ts && node scripts/check-docs.ts && cp dist/ket.global.js site/ && node scripts/stamp-bundle.ts && aws s3 sync site/ s3://dmvjs.com/ket/ --exclude '.DS_Store' --exclude 'README.md' && aws cloudfront create-invalidation --distribution-id E2NLJQLRPS1ZY5 --paths '/ket/*'",
+    "prepublishOnly": "npm run lint && npm run build && npm run typecheck && npm test && npm run check:attacks",
+    "check:docs": "node scripts/check-site-version.ts && node scripts/check-docs.ts",
+    "check:attacks": "node benchmark/fuzz-attacks.ts && node benchmark/verify-attacks.ts && node benchmark/external-checks.ts"
   },
   "engines": {
     "node": ">=22"

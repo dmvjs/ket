@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Quantum circuits in TypeScript — simulate locally, then run on real hardware.**
-Immutable API, seven backends, zero dependencies.
+Immutable API, eight backends, zero dependencies.
 
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
@@ -150,7 +150,7 @@ is correct, and today's hardware cannot run it.
 
 ## Beyond the statevector
 
-A statevector costs 2ⁿ and stops near 24 qubits. ket carries six other
+A statevector costs 2ⁿ and stops near 24 qubits. ket carries seven other
 representations and routes to the cheapest exact one automatically:
 
 ```typescript
@@ -161,6 +161,7 @@ circuit.simulate({ shots: 1024 })   // picks a backend; d.backend says which
 |---|---|---|
 | Statevector | sparse → dense, automatic | ~20 qubits exactly |
 | MPS / tensor network | O(n·χ²) | 127-qubit GHZ, 1024 shots, 10ms |
+| PEPS | χ-bounded simple update | ⟨O⟩ on 2-D grids — exact on trees, ~3% floor on loopy ones |
 | Density matrix | O(4ⁿ) sparse | mixed states and noise, n≈12 |
 | Clifford stabilizer | O(n²) | 1,024 qubits: 4ms to evolve, 57ms/shot |
 | Stabilizer rank | O(2^0.228ᵗ·n²/8) | 100 qubits with 50 T gates, 5.6s to build + 43ms/shot |
@@ -172,6 +173,29 @@ gate count, not the width, so it goes where a statevector cannot. See
 [the reference](docs/REFERENCE.md#simulation-backends) for bond dimensions, term
 budgets, and the error accounting on approximate runs.
 
+## What a classical computer can do to your circuit
+
+Eight backends are eight ways to attack a circuit. `analyzeHardness` runs nine
+attacks and prices each one:
+
+```typescript
+import { analyzeHardness, renderHardness } from '@kirkelliott/ket'
+
+const report = analyzeHardness(circuit, { memoryBytes: 16e9, seconds: 3600 })
+console.log(renderHardness(report))
+```
+
+Every attack reports either a parameter it reached or a reason it declined — none
+may return nothing. The result is a set of **bounds, not a number**, and the
+attacks are complementary rather than ranked: a circuit is only as hard as the
+cheapest one that gets there.
+
+This is an attack surface, not a proof. A negative result means these nine attacks
+did not reach the circuit inside the budget given, which is a weaker claim than it
+looks. [The reference](docs/REFERENCE.md#the-classical-adversary) says where it
+stops, and `npm run check:attacks` re-verifies every attack against the exact
+answer on published circuits.
+
 ## Why you can build on it
 
 - **Typed, and the types are the source.** Strict TypeScript, not JS with a `.d.ts`
@@ -179,17 +203,17 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,456 tests.** Analytic correctness against known amplitudes — gate
+- **2,757 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.
-- **Zero dependencies.** 215 KB minified, total.
+- **Zero dependencies.** 274 KB minified, total.
 
 ## Documentation
 
 - **[Live demos](https://dmvjs.com/ket/)** — QAOA, Grover across hardware, 1,024-qubit GHZ, VQE
 - **[Playground](https://dmvjs.com/ket/demo.html)** — run circuits in the browser, nothing to install
-- **[API docs](https://dmvjs.com/ket/docs.html)** — every export
+- **[API docs](https://dmvjs.com/ket/docs.html)** — the core API, with examples
 - **[Full reference](docs/REFERENCE.md)** — all gates, 14 import/export formats, noise
   models, device targeting, visualization, QEC
 - **[Guide](ket-guide/)** — a 13-chapter Quarto book, from bits to backends, with

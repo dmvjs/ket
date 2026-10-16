@@ -214,3 +214,105 @@ describe('pauli-path — noise', () => {
     expect(Math.abs(capped.value - full.value)).toBeLessThanOrEqual(capped.droppedWeight + 1e-9)
   })
 })
+
+describe('pauli-path — gates that are rotations under another name', () => {
+  /**
+   * `rotationOf` matched on gate names, and eight gates that *are* Pauli-axis
+   * rotations were spelled differently: `si` (this library's `sdg`), `v`/`srn`/`sx`
+   * (Rx(π/2)), their inverses, and `r2`/`r4`/`r8` (defined in gates.ts as
+   * Rz(π/2), Rz(π/4), Rz(π/8)). Each one disqualified the whole attack from any
+   * circuit containing it — and this is the attack that reproduced the published
+   * 127-qubit results, so the hole mattered.
+   *
+   * The same name-matching failure once hid `Rz(−π/2)` being Clifford. Accepting a
+   * gate is not the point; conjugating it correctly is, so this checks values.
+   */
+  const exactZ = (c: Circuit, q: number): number => {
+    let z = 0
+    for (const [bits, p] of Object.entries(c.exactProbs())) z += (bits[q] === '1' ? -1 : 1) * p
+    return z
+  }
+
+  const CASES: [string, (c: Circuit) => Circuit][] = [
+    ['si', c => c.si(1)], ['v', c => c.v(1)], ['vi', c => c.vi(1)],
+    ['srn', c => c.srn(1)], ['srndg', c => c.srndg(1)],
+    ['r2', c => c.r2(1)], ['r4', c => c.r4(1)], ['r8', c => c.r8(1)],
+    // Already worked; kept so a regression in the shared path is visible here too.
+    ['t', c => c.t(1)], ['s', c => c.s(1)], ['h', c => c.h(1)],
+    ['rx', c => c.rx(0.7, 1)], ['ry', c => c.ry(0.7, 1)], ['rz', c => c.rz(0.7, 1)],
+  ]
+
+  /**
+   * Qubit 1 has to start in a *tilted* state, or the test proves nothing.
+   *
+   * The obvious context — `h(0).cnot(0,1)` — leaves qubit 1 maximally mixed, and
+   * then ⟨Z₁⟩ is 0 for every unitary on it. That version of this test passed with
+   * all fourteen values at exactly zero, which would have accepted any conjugation
+   * rule at all. The trailing CNOT commutes with Z₁, so entanglement is exercised
+   * without flattening the observable.
+   */
+  const context = (apply: (c: Circuit) => Circuit): Circuit =>
+    apply(new Circuit(3).h(0).ry(0.9, 1).rx(0.35, 1).t(2)).cnot(1, 2).rz(0.4, 0)
+
+  it.each(CASES)('%s conjugates to the exact expectation value', (_name, apply) => {
+    const c = context(apply)
+    const got = pauliPathExpectation(c, [{ coeff: 1, ops: 'IZI' }], { maxTerms: 8192, threshold: 1e-15 })
+    expect(got.value).toBeCloseTo(exactZ(c, 1), 9)
+  })
+
+  it('is not measuring a constant', () => {
+    // Guards the trap above: if the context ever flattens ⟨Z₁⟩ again, this fails
+    // rather than the suite going quietly green on a vacuous check.
+    const values = new Set(CASES.map(([, apply]) => exactZ(context(apply), 1).toFixed(6)))
+    expect(values.size).toBeGreaterThan(3)
+  })
+})
+
+describe('pauli-path — two-qubit Pauli rotations', () => {
+  /**
+   * The native case for Pauli propagation, and it was missing entirely: every
+   * `two` op was refused, so the attack declined any circuit built from Ising
+   * interactions. That is what Trotterised Hamiltonian simulation *is*, and what
+   * the published 127-qubit circuits are made of — so the one method that actually
+   * reproduced those results could not be pointed at them.
+   *
+   * `Xx/Yy/Zz` are exp(-iθ/2 · P⊗P) directly. `Xy` is a rotation about (XX+YY),
+   * whose halves commute, so it splits — checked against the gate matrix rather
+   * than argued: `Xy(θ) = Xx(-θ/2)·Yy(-θ/2)` agrees to 1e-16, `iSWAP = Xy(π)`.
+   */
+  const N = 3
+  /** `ops` runs one letter per qubit, reversed: `ops[n-1-q]` is qubit q. */
+  const zAt = (q: number): PauliTerm[] =>
+    [{ coeff: 1, ops: Array.from({ length: N }, (_, k) => (k === N - 1 - q ? 'Z' : 'I')).join('') }]
+  const exactZ = (c: Circuit, q: number): number => {
+    let z = 0
+    for (const [bits, p] of Object.entries(c.exactProbs())) z += (bits[q] === '1' ? -1 : 1) * p
+    return z
+  }
+
+  const CASES: [string, (c: Circuit) => Circuit][] = [
+    ['xx', c => c.xx(0.6, 0, 1)], ['yy', c => c.yy(0.6, 0, 1)], ['zz', c => c.zz(0.6, 0, 1)],
+    ['xy', c => c.xy(0.6, 0, 1)], ['iswap', c => c.iswap(0, 1)],
+    ['xx at π/2', c => c.xx(Math.PI / 2, 0, 1)], ['zz at π', c => c.zz(Math.PI, 0, 1)],
+    // Reversed and non-adjacent operands: the axis is per-operand, not positional.
+    ['xx reversed', c => c.xx(0.6, 1, 0)], ['zz non-adjacent', c => c.zz(0.6, 0, 2)],
+    ['yy on 1,2', c => c.yy(0.4, 1, 2)],
+  ]
+
+  it.each(CASES)('%s conjugates to the exact expectation on every qubit', (_name, apply) => {
+    const c = apply(new Circuit(N).h(0).ry(0.9, 1).rx(0.35, 1).t(2))
+      .cnot(1, 2).rz(0.4, 0).ry(0.2, 2)
+    for (let q = 0; q < N; q++) {
+      const got = pauliPathExpectation(c, zAt(q), { maxTerms: 16384, threshold: 1e-15 })
+      expect(got.value, `⟨Z${q}⟩`).toBeCloseTo(exactZ(c, q), 9)
+    }
+  })
+
+  it('refuses Ms rather than approximating it', () => {
+    // Ms mixes XX, YY, XY and YX, which do not all commute, so it is not a product
+    // of Pauli rotations. Only Ms(0,0) and Ms(π/2,π/2) are — and special-casing a
+    // gate by its parameters is how the name-matching bugs here began.
+    expect(() => pauliPathExpectation(new Circuit(N).ms(0.3, 0.4, 0, 1), zAt(0), { maxTerms: 64 }))
+      .toThrow(/does not support/)
+  })
+})

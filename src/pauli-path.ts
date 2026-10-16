@@ -90,6 +90,10 @@ const CLIFFORD_1Q: Record<string, Record<PauliLetter, { p: PauliLetter; sign: nu
   s:   singleTable([1, 0, 0, 0, 0, 0, 0, 1]),
   sdg: singleTable([1, 0, 0, 0, 0, 0, 0, -1]),
 }
+// `si` is this library's own spelling of `sdg`, and only `sdg` was listed — so a
+// circuit written with `si()` was refused by name while the identical circuit
+// written with `sdg()` was accepted.
+CLIFFORD_1Q['si'] = CLIFFORD_1Q['sdg']!
 
 /**
  * CNOT conjugation, as a map from the (control, target) Pauli pair.
@@ -135,6 +139,14 @@ export interface PauliPathResult {
   value: number
   /** Largest number of Pauli terms held at once. */
   peakTerms: number
+  /**
+   * Heaviest surviving term, in non-identity letters.
+   *
+   * The quantity noise acts on. A depolarizing layer damps a weight-w term by
+   * λ^w, so weight is what decays and weight is what a noisy circuit stops
+   * being able to carry — watching it is how you see noise doing the work.
+   */
+  peakWeight: number
   /** Summed magnitude of discarded coefficients — an upper bound on the error. */
   droppedWeight: number
   /** True when any term was discarded. */
@@ -180,6 +192,113 @@ function mulLetter(a: PauliLetter, b: PauliLetter): { p: PauliLetter; iPow: numb
   return { p, iPow: forward ? 1 : 3 }
 }
 
+// ── General unitaries, by conjugation in the Pauli basis ──────────────────────
+
+/** Complex NxN matrix, row-major, re/im interleaved. */
+type CMat = Float64Array
+
+const matmul = (a: CMat, b: CMat, n: number): CMat => {
+  const out = new Float64Array(2 * n * n)
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    let re = 0, im = 0
+    for (let k = 0; k < n; k++) {
+      const ar = a[2 * (i * n + k)]!, ai = a[2 * (i * n + k) + 1]!
+      const br = b[2 * (k * n + j)]!, bi = b[2 * (k * n + j) + 1]!
+      re += ar * br - ai * bi
+      im += ar * bi + ai * br
+    }
+    out[2 * (i * n + j)] = re
+    out[2 * (i * n + j) + 1] = im
+  }
+  return out
+}
+const dagger = (a: CMat, n: number): CMat => {
+  const out = new Float64Array(2 * n * n)
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    out[2 * (i * n + j)] = a[2 * (j * n + i)]!
+    out[2 * (i * n + j) + 1] = -a[2 * (j * n + i) + 1]!
+  }
+  return out
+}
+/** Real part of Tr(A·B) — the imaginary part vanishes for Hermitian arguments. */
+const traceProduct = (a: CMat, b: CMat, n: number): number => {
+  let re = 0
+  for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) {
+    const ar = a[2 * (i * n + k)]!, ai = a[2 * (i * n + k) + 1]!
+    const br = b[2 * (k * n + i)]!, bi = b[2 * (k * n + i) + 1]!
+    re += ar * br - ai * bi
+  }
+  return re
+}
+
+const PAULI_MAT: Record<PauliLetter, CMat> = {
+  I: Float64Array.from([1, 0, 0, 0, 0, 0, 1, 0]),
+  X: Float64Array.from([0, 0, 1, 0, 1, 0, 0, 0]),
+  Y: Float64Array.from([0, 0, 0, -1, 0, 1, 0, 0]),
+  Z: Float64Array.from([1, 0, 0, 0, 0, 0, -1, 0]),
+}
+
+/** Kronecker product of two complex matrices. */
+function kron(a: CMat, an: number, b: CMat, bn: number): CMat {
+  const n = an * bn
+  const out = new Float64Array(2 * n * n)
+  for (let i = 0; i < an; i++) for (let j = 0; j < an; j++)
+    for (let k = 0; k < bn; k++) for (let l = 0; l < bn; l++) {
+      const ar = a[2 * (i * an + j)]!, ai = a[2 * (i * an + j) + 1]!
+      const br = b[2 * (k * bn + l)]!, bi = b[2 * (k * bn + l) + 1]!
+      const r = i * bn + k, c = j * bn + l
+      out[2 * (r * n + c)] = ar * br - ai * bi
+      out[2 * (r * n + c) + 1] = ar * bi + ai * br
+    }
+  return out
+}
+
+/**
+ * How a general unitary maps each Pauli, as a table.
+ *
+ * `U†PU` is Hermitian, so it expands in the Pauli basis with *real* coefficients:
+ * `U†PU = Σ_Q (Tr(Q U†PU)/d) Q`. That is the whole content — a general gate takes
+ * one Pauli to a weighted sum of up to d² of them, where a Clifford takes it to
+ * exactly one and a rotation to two.
+ *
+ * Built once per gate rather than per term, because the table depends only on the
+ * gate. Without this, an RCS circuit — which is built entirely from `unitary` ops
+ * — is simply refused, and two of the seven attacks vanish for that whole family
+ * while remaining available for others.
+ */
+function conjugationTable(u: CMat, qubits: number): { letters: PauliLetter[][]; coeffs: number[][] } {
+  const d = 1 << qubits
+  const basis: { letters: PauliLetter[]; mat: CMat }[] = []
+  const alphabet: PauliLetter[] = ['I', 'X', 'Y', 'Z']
+  if (qubits === 1) {
+    for (const a of alphabet) basis.push({ letters: [a], mat: PAULI_MAT[a] })
+  } else {
+    // Qubit `a` is the high bit, matching Gate4x4 and the rest of ket.
+    for (const a of alphabet) for (const b of alphabet) {
+      basis.push({ letters: [a, b], mat: kron(PAULI_MAT[a], 2, PAULI_MAT[b], 2) })
+    }
+  }
+  const ud = dagger(u, d)
+  const letters: PauliLetter[][] = []
+  const coeffs: number[][] = []
+  for (const p of basis) {
+    const conj = matmul(matmul(ud, p.mat, d), u, d)
+    const row: number[] = []
+    for (const q of basis) row.push(traceProduct(q.mat, conj, d) / d)
+    letters.push(p.letters)
+    coeffs.push(row)
+  }
+  return { letters: basis.map(b => b.letters), coeffs }
+}
+
+/** Index of a letter tuple in the basis order used by `conjugationTable`. */
+const basisIndex = (ls: readonly PauliLetter[]): number => {
+  const rank: Record<PauliLetter, number> = { I: 0, X: 1, Y: 2, Z: 3 }
+  let k = 0
+  for (const l of ls) k = k * 4 + rank[l]
+  return k
+}
+
 /**
  * Compute ⟨0…0|U† O U|0…0⟩ for a Pauli observable, by propagating O backward.
  *
@@ -212,6 +331,7 @@ export function pauliPathExpectation(
   }
 
   let peakTerms = terms.size
+  let peakWeight = 0
   let droppedWeight = 0
   const p1 = noise?.p1 ?? 0, p2 = noise?.p2 ?? 0
   const damp1 = 1 - 4 * p1 / 3, damp2 = 1 - 16 * p2 / 15
@@ -277,7 +397,8 @@ export function pauliPathExpectation(
         const rot = rotationOf(meta)
         if (!rot) throw new TypeError(
           `pauliPathExpectation does not support gate '${meta.name}'. ` +
-          `Supported: h, x, y, z, s, sdg, t, tdg, rx, ry, rz, u1, p, cnot, cz, swap.`)
+          `Supported: h, x, y, z, s, si, sdg, t, ti, tdg, v, vi, srn, srndg, rx, ry, rz, ` +
+          `u1, p, r2, r4, r8, cnot, cz, swap, xx, yy, zz, rzz, xy, iswap.`)
         const { axis, theta } = rot
         const cos = Math.cos(theta), sin = Math.sin(theta)
         for (const term of terms.values()) {
@@ -291,6 +412,32 @@ export function pauliPathExpectation(
           o[q] = prod
           add(next, o, term.coeff * sin * realSign)
         }
+      }
+    } else if (kind === 'two' && twoRotationsOf(op['meta'] as { name: string; params?: number[] })) {
+      const qa = op['a'] as number, qb = op['b'] as number
+      const rots = twoRotationsOf(op['meta'] as { name: string; params?: number[] })!
+      // The halves of a decomposed gate commute, so they are applied in sequence
+      // through an intermediate map rather than combined into one step.
+      let src = terms
+      for (let r = 0; r < rots.length; r++) {
+        const { a: axA, b: axB, theta } = rots[r]!
+        const cos = Math.cos(theta), sin = Math.sin(theta)
+        const dst = r === rots.length - 1 ? next : new Map<string, Term>()
+        for (const term of src.values()) {
+          const pa = term.ops[qa]!, pb = term.ops[qb]!
+          // Q anticommutes with A⊗B when it anticommutes at an odd number of sites.
+          const anti = (pa !== 'I' && pa !== axA ? 1 : 0) + (pb !== 'I' && pb !== axB ? 1 : 0)
+          if (anti % 2 === 0) { add(dst, term.ops.slice(), term.coeff); continue }
+          const ma = mulLetter(axA, pa), mb = mulLetter(axB, pb)
+          // i·A·Q is Hermitian when they anticommute, so the phase lands on ±1.
+          const k = (1 + ma.iPow + mb.iPow) % 4
+          const realSign = k === 0 ? 1 : -1
+          add(dst, term.ops.slice(), term.coeff * cos)
+          const o = term.ops.slice()
+          o[qa] = ma.p; o[qb] = mb.p
+          add(dst, o, term.coeff * sin * realSign)
+        }
+        src = dst
       }
     } else if (kind === 'swap') {
       const a = op['a'] as number, b = op['b'] as number
@@ -312,6 +459,30 @@ export function pauliPathExpectation(
         const h2 = h[o[t]!]; o[t] = h2.p; sign *= h2.sign
         add(next, o, term.coeff * sign)
       }
+    } else if (kind === 'unitary') {
+      const qs = op['qubits'] as number[]
+      if (qs.length > 2) {
+        throw new TypeError(`pauliPathExpectation supports 1- and 2-qubit unitary ops, got ${qs.length} qubits`)
+      }
+      const rows = op['matrix'] as [number, number][][]
+      const d = rows.length
+      const u = new Float64Array(2 * d * d)
+      for (let r = 0; r < d; r++) for (let c = 0; c < d; c++) {
+        u[2 * (r * d + c)] = rows[r]![c]![0]
+        u[2 * (r * d + c) + 1] = rows[r]![c]![1]
+      }
+      const table = conjugationTable(u, qs.length)
+      for (const term of terms.values()) {
+        const inLetters = qs.map(q => term.ops[q]!) as PauliLetter[]
+        const row = table.coeffs[basisIndex(inLetters)]!
+        for (let k = 0; k < row.length; k++) {
+          const w = row[k]!
+          if (Math.abs(w) < threshold) continue
+          const o = term.ops.slice()
+          table.letters[k]!.forEach((l, i) => { o[qs[i]!] = l })
+          add(next, o, term.coeff * w)
+        }
+      }
     } else {
       throw new TypeError(`pauliPathExpectation does not support op '${kind}'`)
     }
@@ -330,6 +501,7 @@ export function pauliPathExpectation(
       for (const [k, t] of sorted.slice(maxTerms)) { droppedWeight += Math.abs(t.coeff); terms.delete(k) }
     }
     peakTerms = Math.max(peakTerms, terms.size)
+    for (const t of terms.values()) peakWeight = Math.max(peakWeight, weightOf(t.ops))
   }
 
   // ⟨0…0|P|0…0⟩ is 1 for a product of I and Z, and 0 as soon as any X or Y
@@ -339,10 +511,44 @@ export function pauliPathExpectation(
     if (term.ops.every(p => p === 'I' || p === 'Z')) value += term.coeff
   }
 
-  return { value, peakTerms, droppedWeight, truncated: droppedWeight > 0 }
+  for (const t of terms.values()) peakWeight = Math.max(peakWeight, weightOf(t.ops))
+  return { value, peakTerms, peakWeight, droppedWeight, truncated: droppedWeight > 0 }
 }
 
 /** Interpret a gate as a rotation about a Pauli axis, if it is one. */
+/** A two-qubit Pauli rotation exp(-i θ (A⊗B) / 2). */
+interface TwoRotation { a: PauliLetter; b: PauliLetter; theta: number }
+
+/**
+ * The `two` gates that are Pauli rotations, as a product of them.
+ *
+ * This is the native case for Pauli propagation and it was missing entirely, so
+ * the attack declined every circuit built from Ising interactions — which is what
+ * Trotterised Hamiltonian simulation *is*, and what the published 127-qubit
+ * circuits are made of.
+ *
+ * `Xx/Yy/Zz` are exp(-iθ/2 · P⊗P) directly. `Xy` is a rotation about (XX+YY),
+ * whose two halves commute, so it splits into a product — verified numerically
+ * against the gate matrix rather than derived on paper:
+ * `Xy(θ) = Xx(-θ/2) · Yy(-θ/2)` to 1e-16, and `iSWAP = Xy(π)`.
+ *
+ * `Ms` is deliberately absent. It mixes XX, YY, XY and YX, and those do not all
+ * commute, so it is not a product of Pauli rotations — only its special cases
+ * `Ms(0,0) = Xx(π/2)` and `Ms(π/2,π/2) = Yy(π/2)` are, and special-casing a gate
+ * by its parameters is how the name-matching bugs in this file started.
+ */
+function twoRotationsOf(meta: { name: string; params?: number[] }): TwoRotation[] | null {
+  const t = meta.params?.[0] ?? 0
+  switch (meta.name) {
+    case 'xx': return [{ a: 'X', b: 'X', theta: t }]
+    case 'yy': return [{ a: 'Y', b: 'Y', theta: t }]
+    case 'zz': case 'rzz': return [{ a: 'Z', b: 'Z', theta: t }]
+    case 'xy': return [{ a: 'X', b: 'X', theta: -t / 2 }, { a: 'Y', b: 'Y', theta: -t / 2 }]
+    case 'iswap': return [{ a: 'X', b: 'X', theta: -Math.PI / 2 }, { a: 'Y', b: 'Y', theta: -Math.PI / 2 }]
+    default: return null
+  }
+}
+
 function rotationOf(meta: { name: string; params?: number[] }): { axis: PauliLetter; theta: number } | null {
   // Rx(a) = exp(-i a X / 2), and conjugation gives P -> cos(a)P + sin(a)(iXP):
   // the halves in the exponent cancel, so this is the full gate angle, not half
@@ -356,6 +562,15 @@ function rotationOf(meta: { name: string; params?: number[] }): { axis: PauliLet
     case 'u1': case 'p': return { axis: 'Z', theta: p }
     case 't':   return { axis: 'Z', theta: Math.PI / 4 }
     case 'ti': case 'tdg': return { axis: 'Z', theta: -Math.PI / 4 }
+    // Gates that *are* a Pauli-axis rotation under another name. Leaving them out
+    // disqualified this attack from any circuit using them, which is the same
+    // name-matching failure that once hid `Rz(-π/2)` being Clifford. R2/R4/R8 are
+    // defined as Rz(π/2, π/4, π/8) in gates.ts, and V is Rx(π/2).
+    case 'r2':  return { axis: 'Z', theta: Math.PI / 2 }
+    case 'r4':  return { axis: 'Z', theta: Math.PI / 4 }
+    case 'r8':  return { axis: 'Z', theta: Math.PI / 8 }
+    case 'v': case 'srn': case 'sx':      return { axis: 'X', theta: Math.PI / 2 }
+    case 'vi': case 'srndg': case 'sxdg': return { axis: 'X', theta: -Math.PI / 2 }
     default: return null
   }
 }

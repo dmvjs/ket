@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket API reference · dmvjs</title>
-<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, seven backends, zero dependencies.">
+<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, eight backends, zero dependencies.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/material-darker.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
@@ -230,7 +230,7 @@
 <div class="topbar">
   <div class="topbar-logo">
     <span class="name">ket</span>
-    <span class="ver">v0.9.1</span>
+    <span class="ver">v0.10.0</span>
   </div>
   <div class="topbar-links">
     <a href="index.html">home</a>
@@ -300,6 +300,23 @@
     <a class="nav-link" href="#qec">Error correction</a>
   </div>
 
+  <div class="nav-group">
+    <div class="nav-group-label">Hardness</div>
+    <a class="nav-link" href="#hardness">Classical adversary</a>
+    <a class="nav-link" href="#rcs">Random circuits &amp; XEB</a>
+    <a class="nav-link" href="#peps">PEPS</a>
+    <a class="nav-link" href="#rewrite">Circuit rewriting</a>
+    <a class="nav-link" href="#symmetry">Symmetry sectors</a>
+    <a class="nav-link" href="#ecdlp">ECDLP resource estimates</a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Internals</div>
+    <a class="nav-link" href="#tensor-internals">Tensor network</a>
+    <a class="nav-link" href="#linalg">Linear algebra</a>
+    <a class="nav-link" href="#stabilizer-internals">Stabilizer</a>
+  </div>
+
 </nav>
 
 <!-- ── main ── -->
@@ -310,7 +327,7 @@
 <div class="section" style="margin-bottom:2.5rem">
   <h1>ket</h1>
   <p class="lead">
-    TypeScript quantum circuit simulator. Immutable API, seven backends (statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
+    TypeScript quantum circuit simulator. Immutable API, eight backends (statevector, MPS, PEPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
   </p>
 </div>
 
@@ -488,6 +505,7 @@ bound.statevector()  // runs normally</code></pre>
     <tr><td>U2</td><td>u2(φ, λ, q)</td><td>Two-parameter single-qubit unitary</td></tr>
     <tr><td>U3</td><td>u3(θ, φ, λ, q)</td><td>General single-qubit unitary</td></tr>
     <tr><td>VZ</td><td>vz(θ, q)</td><td>VirtualZ — Rz alias</td></tr>
+    <tr><td>R2 / R4 / R8</td><td>r2(q) / r4(q) / r8(q)</td><td>Fixed π/2, π/4, π/8 phase rotations. Also exported as matrices <code>R2</code>, <code>R4</code>, <code>R8</code>.</td></tr>
     <tr><td>I</td><td>id(q)</td><td>Identity</td></tr>
   </table>
 </div>
@@ -869,6 +887,10 @@ shorBeauregard(15n, { a: 7n }).method  // 'quantum'</code></pre>
     <tr><td>modInverse</td><td>modInverse(a, mod)</td><td>Modular multiplicative inverse.</td></tr>
     <tr><td>gcd</td><td>gcd(a, b)</td><td>Greatest common divisor.</td></tr>
     <tr><td>continuedFractions</td><td>continuedFractions(x, qmax)</td><td>Convergents of x — recovers the period from a QPE measurement.</td></tr>
+    <tr><td>phiAddMod</td><td>phiAddMod(c, n, a, N, bOff, ancilla)</td><td>Modular Draper adder — (a + b) mod N in the Fourier basis.</td></tr>
+    <tr><td>ccPhiAddMod</td><td>ccPhiAddMod(c, n, a, N, ctrl1, ctrl2, bOff, ancilla)</td><td>The same adder under two controls.</td></tr>
+    <tr><td>cMultModAdd</td><td>cMultModAdd(c, n, a, N, ctrl, xOff, bOff, ancilla)</td><td>Controlled modular multiply-accumulate, built from the adder.</td></tr>
+    <tr><td>beauregardU</td><td>beauregardU(c, n, a, aInv, N, ctrl, xOff, bOff, ancilla)</td><td>One controlled modular-exponentiation step — the layer phase estimation repeats.</td></tr>
   </table>
 </div>
 
@@ -1307,6 +1329,237 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
   <p>For detailed threshold analysis, use <code>CliffordSim</code> directly to extract stabilizer syndromes after each noise injection step without going through the full circuit runner.</p>
 </div>
 
+<!-- ─────────────────── CLASSICAL ADVERSARY ─────────────────── -->
+<span class="section-anchor" id="hardness"></span>
+<div class="section">
+  <h2>Classical adversary</h2>
+
+  <p>Nine attacks are priced against a circuit; each reports either a parameter it reached or a reason it declined, and none may return nothing. The result is a set of <strong>bounds, not a number</strong>, and the attacks are complementary rather than ranked — a circuit is only as hard as the cheapest one that reaches it.</p>
+
+  <div class="sig"><span class="kw">function</span> <span class="cls">analyzeHardness</span>(<span class="param">circuit</span>: <span class="type">Circuit</span>, <span class="param">budget?</span>: <span class="type">Budget</span>): <span class="type">HardnessReport</span></div>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>analyzeHardness</td><td>analyzeHardness(circuit, budget?)</td><td>Price every attack. <code>budget</code> is <code>{ memoryBytes?, seconds? }</code> — 8 GB and one hour by default.</td></tr>
+    <tr><td>renderHardness</td><td>renderHardness(report)</td><td>The report as an aligned text table.</td></tr>
+    <tr><td>searchHardness</td><td>searchHardness(circuit, options?)</td><td>Sweep a parameter to find where a circuit family crosses over.</td></tr>
+    <tr><td>renderSearch</td><td>renderSearch(search)</td><td>The sweep as a text table.</td></tr>
+    <tr><td>ATTACK_NAMES</td><td>readonly string[]</td><td>The nine attacks in order: clifford, stabilizer-rank, mps, peps, tensor-network, pauli-path, noisy-pauli-path, symmetry, statevector.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { analyzeHardness, renderHardness } from '@kirkelliott/ket'
+
+const report = analyzeHardness(circuit, { memoryBytes: 16e9, seconds: 3600 })
+console.log(renderHardness(report))
+
+// 12 qubits, 240 gates — budget 16 GB / 60.0 min
+// attack              answers       parameter / why not      error  memory   time
+// ✓ mps               distribution  bond dimension χ  1      exact   384 B   0 µs
+// ✓ clifford          distribution  T-count  0               exact   108 B   0 µs</code></pre>
+
+  <p>This is an attack surface, not a proof. A negative result means these nine attacks did not reach the circuit inside the budget given — a weaker claim than it looks.</p>
+</div>
+
+<!-- ─────────────────── RCS / XEB ─────────────────── -->
+<span class="section-anchor" id="rcs"></span>
+<div class="section">
+  <h2>Random circuits &amp; XEB</h2>
+
+  <p>The published quantum-advantage families, and the scores used to judge them.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>rcsCircuit</td><td>rcsCircuit({ rows, cols, depth, seed })</td><td>A random circuit on a grid, Sycamore-style.</td></tr>
+    <tr><td>trotterIsing</td><td>trotterIsing({ qubits, coupling, depth, thetaJ?, thetaH? })</td><td>The IBM kicked-Ising family.</td></tr>
+    <tr><td>gridCouplings</td><td>gridCouplings(rows, cols)</td><td>The four interleaved coupling patterns A, B, C, D of a grid.</td></tr>
+    <tr><td>heavyHex127</td><td>heavyHex127()</td><td>The 127-qubit heavy-hex topology.</td></tr>
+    <tr><td>edgeColouring</td><td>edgeColouring(edges)</td><td>Split a coupling into layers no two of which share a qubit.</td></tr>
+    <tr><td>fsim</td><td>fsim(theta, phi)</td><td>The fSim entangler as a <code>Gate4x4</code>.</td></tr>
+    <tr><td>SQRT_X / SQRT_Y / SQRT_W</td><td>Gate2x2</td><td>The Sycamore single-qubit set.</td></tr>
+    <tr><td>SYCAMORE_1Q</td><td>readonly Gate2x2[]</td><td>Those three as an array, for random selection per layer.</td></tr>
+    <tr><td>SYCAMORE_SEQUENCE</td><td>readonly string[]</td><td>The published coupling order: A B C D C D A B.</td></tr>
+    <tr><td>linearXeb</td><td>linearXeb(qubits, probs)</td><td>Linear cross-entropy benchmark of a probability list.</td></tr>
+    <tr><td>xebFromSamples</td><td>xebFromSamples(circuit, samples, options?)</td><td>XEB from measured bitstrings, scored against an oracle.</td></tr>
+    <tr><td>porterThomasMoments</td><td>porterThomasMoments(qubits, probs)</td><td>Moments of the distribution — Porter-Thomas is the scrambled signature.</td></tr>
+    <tr><td>contractionOracle</td><td>contractionOracle(circuit, options?)</td><td>Amplitudes by tensor-network contraction, for scoring beyond statevector width.</td></tr>
+    <tr><td>statevectorOracle</td><td>statevectorOracle(circuit)</td><td>Exact amplitudes, for circuits that fit.</td></tr>
+    <tr><td>mixWithUniform</td><td>mixWithUniform(samples, fidelity, qubits, seed?)</td><td>Dilute ideal samples toward uniform — a spoofer with a known fidelity.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { rcsCircuit, trotterIsing, heavyHex127 } from '@kirkelliott/ket'
+
+// Google-style random circuit on a 3×4 grid
+const google = rcsCircuit({ rows: 3, cols: 4, depth: 8, seed: 2 })
+google.qubits            // 12
+
+// IBM kicked-Ising on the 127-qubit heavy-hex lattice
+const ibm = trotterIsing({ qubits: 127, coupling: heavyHex127(), depth: 1, thetaH: Math.PI / 4 })
+ibm.qubits               // 127</code></pre>
+
+  <p><code>xebFromSamples</code> is <code>async</code> — it may contract for its amplitudes. Samples are measured bitstrings <em>with multiplicity</em>, not unique keys.</p>
+</div>
+
+<!-- ─────────────────── PEPS ─────────────────── -->
+<span class="section-anchor" id="peps"></span>
+<div class="section">
+  <h2>PEPS — the state as a 2-D network</h2>
+
+  <p>One tensor per qubit, one virtual bond per edge of the circuit's own connectivity, so a grid device is simulated in the shape it has rather than forced through a chain.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>pepsRun</td><td>pepsRun(circuit, { maxBond?, coupling? })</td><td>Replay a circuit as a 2-D network. Coupling defaults to the pairs its gates connect.</td></tr>
+    <tr><td>pepsInit</td><td>pepsInit(qubits, coupling)</td><td>The product state |0…0⟩ on a coupling graph.</td></tr>
+    <tr><td>pepsApply1</td><td>pepsApply1(state, q, gate)</td><td>Apply a <code>Gate2x2</code>. Mutates in place.</td></tr>
+    <tr><td>pepsApply2</td><td>pepsApply2(state, a, b, gate, maxBond)</td><td>Apply a <code>Gate4x4</code> by simple update, truncating to <code>maxBond</code>.</td></tr>
+    <tr><td>pepsExpectation</td><td>pepsExpectation(state, q, pauli)</td><td>⟨P⟩ in the simple-update environment — cheap, and carries the error floor.</td></tr>
+    <tr><td>pepsEnvironments</td><td>pepsEnvironments(state, { maxIterations?, tolerance? })</td><td>Belief propagation on the norm network, which is positive and converges where the amplitude network does not.</td></tr>
+    <tr><td>pepsExpectationBP</td><td>pepsExpectationBP(state, q, pauli, env)</td><td>⟨P⟩ against those environments.</td></tr>
+    <tr><td>pepsExpectationExact</td><td>pepsExpectationExact(state, q, pauli, env, { maxWidth?, restarts? })</td><td>⟨P⟩ with no environment approximation. Declines when the width is out of reach.</td></tr>
+  </table>
+
+  <p>Exact where simple update is exact — a chain is a tree, and there it matches the statevector to 1e−12. On a loopy grid the residual is the <em>environment</em>, not the bond dimension: at χ=16 nothing is being truncated and the answer is still ~3.5% off.</p>
+</div>
+
+<!-- ─────────────────── REWRITING ─────────────────── -->
+<span class="section-anchor" id="rewrite"></span>
+<div class="section">
+  <h2>Circuit rewriting</h2>
+
+  <p>Each rewrite returns a <code>Rewrite</code> — the new circuit plus a declaration of what it preserves, so a transformation cannot quietly change the question being asked.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>lightCone</td><td>lightCone(circuit, qubits)</td><td>Cut the circuit to what can reach those qubits. Preserves any observable on them.</td></tr>
+    <tr><td>peephole</td><td>peephole(circuit)</td><td>Fuse and cancel adjacent gates. Preserves everything.</td></tr>
+    <tr><td>toZBasis</td><td>toZBasis(circuit)</td><td>Conjugate Rx / Ry into Clifford plus Rz, which makes the T-count visible so a circuit can be <em>priced</em> instead of refused. At θ = π/4 those are literally T gates.</td></tr>
+    <tr><td>searchQubitOrder</td><td>searchQubitOrder(circuit, { restarts?, sweeps?, seed? })</td><td>Search for a qubit labelling that contracts more cheaply.</td></tr>
+    <tr><td>spectralOrder</td><td>spectralOrder(circuit)</td><td>A Fiedler-vector ordering, as a starting point for that search.</td></tr>
+    <tr><td>orderingCost</td><td>orderingCost(circuit, order)</td><td>Score an ordering without performing the contraction.</td></tr>
+    <tr><td>qubitsOf</td><td>qubitsOf(op)</td><td>The qubit indices a serialized op touches.</td></tr>
+  </table>
+
+  <p>Relabelling qubits does not change how hard a circuit is — asserted in the external checks, not assumed.</p>
+</div>
+
+<!-- ─────────────────── SYMMETRY ─────────────────── -->
+<span class="section-anchor" id="symmetry"></span>
+<div class="section">
+  <h2>Symmetry sectors</h2>
+
+  <p>A circuit that conserves Hamming weight never leaves its sector, so it can be simulated in dimension C(n,k) instead of 2<sup>n</sup>.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>weightSymmetry</td><td>weightSymmetry(circuit, initialState?)</td><td>Detect weight conservation and report the sector it stays in.</td></tr>
+    <tr><td>runSector</td><td>runSector(circuit, options)</td><td>Simulate inside that sector. Matches the full statevector exactly.</td></tr>
+    <tr><td>particleConservingAnsatz</td><td>particleConservingAnsatz({ qubits, layers, seed })</td><td>Build a circuit that has the symmetry by construction.</td></tr>
+    <tr><td>preservesWeight1</td><td>preservesWeight1(gate)</td><td>Whether a <code>Gate2x2</code> conserves weight.</td></tr>
+    <tr><td>preservesWeight2</td><td>preservesWeight2(gate)</td><td>Whether a <code>Gate4x4</code> does.</td></tr>
+    <tr><td>binomial</td><td>binomial(n, k)</td><td>C(n,k) — the exact sector dimension.</td></tr>
+    <tr><td>weightOf</td><td>weightOf(bitstring)</td><td>Hamming weight of a bitstring.</td></tr>
+  </table>
+
+  <p>Breaking the symmetry with a single gate is detected; conservation is invariant under how a gate is spelled.</p>
+</div>
+
+<!-- ─────────────────── ECDLP RESOURCES ─────────────────── -->
+<span class="section-anchor" id="ecdlp"></span>
+<div class="section">
+  <h2>ECDLP resource estimates</h2>
+
+  <p>Published attacks on 256-bit elliptic-curve signatures arrive as single numbers — "39 million Toffoli gates", "2330 logical qubits" — and the circuits behind them are permanently beyond any simulator. The <strong>composition</strong>, however, is reachable: the discrete logarithm is a ladder of 2n controlled point additions, a point addition is modular multiplications and inversions, a modular multiplication is n rounds of doubling and controlled addition, and a modular addition is five ripple-carry adders. Every layer but one is small enough to build, simulate and count.</p>
+
+  <div class="sig"><span class="kw">function</span> <span class="cls">ecdlpResources</span>(<span class="param">n</span>: <span class="type">number</span>, <span class="param">options?</span>: <span class="type">EcdlpOptions</span>): <span class="type">EcdlpEstimate</span></div>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>ecdlpResources</td><td>ecdlpResources(n, options?)</td><td>Toffoli and logical-qubit estimate for an n-bit prime field, with the per-subroutine breakdown and a sensitivity bracket on the one modelled term.</td></tr>
+    <tr><td>compareEcdlp</td><td>compareEcdlp(n?, options?)</td><td>The estimate plus its ratio against each published reference.</td></tr>
+    <tr><td>renderEcdlp</td><td>renderEcdlp(n?, options?)</td><td>The comparison as an aligned text table.</td></tr>
+    <tr><td>ECDLP_REFERENCES</td><td>readonly EcdlpReference[]</td><td>Published estimates at n = 256, quoted with citations. Not verified by ket.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { renderEcdlp } from '@kirkelliott/ket'
+
+console.log(renderEcdlp(256))
+
+// ECDLP over a 256-bit prime field — 512 controlled point additions,
+// 1.37e+7 Toffoli gates each.
+//
+// One controlled point addition:
+// subroutine              source       each  calls  toffoli  share
+// modular inversion       modelled  3.68e+6      2  7.37e+6  53.8%
+// modular multiplication  composed  1.05e+6      6  6.32e+6  46.1%
+// modular addition        measured  2.57e+3      8  2.06e+4   0.2%
+//
+// Against the literature:
+// estimate               toffoli   ket/theirs  qubits  ket/theirs
+// ket (this model)       7.02e+9        1.00x    2325       1.00x
+// Roetteler et al. 2017  1.29e+11      0.0544x   2330      0.998x
+// Litinski 2023          4.40e+7         159x
+// IonQ 2026              3.90e+7         180x    1457       1.60x</code></pre>
+
+  <p>The <code>source</code> column is the point of the table. <code>measured</code> means the count came off a gate network that the test suite separately checks computes the right arithmetic — the modular adder for every residue pair mod 5, 7, 11 and 13, the multiplier for every pair mod 7, and every closed form asserted against a real gate count at widths 3 through 10. <code>composed</code> is arithmetic on measured terms. <code>modelled</code> marks the one subroutine not built here: Kaliski's modular inversion, whose 2n-round schedule comes from Roetteler et al. Setting that term to zero or to ten times the model does not change the sign of any comparison.</p>
+
+  <p>The logical qubit count, arrived at by counting this model's own registers, lands within 0.2% of the published <code>9n + 2⌈log₂n⌉ + 10</code> — an independent check on the register accounting. The model sits 18× below Roetteler et al.'s stated upper bound, as a bound requires, and 180× above the recent claims. That gap is the content: those claims require roughly two orders of magnitude of algorithmic improvement over textbook shift-and-add arithmetic, of which Litinski (2023) attributes up to 5× to windowed arithmetic, shared modular division and state reuse.</p>
+
+  <p><strong>The counts stop at the logical layer.</strong> No error-correcting code, no decoder, no magic-state distillation, no routing, no code cycle — so nothing here bears on a physical qubit count or a runtime in days. Agreement on Toffoli gates is not agreement on anything downstream of them.</p>
+</div>
+
+<!-- ─────────────────── TENSOR INTERNALS ─────────────────── -->
+<span class="section-anchor" id="tensor-internals"></span>
+<div class="section">
+  <h2>Tensor-network internals</h2>
+
+  <p>The pieces behind <code>amplitudeByContraction</code>, exported so a contraction can be planned, sliced and driven by hand.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>circuitNetwork</td><td>circuitNetwork(circuit, bitstring)</td><td>The circuit as a tensor network for one amplitude.</td></tr>
+    <tr><td>contractNetwork</td><td>contractNetwork(tensors, plan)</td><td>Contract a network along a plan.</td></tr>
+    <tr><td>contractPair</td><td>contractPair(a, b, keep?)</td><td>The kernel — a permute plus a matrix product.</td></tr>
+    <tr><td>evaluatePlan</td><td>evaluatePlan(network, steps)</td><td>Cost a plan without running it.</td></tr>
+    <tr><td>sliceContraction</td><td>sliceContraction(network, { targetWidth?, maxSliced?, restarts?, seed? })</td><td>Choose indices to slice over when width is the wall.</td></tr>
+    <tr><td>contractSliced</td><td>contractSliced(tensors, sliced)</td><td>Sum every slice.</td></tr>
+    <tr><td>contractSliceRange</td><td>contractSliceRange(tensors, sliced, lo, hi)</td><td>Sum a half-open range of slices, so the work splits across workers by range.</td></tr>
+    <tr><td>projectTensor</td><td>projectTensor(t, fixed)</td><td>Fix some indices to values.</td></tr>
+    <tr><td>permuteTensor</td><td>permuteTensor(t, order)</td><td>Reorder a tensor's indices.</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── LINALG ─────────────────── -->
+<span class="section-anchor" id="linalg"></span>
+<div class="section">
+  <h2>Linear algebra</h2>
+
+  <p>The complex matrix routines MPS truncation and PEPS are built on. Verified to reconstruct any shape to 1e−10, to produce orthonormal singular vectors, and to satisfy Eckart-Young — the Frobenius truncation error equals √(discarded) exactly, so <code>discarded</code> is a real per-truncation bound.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>cmatrix</td><td>cmatrix(rows, cols)</td><td>A zeroed complex matrix.</td></tr>
+    <tr><td>svd</td><td>svd(m, { maxRank?, cutoff?, sweeps? })</td><td>Singular value decomposition, with truncation and a <code>discarded</code> weight.</td></tr>
+    <tr><td>matmul</td><td>matmul(a, b)</td><td>Complex matrix product.</td></tr>
+    <tr><td>conjTranspose</td><td>conjTranspose(m)</td><td>Conjugate transpose.</td></tr>
+    <tr><td>mpsExpectation</td><td>mpsExpectation(mps, q, pauli)</td><td>⟨P⟩ straight from an MPS.</td></tr>
+    <tr><td>mpsFromOps</td><td>mpsFromOps(n, ops, maxBond)</td><td>Build an MPS from a flat op list, without going through <code>Circuit</code>.</td></tr>
+  </table>
+</div>
+
+<!-- ─────────────────── STABILIZER INTERNALS ─────────────────── -->
+<span class="section-anchor" id="stabilizer-internals"></span>
+<div class="section">
+  <h2>Stabilizer internals</h2>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>StabilizerCH</td><td>new StabilizerCH(n)</td><td>A stabilizer state in CH form — the term type the stabilizer-rank backend carries.</td></tr>
+    <tr><td>randomEquatorial</td><td>randomEquatorial(n, rand)</td><td>A random equatorial stabilizer state, used for norm estimation.</td></tr>
+    <tr><td>termBudget</td><td>termBudget(ops, delta)</td><td>Terms needed to reach error <code>delta</code> on a given op list.</td></tr>
+    <tr><td>bytesPerTerm</td><td>bytesPerTerm(qubits)</td><td>Memory one term costs, for sizing a run against <code>maxTGates</code>.</td></tr>
+  </table>
+</div>
+
 <!-- ── FOOTER ── -->
 <div style="border-top:1px solid var(--border);padding-top:2rem;margin-top:2rem;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:1rem">
   <div>
@@ -1316,7 +1569,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
     </div>
     <div style="font-size:.74rem;color:var(--muted)">
       Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a>
-      · MIT License · 2,456 tests
+      · MIT License · 2,757 tests
     </div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">

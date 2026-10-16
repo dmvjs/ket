@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.10.0
+
+### Added — the classical adversary
+
+`analyzeHardness(circuit, budget)` runs nine attacks against a circuit and reports
+what each would cost: Clifford, stabilizer rank, MPS, PEPS, tensor-network
+contraction, Pauli path, noisy Pauli path, U(1) symmetry, and statevector. Every
+attack reports either a parameter it achieved or a reason it declined; none may
+return nothing.
+
+The report is a set of **bounds, not a number**, and the attacks are complementary
+rather than ranked — a circuit is only as hard as the cheapest one that reaches it.
+`searchHardness` sweeps a parameter to find where a family crosses over, and
+`renderHardness` / `renderSearch` print either.
+
+This is an attack surface, not a proof. A negative result means these nine attacks
+did not reach the circuit inside the budget given, which is a weaker statement than
+it looks; the reference says so at length.
+
+### Added — random circuit sampling and XEB
+
+`rcsCircuit` builds the published families with the Sycamore one-qubit set and the
+`fsim` entangler; `gridCouplings` and `heavyHex127` give the Google and IBM
+topologies, `edgeColouring` schedules the layers, and `trotterIsing` builds the IBM
+kicked-Ising family. `linearXeb`, `xebFromSamples` and `porterThomasMoments` score
+the output against a `contractionOracle` or a `statevectorOracle`.
+
+Checked end to end: XEB of ideal samples is ~1 across the Google family, and a
+scrambled circuit is Porter-Thomas.
+
+### Added — PEPS, the state as a 2-D tensor network
+
+`pepsInit` / `pepsApply1` / `pepsApply2` / `pepsRun` carry the state as a 2-D grid
+of tensors rather than a chain, matching the geometry of a grid device instead of
+fighting it. Expectations come from `pepsExpectationExact` on small grids or
+`pepsExpectationBP` beyond them, with belief-propagation environments exposed
+through `pepsEnvironments`.
+
+The error floor here is set by the environment approximation, not by the state.
+That is worth knowing before reading a result: a better environment on a worse
+state reads worse, and the reference works through why.
+
+### Added — circuit rewriting
+
+`lightCone` cuts a circuit to what can reach a given observable, `peephole` fuses
+and cancels adjacent gates, and `searchQubitOrder` / `spectralOrder` /
+`orderingCost` look for a labelling that contracts more cheaply.
+
+`toZBasis` is the useful one. A circuit of Rx and Ry rotations gets declined
+outright by the stabilizer-rank attack; conjugated into Clifford plus Z rotations,
+the T-count becomes visible and the circuit can be **priced instead of refused** —
+at θ = π/4 those Z rotations are literally T gates.
+
+Every rewrite declares what it preserves, and the external checks confirm each one
+preserves what it claims on published fragments. Relabelling qubits does not change
+how hard a circuit is, and that is asserted rather than assumed.
+
+### Added — U(1) symmetry sectors
+
+A circuit conserving Hamming weight never leaves its sector, so it can be simulated
+in dimension C(n,k) instead of 2ⁿ. `weightSymmetry` detects the conservation,
+`runSector` exploits it, and `particleConservingAnsatz` builds circuits that have
+it. The sector simulation matches the full statevector exactly, the sector dimension
+is exactly C(n,k), and breaking the symmetry with one gate is detected.
+
+### Added — `mpsExpectation`, `mpsFromOps`, and a complex linear-algebra surface
+
+Expectation values straight from an MPS, and an MPS built from a flat op list
+without routing through `Circuit`. `svd`, `matmul`, `conjTranspose` and `cmatrix`
+are now public — PEPS and MPS truncation need them, and they were worth exposing
+rather than hiding.
+
+### Added — attack validation in CI
+
+`npm run check:attacks` runs three stages: `fuzz-attacks` hunts for circuits where
+an attack disagrees with the exact answer, `verify-attacks` re-checks what it finds,
+and `external-checks` runs 40 assertions covering published circuits, cross-backend
+agreement, and the invariants each rewrite claims. Wired into both workflows and
+into `prepublishOnly`.
+
+### Changed — contraction slicing gains a range
+
+`contractSliceRange(tensors, sliced, lo, hi)` accumulates a contiguous half-open run
+of slices in one call, so a sliced contraction splits across workers by range rather
+than one slice at a time.
+
+### Changed — `deploy:site` stamps the bundle it ships
+
+The site copy of `ket.global.js` is now built and stamped by `scripts/stamp-bundle.ts`
+during the deploy, instead of being copied by hand and drifting from the release.
+
 ## 0.9.1
 
 ### Fixed — stabilizer-rank sampling was wrong on any support single-bit flips cannot cross

@@ -1493,8 +1493,117 @@ export function mpsContract(mps: MPS): Float64Array {
  * @internal — exposed for testing only.
  * Return max bond dimension currently in the MPS.
  */
+/** A gate list in the normalised form `Circuit.toOps()` produces. */
+export type SimpleOp =
+  | { kind: 'one'; q: number; gate: Gate2x2 }
+  | { kind: 'two'; a: number; b: number; gate: Gate4x4 }
+
+/**
+ * Build an MPS by replaying ops under a bond-dimension cap.
+ *
+ * The truncated state itself, rather than samples from it — which is what makes a
+ * convergence check possible. `truncated` says whether the cap ever bound; if it
+ * did not, the run was exact and `peakChi` is the circuit's true bond dimension.
+ */
+export function mpsFromOps(
+  n: number, ops: readonly SimpleOp[], maxBond: number,
+): { mps: MPS; peakChi: number; truncated: boolean } {
+  let mps = mpsInit(n)
+  let truncated = false
+  for (const op of ops) {
+    if (op.kind === 'one') { mps = mpsApply1(mps, op.q, op.gate); continue }
+    const before = mpsMaxBond(mps)
+    mps = mpsApply2(mps, op.a, op.b, op.gate, maxBond)
+    const after = mpsMaxBond(mps)
+    // The cap bound if the bond wanted to grow past it and stopped exactly there.
+    if (after >= maxBond && after === maxBond && before >= Math.min(maxBond, before)) {
+      truncated = truncated || after === maxBond
+    }
+  }
+  return { mps, peakChi: mpsMaxBond(mps), truncated: truncated && mpsMaxBond(mps) >= maxBond }
+}
+
+/**
+ * ⟨ψ|P_q|ψ⟩ for a single-qubit Pauli, by transfer-matrix contraction.
+ *
+ * No sampling. Sweeping the double-layer transfer matrix left to right costs
+ * O(n·χ³) and returns the expectation exactly for the state the MPS represents —
+ * which matters because the alternative, comparing two *sampled* distributions,
+ * has a noise floor larger than any tolerance worth setting. Judging whether a
+ * truncated run has converged needs a quantity that does not carry shot noise,
+ * and this is one.
+ *
+ * The normalisation is computed alongside rather than assumed, so this does not
+ * depend on the MPS being in any particular canonical form.
+ */
+export function mpsExpectation(mps: MPS, q: number, pauli: 'X' | 'Y' | 'Z'): number {
+  const n = mps.length
+  /** P|s⟩ = phase·|out⟩ for each basis state s. */
+  const act = (s: number): { out: number; re: number; im: number } =>
+    pauli === 'Z' ? { out: s, re: s === 0 ? 1 : -1, im: 0 }
+      : pauli === 'X' ? { out: s ^ 1, re: 1, im: 0 }
+      : { out: s ^ 1, re: 0, im: s === 0 ? 1 : -1 }
+
+  // Environments are χ×χ matrices, indexed [ket, bra], carried as re/im pairs.
+  let dim = mps[0]!.chiL
+  let envRe = new Float64Array(dim * dim)
+  let envIm = new Float64Array(dim * dim)
+  for (let i = 0; i < dim; i++) envRe[i * dim + i] = 1
+  // The same sweep without the operator gives ⟨ψ|ψ⟩.
+  let nrmRe = new Float64Array(dim * dim)
+  let nrmIm = new Float64Array(dim * dim)
+  for (let i = 0; i < dim; i++) nrmRe[i * dim + i] = 1
+
+  for (let site = 0; site < n; site++) {
+    const t = mps[site]!
+    const { chiL, chiR } = t
+    const at = (l: number, p: number, r: number): number => ((l * 2 + p) * chiR + r) * 2
+    const outRe = new Float64Array(chiR * chiR), outIm = new Float64Array(chiR * chiR)
+    const nOutRe = new Float64Array(chiR * chiR), nOutIm = new Float64Array(chiR * chiR)
+
+    for (let l = 0; l < chiL; l++) for (let lb = 0; lb < chiL; lb++) {
+      const er = envRe[l * chiL + lb]!, ei = envIm[l * chiL + lb]!
+      const nr = nrmRe[l * chiL + lb]!, ni = nrmIm[l * chiL + lb]!
+      if (er === 0 && ei === 0 && nr === 0 && ni === 0) continue
+      for (let p = 0; p < 2; p++) for (let pb = 0; pb < 2; pb++) {
+        // Operator layer: ⟨pb| P |p⟩, or δ for the norm sweep.
+        let opr = 0, opi = 0
+        if (site === q) {
+          const a = act(p)
+          if (a.out === pb) { opr = a.re; opi = a.im }
+        } else if (p === pb) { opr = 1 }
+        const same = p === pb ? 1 : 0
+        if (opr === 0 && opi === 0 && same === 0) continue
+        for (let r = 0; r < chiR; r++) for (let rb = 0; rb < chiR; rb++) {
+          const kr = t.data[at(l, p, r)]!, ki = t.data[at(l, p, r) + 1]!
+          const br = t.data[at(lb, pb, rb)]!, bi = -t.data[at(lb, pb, rb) + 1]!   // conjugated
+          const tr = kr * br - ki * bi, ti = kr * bi + ki * br                    // ket·conj(bra)
+          if (opr !== 0 || opi !== 0) {
+            const wr = tr * opr - ti * opi, wi = tr * opi + ti * opr
+            outRe[r * chiR + rb] = outRe[r * chiR + rb]! + (er * wr - ei * wi)
+            outIm[r * chiR + rb] = outIm[r * chiR + rb]! + (er * wi + ei * wr)
+          }
+          if (same) {
+            nOutRe[r * chiR + rb] = nOutRe[r * chiR + rb]! + (nr * tr - ni * ti)
+            nOutIm[r * chiR + rb] = nOutIm[r * chiR + rb]! + (nr * ti + ni * tr)
+          }
+        }
+      }
+    }
+    envRe = outRe; envIm = outIm; nrmRe = nOutRe; nrmIm = nOutIm; dim = chiR
+  }
+
+  let num = 0, den = 0
+  for (let i = 0; i < dim; i++) { num += envRe[i * dim + i]!; den += nrmRe[i * dim + i]! }
+  return den === 0 ? 0 : num / den
+}
+
 export function mpsMaxBond(mps: MPS): number {
-  return Math.max(...mps.map(t => Math.max(t.chiL, t.chiR)))
+  // Not `Math.max(...)`: one argument per site overflows the call stack past
+  // about 124,500 of them, and long chains are the case MPS is for.
+  let m = 0
+  for (const t of mps) { if (t.chiL > m) m = t.chiL; if (t.chiR > m) m = t.chiR }
+  return m
 }
 
 /**

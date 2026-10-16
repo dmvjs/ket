@@ -71,11 +71,19 @@ const r = shorBeauregard(15n, { a: 7n })
 if (r.method !== 'quantum' || r.qubits !== 19 || String(r.period) !== '4')
   issues.push(`shorBeauregard(15n,{a:7n}) changed: ${JSON.stringify({ m: r.method, q: r.qubits, p: String(r.period) })}`)
 
-// 6. Every public export should appear somewhere a reader can find it.
+// 6. Every public export must appear in EVERY surface that claims to cover the API.
+//    This was an OR — an export in either surface satisfied it — and that is exactly
+//    how a whole release's API landed in the reference while the site sat a version
+//    behind, the failure this script was written after. An OR cannot catch it: the
+//    reference is always the first thing updated, so it always covers for the site.
 const api = Object.keys(await import('../dist/ket.js'))
-const ref = read('docs/REFERENCE.md'), site = read('site/docs.html')
-const undocumented = api.filter(n => !ref.includes(n) && !site.includes(n))
-if (undocumented.length) issues.push(`exports documented nowhere: ${undocumented.join(' ')}`)
+const API_SURFACES = ['docs/REFERENCE.md', 'site/docs.html']
+for (const f of API_SURFACES) {
+  const t = read(f)
+  const missing = api.filter(n => !t.includes(n))
+  if (missing.length)
+    fail(f, `${missing.length}/${api.length} exports undocumented: ${missing.join(' ')}`)
+}
 
 if (issues.length) {
   console.error(`Docs disagree with the library:\n  - ${issues.join('\n  - ')}`)

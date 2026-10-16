@@ -56,9 +56,9 @@ Or load directly in a browser, as a module:
 
 | File | Size | Format | For |
 |---|---|---|---|
-| `dist/ket.js` | 468 KB | ESM | bundlers that tree-shake and minify |
-| `dist/ket.min.js` | 215 KB | ESM | `import` from a CDN |
-| `dist/ket.global.js` | 216 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
+| `dist/ket.js` | 581 KB | ESM | bundlers that tree-shake and minify |
+| `dist/ket.min.js` | 274 KB | ESM | `import` from a CDN |
+| `dist/ket.global.js` | 274 KB | IIFE, `ket` global | `<script src>` — what `unpkg`/`jsdelivr` serve |
 | `dist/compat.js` | 69 B | ESM | `@kirkelliott/ket/compat`, a re-export of `ket.js` |
 
 The global build is a second format, not a second copy: `@kirkelliott/ket/compat`
@@ -567,6 +567,49 @@ circuit.unitary(S, 0)
 Supported in all backends: statevector, density matrix, and MPS (1 and 2-qubit only). Throws `TypeError` in `runClifford` (the simulator cannot verify Clifford membership from an arbitrary matrix).
 
 JSON round-trip is lossless — the matrix is stored as `[[re, im], ...][]` in the serialized format.
+
+### Exported gate matrices
+
+The matrices behind the gate methods are public, so a gate can be inspected,
+composed, or handed to `unitary()` without going through a `Circuit`.
+
+```typescript
+import { H, Rx, Ms, ISwap } from '@kirkelliott/ket'
+import type { Gate2x2, Gate4x4, Complex } from '@kirkelliott/ket'
+
+H                  // Gate2x2 — a constant
+Rx(Math.PI / 2)    // Gate2x2 — parameterised gates are functions
+circuit.unitary(ISwap, 0, 1)
+```
+
+| Kind | Names |
+|---|---|
+| Constant `Gate2x2` | `Id` `H` `X` `Y` `Z` `S` `Si` `T` `Ti` `V` `Vi` `R2` `R4` `R8` |
+| Constant `Gate4x4` | `ISwap` `SrSwap` |
+| Function → `Gate2x2` | `Rx(θ)` `Ry(θ)` `Rz(θ)` `U1(λ)` `U2(φ,λ)` `U3(θ,φ,λ)` `Gpi(φ)` `Gpi2(φ)` |
+| Function → `Gate4x4` | `Xx(θ)` `Yy(θ)` `Zz(θ)` `Xy(θ)` `Ms(φ₀,φ₁)` |
+
+`Gpi`, `Gpi2` and `Ms` are the IonQ native set — see
+[Native IonQ gates](#native-ionq-gates) for when the hardware wants them.
+
+### Complex numbers
+
+A `Complex` is `{ re, im }`, and the arithmetic used internally is exported for
+building custom matrices.
+
+```typescript
+import { c, add, mul, scale, conj, norm2, ZERO, ONE, I } from '@kirkelliott/ket'
+
+c(1, -1)              // { re: 1, im: -1 }; the imaginary part defaults to 0
+mul(I, I)             // { re: -1, im: 0 }
+norm2(c(3, 4))        // 25 — the squared modulus, not the modulus
+```
+
+| Kind | Names |
+|---|---|
+| Constants | `ZERO` `ONE` `I` |
+| Construct | `c(re, im?)` |
+| Arithmetic | `add(a,b)` `mul(a,b)` `scale(s,a)` `conj(a)` `norm2(a)` |
 
 ### Scheduling
 
@@ -1100,6 +1143,7 @@ reached rather than the width requested.
 |---|---|
 | `sliceContraction(indexSets, opts?)` | Choose slice indices and plan one slice. |
 | `contractSliced(tensors, slicedPlan)` | Contract every slice and sum. |
+| `contractSliceRange(tensors, slicedPlan, lo, hi)` | Contract slices `[lo, hi)` — the distributable unit. |
 | `projectTensor(tensor, fixed)` | Fix indices to values, dropping those axes. |
 | `amplitudeBySlicedContraction(circuit, bitstring, opts?)` | The whole path in one call. |
 
@@ -1202,6 +1246,778 @@ const net  = circuitNetwork(circuit, '0'.repeat(n))
 const plan = planContraction(net.map(t => t.indices), { restarts: 64 })
 const out  = contractNetwork(net, plan)   // out.indices === [] — a scalar
 ```
+
+## Random circuit sampling and XEB
+
+Random circuit sampling is the task the quantum-advantage experiments run, and
+linear cross-entropy benchmarking is how the result is scored:
+
+    F = 2ⁿ · mean over samples of p_ideal(x) − 1
+
+which is 1 for perfect sampling, 0 for uniform noise, and approximately the
+fidelity in between. `rcsCircuit` builds a Sycamore-shaped circuit — a 2-D grid,
+random single-qubit gates from {√X, √Y, √W} with no qubit repeating its previous
+gate, and fSim(θ=π/2, φ=π/6) across one coupler pattern per cycle:
+
+```typescript
+const c = rcsCircuit({ rows: 5, cols: 5, depth: 10, seed: 1 })
+const r = await xebFromSamples(c, samples)
+console.log(r.fidelity, '±', r.stderr)
+```
+
+**XEB is only meaningful on a circuit that has actually scrambled.** A scrambled
+circuit's probabilities follow Porter-Thomas, `P(2ⁿp = x) = e^{-x}`, whose moments
+are 1, 2 and 6. `porterThomasMoments` checks it, and the second moment misses in
+*both* directions — uniform sits at 1, and a circuit too shallow to have spread
+its amplitude overshoots 2 rather than falling short, because the weight is still
+concentrated. A depth-1 12-qubit circuit reads 5.06 where depth 16 reads 1.9.
+
+### Where the verification actually stops
+
+Scoring a sample means computing the ideal probability of that one bitstring —
+a classical simulation of the circuit that is supposed to be hard to simulate.
+That is the whole game, and it is why this sits on the contraction backend: cost
+is set by treewidth, not by 2ⁿ. Measured on a 16-core M-series machine:
+
+| grid | qubits | depth | contraction width | ms / amplitude | statevector |
+|---|---|---|---|---|---|
+| 4×4 | 16 | 10 | 14 | 2.2 | 1 MB |
+| 5×5 | 25 | 10 | 18 | 152 | 537 MB |
+| 6×6 | 36 | 10 | 26 | 63 800 | 1 TB — impossible |
+| 6×6 | 36 | 14 | 36 | — | 2³⁶ intermediate does not fit |
+| 7×7 | 49 | 12 | 46 | — | — |
+| 12×12 | 144 | 8 | 56 | — | — |
+
+The frontier for a *full* score — thousands of samples — is about 25 qubits at
+depth 10, where fan-out brings 1000 amplitudes to roughly 17 seconds. A single
+amplitude reaches 36 qubits, well past any statevector, but at a minute apiece
+that is not a score. Past that, width outruns memory and slicing buys reach
+without buying speed: it trades memory for repeats, and the exponential is
+untouched.
+
+Both depth and width drive the treewidth, and depth drives it harder per step —
+36 qubits went from width 26 to 36 for four more cycles, while holding depth at 10
+and going from 36 to 100 qubits went 26 to 50.
+
+### Two ceilings, and they are not the same one
+
+*Scoring* given bitstrings is bounded by contraction width, as above. *Generating
+ideal samples classically* is bounded by the statevector's sampling path, which
+materialises a probability map over the full support and stops at 24 qubits — so
+`circuit.run()` cannot sample a 25-qubit RCS circuit however much memory it has.
+In a real experiment the hardware supplies the samples and only the scoring
+matters, so this second ceiling constrains self-testing rather than verification.
+`statevectorOracle` stops earlier still, around 20-24 qubits, because
+`exactProbs()` is keyed by bitstring.
+
+| Function | Purpose |
+|---|---|
+| `rcsCircuit(opts)` | A Sycamore-shaped random circuit on a grid. |
+| `heavyHex127()` | IBM's 127-qubit Eagle coupling map — 127 nodes, 144 edges, max degree 3. |
+| `trotterIsing(opts)` | Trotterized transverse-field Ising on a coupling map: the 127-qubit "utility" circuit family. |
+| `edgeColouring(edges)` | Partition edges into matchings, so each becomes one hardware layer. |
+| `gridCouplings(rows, cols)` | The four disjoint bond sets a coupler layer draws from. |
+| `fsim(theta, phi)` | The fSim entangler as a 4×4. |
+| `linearXeb(qubits, probs)` | The estimator and its standard error, from ideal probabilities. |
+| `xebFromSamples(circuit, samples, opts?)` | Score samples end to end. |
+| `porterThomasMoments(qubits, probs)` | Whether the circuit is in the regime XEB assumes. |
+| `contractionOracle(circuit, opts?)` | A reusable probability oracle; plans once, replays per bitstring. |
+| `statevectorOracle(circuit)` | One dense solve, then free lookups. Small circuits only. |
+| `mixWithUniform(samples, f, qubits, seed?)` | Replace `1−f` of the samples with noise, to demonstrate that XEB reads back `f`. |
+| `SQRT_X` / `SQRT_Y` / `SQRT_W` / `SYCAMORE_1Q` / `SYCAMORE_SEQUENCE` | The gate set and cycle order. |
+
+The single-qubit gates are applied as `unitary` ops rather than named gates,
+because √Y and √W have no name in ket and a name a backend did not know would
+decide which backends could score the circuit. `circuitNetwork` gained support
+for `two` and 1-/2-qubit `unitary` ops so that the contraction backend — the only
+one that outlives the statevector — can handle these circuits at all.
+
+## The classical adversary
+
+Every backend in ket exists because some circuits have structure that collapses
+their cost — Clifford closure, bounded magic, bounded entanglement, low treewidth,
+Heisenberg sparsity. Each turns an exponential in the qubit count into an
+exponential in something else. A circuit is hard only if it is hard for *all* of
+them, so `analyzeHardness` runs every attack against it and reports which one
+lands:
+
+```typescript
+const report = analyzeHardness(circuit, { memoryBytes: 16e9, seconds: 3600 })
+console.log(renderHardness(report))
+```
+
+```
+36 qubits, 240 gates — budget 16 GB / 60.0 min
+attack             answers       parameter / why not                             memory    time
+─────────────────  ────────────  ──────────────────────────────────────────────  ──────  ──────
+✓ tensor-network   amplitude     contraction width ≤9                            8.2 KB  107 µs
+· mps              distribution  bond dimension χ ≥64                            4.7 MB  315 ms
+· statevector      distribution  qubits  36                                      1.1 TB  22.9 h
+  clifford         distribution  op 'unitary' is not Clifford
+  stabilizer-rank  distribution  runStabilizerRank: gate 'unitary' is not supp…
+  pauli-path       expectation   no observable given — set budget.observable t…
+
+best: tensor-network (amplitude) — 7.7e+8x cheaper than a statevector
+no attack produced a full distribution within budget
+```
+
+Running the attacks would defeat the point, so each is **probed**: measured for
+the one structural quantity that decides its cost, then priced. Counting T gates
+is a scan, planning a contraction is milliseconds, and the MPS probe runs under a
+bond-dimension cap so it stops as soon as the answer is "more than this".
+
+| attack | structure it prices | parameter | probe |
+|---|---|---|---|
+| `clifford` | Clifford closure | T-count | scan the gate names |
+| `stabilizer-rank` | magic | T-count → term budget | arithmetic on the gate list |
+| `mps` | entanglement | bond dimension χ | one shot under `probeChi` |
+| `peps` | entanglement in *two* dimensions | bond dimension | one replay under `probeBond` |
+| `tensor-network` | treewidth | contraction width | `planBest`, or greedy past `probeMaxGates` |
+| `pauli-path` | Heisenberg sparsity | Pauli terms | one bounded propagation |
+| `symmetry` | a conservation law | sector dimension C(n,k) | test every gate matrix for weight blocks |
+| `noisy-pauli-path` | the device's own noise | Pauli terms (noisy) | one bounded propagation, damped |
+| `statevector` | none — the baseline | qubits | arithmetic |
+
+`ATTACK_NAMES` exports that roster as a readonly tuple, and `AttackName` is derived
+from it, so it is the single source of truth rather than a list to keep in step.
+Iterate it instead of hard-coding names — `benchmark/published-circuits.ts` does,
+which is what stops a newly added attack from being missing from its own
+calibration. Internally the runner table is keyed by `AttackName`, so adding a name
+without adding its implementation is a compile error rather than an attack that
+silently never runs.
+
+Every applicable attack also reports `error` — the accuracy it claims, `{ value,
+bound }` beside the cost `parameter`. Exact methods claim `{ value: 0, bound:
+'exact' }`; an approximation that converged claims the tolerance it met, as an
+`upper` bound. **Absent means no claim at all**, which is the only honest reading
+of a probe that hit its cap: it has no basis for an accuracy statement, and
+reporting zero there would be a lie. That distinction is why `error` exists —
+"broken" and "broken to within 1e-3" are different results and used to print
+identically.
+
+### Reading a bound, not just a number
+
+Two of the parameters are not measurements, and the difference decides what the
+verdict is worth:
+
+- **`exact`** — measured. The cost follows.
+- **`lower` (≥)** — the probe stopped early, so the true value is at least this.
+  A floor **can never establish viability**: the real cost may be anything above
+  it. This is why an MPS row can show 1.2 MB and still be ruled out.
+- **`upper` (≤)** — a better search could lower it. A fit here is trustworthy in
+  the direction that matters: if this contraction width fits, the true optimum
+  fits too.
+
+Memory is arithmetic; time comes from `opsPerSecond` (default 2e8, measured for
+contraction in Node on Apple silicon) and is an estimate. Memory decides what is
+impossible, the constant only decides what is slow.
+
+### The attacks are complementary, not ranked
+
+GHZ on 60 qubits plus 80 T gates has high magic and almost no entanglement. The
+backend built for magic needs 390 GB; the one built for entanglement walks it at
+χ = 2. Neither is better — they price different structure, which is the whole
+reason to run all of them:
+
+```
+✓ mps              distribution  bond dimension χ  2      7.7 KB      6 µs
+· stabilizer-rank  distribution  T-count  80              390 GB  22.2 min
+· statevector      distribution  qubits  60                18 EB  2.6e+4 years
+```
+
+`best` is the cheapest viable attack and `bestFull` the cheapest that produces a
+whole distribution. They are frequently different, and reporting only the first
+would let one amplitude stand in for a distribution.
+
+### Attacking the presentation, not just the circuit
+
+A circuit as written is one representative of everything computing the same
+answer, and the hardness parameters are properties of the *representative*. An
+attacker rewrites first. `searchHardness` applies sound rewrites, keeps the ones
+that actually help, and re-prices:
+
+```typescript
+const s = searchHardness(circuit, { about: [55], memoryBytes: 16e9 })
+console.log(renderSearch(s))
+```
+
+```
+search: 100 qubits / 1550 gates → 80 qubits / 495 gates
+  light-cone   1550 → 495 gates, 80 qubits  (preserves observable)
+
+before: nothing landed
+after:  tensor-network
+the search broke a circuit that nothing could break as written
+```
+
+Measured on the two circuits the adversary previously reported as unbreakable:
+
+| circuit | asked about | before | after |
+|---|---|---|---|
+| RCS 10×10 depth 10 (100 qubits) | one qubit | nothing landed | 80 qubits, 495 gates — **treewidth lands** |
+| RCS 6×6 depth 14 (the wall) | one qubit | nothing landed | 482 gates — **treewidth lands** |
+
+**The wall was partly a wall about the question, not the circuit.** Asked for the
+whole distribution, 6×6 depth 14 defeats every attack. Asked about one qubit, a
+third of the gates cannot affect the answer and deleting them brings the
+contraction into budget.
+
+Three rewrites, and each records what it preserves — they are not interchangeable:
+
+| rewrite | preserves | what it does |
+|---|---|---|
+| `lightCone(circuit, qubits)` | `observable` | Delete everything that cannot reach those qubits, and drop the qubits left idle. Usually the largest reduction available. |
+| `peephole(circuit)` | `state` | Cancel adjacent inverses, merge same-axis rotations. Two T gates in a row are an S gate, so this removes T-count outright. |
+| `toZBasis(circuit)` | `state` | Rewrite `Rx(θ)` as `H·Rz(θ)·H` (and `Ry` one conjugation deeper). Makes the circuit *bigger*; what it buys is eligibility, since several backends take `rz` and not `rx`. |
+| `searchQubitOrder(circuit, opts?)` | `permuted-state` | Relabel qubits to shorten two-qubit gates, which is what drives MPS bond dimension. Returns the mapping. |
+
+Two helpers the rewrites are built from: `orderingCost(circuit, order)` scores an
+ordering by the total distance its two-qubit gates span — the proxy the search
+minimises but is *not* judged on — and `qubitsOf(op)` extracts every qubit a
+serialized op touches, which is what makes the causal walk work across all the op
+shapes.
+
+A light cone narrows what the result *answers* — the reduced circuit has nothing
+to say about the qubits it dropped. That is why `preserves` is on every rewrite
+and why `applied` should be read before quoting a verdict.
+
+**The search is judged on the report, never on a proxy.** An earlier version
+accepted the qubit relabelling whenever it shortened the total two-qubit span — a
+reasonable-sounding stand-in for bond dimension — and measured a result 4% *worse*
+on a 4×6 grid. A search that moves on a proxy walks downhill. Every candidate is
+now re-priced and kept only if the report improved, so `speedup` is never below 1
+and a rewrite that gains nothing is reported as "no rewrite helped".
+
+### Calibration against published circuits
+
+`benchmark/published-circuits.ts` points the adversary at two families it did not
+generate: IBM's 127-qubit heavy-hex Trotter circuits and Google's coupler-pattern
+RCS. **Both were classically reproduced by other groups after publication**, so
+this is a known-answer test — a break validates the tool, it does not discover
+anything. Prediction was committed before running: IBM should break (near-Clifford,
+sparse degree-3 lattice, local observable); the deepest RCS instance should not,
+since the literature needed a GPU cluster for it.
+
+Asked about ⟨Z⟩ on one mid-lattice qubit, at a 16 GB / 1 h budget:
+
+| circuit | gates after search | contraction width | verdict | expected |
+|---|---|---|---|---|
+| IBM heavy-hex, 5 steps | 2795 → 796, 127 → 88 qubits | ≤19 | **breaks** — 8.5 MB | breaks ✓ |
+| IBM heavy-hex, 10 steps | 5590 → 3397 | ≤55 | nothing landed | breaks ✗ |
+| IBM heavy-hex, 20 steps | 11180 → 8987 | ≤127 | nothing landed | breaks ✗ |
+| Google RCS, depth 12 | 981 → 294, 54 → 36 qubits | ≤15 | **breaks** — 562 KB | — |
+| Google RCS, depth 20 | 1599 → 854 | ≤30 | nothing landed — 26 h against 1 h | does not break ✓ |
+
+Widths are `≤` because a planner's width is an upper bound on the best order: a
+stronger search lowers it and never raises it, so a viable verdict here is
+trustworthy in the direction that matters. The benchmark runs with
+`probeMaxGates: Infinity`, which buys the tighter of the two planners — bisection
+rather than greedy, worth 55 against 78 at ten steps and 127 against 183 at twenty.
+
+**The last row is refused on time, not space**, and the two are worth separating
+because only one of them looks close. At width 30 it wants 17.2 GB against a 16 GB
+budget — 7% over, near enough to invite "just buy more memory" — and 26.3 hours
+against the stated hour, which is 26× over. Measured at 32 GB and 64 GB the verdict
+does not move: memory was never the binding constraint. A bigger machine does not
+break this circuit; roughly a day and a half would.
+
+**The adversary is calibrated at the ends and under-powered in the middle.** It
+correctly breaks the easy instances and correctly refuses the hardest published
+one. It fails to reproduce the known breaks at IBM depth 10 and 20 — and the two
+reasons are both limitations of this library's attacks rather than facts about the
+circuits:
+
+- **The contraction attack is exact.** Width goes 19 → 55 → 127 with depth, and
+  that is already the tighter planner — bisection, not greedy. The groups who
+  reproduced these circuits used *approximate* tensor networks: belief
+  propagation, bond truncation, hypergraph-partition ordering. The contraction
+  attack does none of those, and no amount of planning closes a gap that is
+  exponential in width.
+- **The Pauli attack runs out of terms, not out of budget.** The benchmark
+  attempts at 409,600 terms — 100× the 4,096 probe — which is enough at five
+  steps, where it lands with a converged 409,600. At ten it comes back ≥409,600:
+  still a floor, and a floor can never establish viability. Sparse Pauli dynamics
+  reproduced these circuits with millions of terms.
+
+That second point is a systematic skew worth stating plainly: **the adversary
+under-reports the Pauli attacks on every circuit where propagation does not
+converge cheaply**, which is most of them. `probeChi` can return an exact χ when
+entanglement is genuinely low; the Pauli probe has no equivalent good case.
+
+One reporting wart: these rows show `stabilizer-rank: gate 'rx' is not supported`
+even though `toZBasis` can remove that obstacle. The search tried it, correctly
+found it did not improve the report — 440 T gates is hopeless either way — and
+discarded it, so the surviving report shows the pre-rewrite refusal. It reads as a
+hard incompatibility and is a choice.
+
+### U(1) symmetry — pricing a conservation law
+
+The only attack here that exploits something a circuit *cannot do* rather than
+something it does cheaply. If no gate can change the excitation count, the state
+never leaves the Hamming-weight sector it started in and the reachable space is
+C(n,k) instead of 2ⁿ.
+
+```typescript
+const s = weightSymmetry(circuit, '11100000…')     // is it conserved, and what does it buy
+const r = runSector(circuit, { initialState: '11100000…', shots: 1000 })
+```
+
+At half filling that is worth about √n and barely matters. Away from it the
+reduction is the whole point — 50 spin-orbitals holding 10 electrons is C(50,10) ≈
+1.0e10 against 2⁵⁰ ≈ 1.1e15 — and that is the regime quantum chemistry runs in.
+Particle-conserving ansätze are standard there and general-purpose simulators
+mostly leave the reduction to domain codes. `particleConservingAnsatz` builds one.
+
+Measured on a 24-qubit ansatz with 3 excitations: sector dimension 2024, **32 KB
+against the statevector's 268 MB**.
+
+**Detected from the matrices, never from gate names.** A gate conserves weight
+when no entry of its matrix connects basis states of different weight. That is how
+`fSim`, `iSWAP` and `√iSWAP` are all recognised as conserving — no naming
+convention would have told you, and this library has already been bitten once by
+deciding Clifford-ness from a name.
+
+**A decomposition must not hide the symmetry.** `Rzz` is diagonal and conserving,
+but written as `CNOT · Rz · CNOT` it is three gates of which two are not. Runs of
+gates confined to one pair of qubits are multiplied together before testing, so
+the question asked is about the operator rather than its spelling. Without that
+fusion the Trotter family reports "broken by a CNOT" at every angle, pointing at a
+decomposition artefact instead of the transverse field that actually breaks it.
+
+`conserved` is **sufficient, not necessary**: `true` is trustworthy, `false` only
+means no proof was found, and a symmetry spread wider than two qubits will still
+be missed. The sector dimension is correspondingly an `upper` bound — more
+symmetry would only shrink the space.
+
+Where it does *not* fire is worth knowing: neither published family has the
+symmetry. IBM's Trotter circuits break it with the transverse field — except at
+θ_h = 0, where they conserve and the sector is 62× smaller — and Google's RCS
+breaks it at the √X/√Y/√W layer, despite fSim itself conserving.
+
+| Function | Purpose |
+|---|---|
+| `weightSymmetry(circuit, initialState?)` | Is it conserved, what broke it, and what the sector costs. |
+| `runSector(circuit, opts)` | Simulate inside the sector — C(n,k) amplitudes, not 2ⁿ. |
+| `particleConservingAnsatz(opts)` | A chemistry-shaped circuit that actually has the symmetry. |
+| `preservesWeight1` / `preservesWeight2` | The matrix test itself. |
+| `binomial(n, k)` / `weightOf(bits)` | The arithmetic. |
+
+### Probing an attack is not attempting it
+
+Every attack above is *probed*: measured cheaply for its parameter, then priced.
+A probe caps the work, so a parameter that hits the cap comes back as a floor —
+and a floor can rule an attack out but never in.
+
+For most attacks that is fine, because their probe has a good case: `probeChi`
+returns an exact χ whenever entanglement is genuinely low. The Pauli attacks have
+no such case. Propagation rarely converges inside a cheap cap, so their parameter
+is almost always a floor and the attack is almost always invisible — including on
+the published Trotter circuits, which sparse Pauli dynamics reproduced at millions
+of terms while a 4096-term probe reports `≥4096` and gives up.
+
+`attemptTerms` closes that. Set it and the Pauli attacks are *attempted* rather
+than probed: run at the budget, run again at a quarter of it, and if the answer
+stopped moving the propagation has converged and the term count is a measurement
+that can establish viability.
+
+```typescript
+searchHardness(circuit, { about: [62], observable, attemptTerms: 1_000_000 })
+```
+
+The search itself still runs on probes and attempts once on the presentation it
+settles on — otherwise every candidate rewrite would cost two million-term
+propagations per Pauli attack, which is minutes of work to decide whether a
+relabelling was worth keeping.
+
+Converged has to mean *correct*, not merely stable, so the suite checks the
+converged value against the exact expectation as well as against itself.
+
+Each approximate attack has its own attempt budget, because the parameters are
+different quantities and a value that suits one is wrong for the others:
+
+| field | attempts | default |
+|---|---|---|
+| `attemptTerms` | the two Pauli attacks | 0 — probe only |
+| `attemptChi` | `mps` | 0 — probe only |
+| `attemptBond` | `peps` | 0 — probe only |
+| `attemptTolerance` | drift allowed before an attempt counts as converged | 0.01 |
+
+An MPS bond cuts a chain and a PEPS bond cuts one lattice edge, where a site of
+degree *d* holds χ^d rather than χ²; χ=64 is unremarkable for the first and
+enormous for the second. One shared knob would be wrong for whichever attack it
+did not suit.
+
+#### Paying for an attempt only when it could matter
+
+An attempt is expensive — it runs the whole propagation twice — and most of the
+time it cannot change a single verdict. `attemptOnlyIfDecisive` skips the ones
+that cannot, resting on cost being **monotone** in the attempt budget: a larger
+cap retains more terms or a wider bond, never fewer, so a probe's floor is a true
+lower bound. Two cases are therefore decided before spending anything — a floor
+already over budget stays over budget, and a floor already dearer than an attack
+that landed cannot displace it.
+
+It is **off by default**, because it costs the meaning of `bound`. Normally
+`lower` says "measured, and still moving". Under this flag it may also mean "not
+attempted, because nothing it could have said would have mattered", and the report
+cannot tell you which. Turn it on when the output is a recommendation; leave it off
+when the output is a cost table you intend to read row by row.
+
+#### When a probe is not cheap
+
+Two probes are structurally expensive rather than cheap, which undermines the
+premise that pricing is cheaper than attacking: recursive-bisection planning costs
+349 s on a 9k-gate heavy-hex network where greedy costs 349 ms, and replaying that
+circuit as a PEPS costs 87 s at bond 4. `searchHardness` would pay both once per
+rewrite candidate.
+
+`probeMaxGates` (default 2000) gates them by circuit size, and the two degrade
+differently on purpose:
+
+- **`tensor-network` falls back to greedy planning.** Its width is an upper bound
+  either way, so a looser plan loses tightness, never soundness. Measured, that is
+  width 78 rather than 55 at ten Trotter steps and 183 rather than 127 at twenty —
+  and since neither is viable at any budget, the cheap plan is the right default.
+  Gated, that analysis takes 0.24 s instead of 51 s.
+
+  Greedy has a ceiling of its own, because cheap is relative to the network:
+  planning is 0.8 s at 33,794 tensors, 3.1 s at 35,053 and 44 s at 191,583. Past
+  `GREEDY_MAX_GATES` (50,000) the attack declines rather than spend a minute
+  arriving at a width no budget could meet. `probeMaxGates: Infinity` opts out of
+  both gates, which is what a calibration run wants.
+- **`peps` declines outright.** It cannot degrade to something cheaper and still
+  say anything, and a floor nobody paid for is a claim about the circuit that no
+  measurement backs. A decline and a floor mean different things.
+
+Raise it when the width matters more than the wait — `benchmark/published-circuits.ts`
+sets `Infinity`, because a width quoted in a calibration table is only worth
+quoting at its tightest. `Infinity` disables the gate.
+
+### Randomised differential testing
+
+`benchmark/fuzz-attacks.ts` generates circuits at random, asks the adversary what
+it recommends, then **runs every applicable attack** and compares against the
+exact statevector. Hand-written checks only cover what the author thought of,
+which is how a viable recommendation that returned an answer 0.28 off survived two
+clean batches — nobody had written that one check.
+
+**600 circuits, 1803 attack executions, zero failures**, across styles chosen to
+land in each attack's home territory: Clifford, diagonal, particle-conserving,
+generic rotations, Trotterised bonds, and random 2-qubit unitaries.
+
+The Trotter style exists because of a specific gap: it is the only shape that
+produces gates which individually break excitation conservation while their
+product preserves it, and the defect that motivated the fuzzer lived exactly
+there. A generator that cannot emit the bug class it was written after proves
+nothing about that class — the first version of this one couldn't, and passing
+400 circuits meant less than it appeared to.
+
+The output is a defect rate rather than a verdict. A tool wrong one time in a
+thousand is a different object from one that is never wrong.
+
+### Approximate MPS
+
+`attemptChi` runs the MPS attack truncated at χ and again at 2χ and compares
+**expectation values** — which carry no sampling noise, unlike distributions,
+whose floor at any affordable shot count exceeds a useful tolerance. `mpsFromOps`
+builds the truncated state rather than samples from it, and `mpsExpectation`
+contracts ⟨P_q⟩ off it in O(n·χ³) by transfer matrices.
+
+Measured against ground truth on a volume-law 12-qubit circuit, the truncation
+error in ⟨Z_mid⟩ runs 1.2e−1, 5.8e−2, 7.9e−3, then 1e−13 at χ=16 — and the attack
+calls it converged at exactly 16 and not before.
+
+**The error is not monotone in χ.** On an RCS 3×4 it falls 4.2e−1 → 1.0e−1 →
+3.7e−2 → 7.8e−3 and then *rises* to 2.4e−2 before collapsing at χ=64. A check
+reading one observable can cross the tolerance band by accident on the way past,
+so eight sites are compared in both Z and X at once.
+
+Two earlier designs for this check were wrong and are worth not repeating:
+comparing sampled distributions (defeated by shot noise — a volume-law circuit
+read as converged), and requiring the 2χ run not to saturate its cap (correct but
+so conservative it only ever confirmed *exact* runs, never approximate ones).
+
+### It does not reach the published Trotter circuits
+
+Measured on IBM's heavy-hex light cone of ⟨Z62⟩, after spectral reordering:
+
+| depth | cone | χ=8 | χ=16 | χ=32 | χ=64 | Δ(32→64) |
+|---|---|---|---|---|---|---|
+| 5 | 88 q | 0.726 | 0.623 | 0.604 | 0.502 | 1.0e−1 |
+| 10 | 127 q | 0.857 | 0.781 | 0.737 | 0.752 | 1.5e−2 |
+
+Still moving 10% between χ=32 and 64 at depth 5. This is the structural argument
+confirmed by measurement rather than asserted: MPS is a chain, heavy-hex is a 2-D
+lattice, and a linear ordering pays a SWAP network for every bond that is not
+nearest-neighbour in it. `spectralOrder` — Fiedler-vector ordering of the
+connectivity Laplacian, the standard heuristic for minimum linear arrangement —
+shortens an RCS 4×4 from span 108 to 72 but *lengthens* the IBM cone from 1420 to
+2230, so it is seeded into the search alongside the identity rather than trusted.
+
+The remaining engine is a 2-D one: the state as a PEPS with bond truncation, not
+a chain and not amplitude-network contraction.
+
+### PEPS — the state as a 2-D tensor network
+
+Three engines fail on the published Trotter circuits for the same structural
+reason — they force a 2-D state through a 1-D or exact structure. `pepsRun` does
+not: one tensor per qubit, one virtual bond per edge of the circuit's own
+connectivity, so the network has the shape of the problem.
+
+Gates are applied by **simple update**: contract two sites across their shared
+bond, apply the gate, split with an SVD and keep the largest `maxBond` singular
+values. Neighbouring bond weights are absorbed first and divided out after, so
+each site is updated against an approximation of its surroundings.
+
+Built on `svd` in `linalg.ts` — the decomposition ket already had, extracted from
+the MPS class where it was welded to preallocated buffers. It is verified to
+reconstruct any shape to 1e−10, to produce orthonormal singular vectors, and to
+satisfy Eckart–Young: the Frobenius truncation error equals √(discarded) exactly,
+so `discarded` is a real per-truncation bound.
+
+**Exact where simple update is exact** — a chain is a tree, and there it matches
+the statevector to 1e−12.
+
+**The error floor is the environment, not the bond dimension.** Measured on an RCS
+3×4 grid at depth 8:
+
+| χ | max used | discarded | worst \|Δ⟨Z⟩\| |
+|---|---|---|---|
+| 4 | 4 | 2.3e+0 | 3.28e−2 |
+| 8 | 8 | 1.0e+0 | 3.96e−2 |
+| **16** | 16 | **2.0e−30** | **3.45e−2** |
+| **32** | 16 | **2.0e−30** | **3.45e−2** |
+
+At χ=16 nothing is being truncated at all, and the answer is still 3.5% wrong.
+That residual is the simple-update approximation — each site updated against its
+own bond weights rather than its true environment — and no bond dimension repairs
+it. Going below it needs a real environment: CTMRG, or belief-propagation gauging
+of the state.
+
+| Function | Purpose |
+|---|---|
+| `pepsRun(circuit, opts?)` | Replay a circuit as a 2-D network; coupling defaults to the pairs its gates connect. |
+| `pepsInit(qubits, coupling)` | The product state \|0…0⟩ on a coupling graph. |
+| `pepsApply1` / `pepsApply2` | One gate at a time, for driving the state directly. |
+| `pepsExpectation(state, q, pauli)` | ⟨P_q⟩ in the simple-update environment — cheap, and carries the floor. |
+| `pepsEnvironments(state, opts?)` | Belief propagation on the *norm* network, which is positive and converges where the amplitude network does not. |
+| `pepsExpectationBP(state, q, pauli, env)` | ⟨P_q⟩ against those environments. Lands on the simple-update answer. |
+| `pepsExpectationExact(state, q, pauli, env, opts?)` | ⟨P_q⟩ with no environment approximation. Exact on an untruncated state; declines when the width is out of reach. |
+| `svd(m, opts?)` | Complex SVD with optimal truncation and a reported `discarded`. |
+| `matmul` / `conjTranspose` / `cmatrix` | The dense complex helpers it is built from. |
+
+The adversary prices this engine as the `peps` attack, probed under `probeBond`.
+Being approximate, it cannot certify itself: `discarded` bounds each local
+truncation rather than the final answer, so any run that discarded anything
+reports a **floor**, and only an `attemptBond` run — two bond dimensions that
+agree — can turn that into a measurement. The attack is also gated by
+`probeMaxGates`, because replaying a 9k-gate circuit as a PEPS costs 87 s and a
+probe that dear defeats the purpose of probing.
+
+Measured on the published targets, it does not land: bond 2, 4 and 8 all come back
+as floors on the heavy-hex circuits, and the per-gate cost is χ^(3(d−1)) — χ⁶ on a
+degree-3 lattice — so the bond dimensions that might converge are out of reach.
+Registering an attack makes it *priceable*, not *viable*.
+
+### The error floor is removable — it was the environment
+
+Contracting the norm network **exactly**, with no environment approximation,
+locates the error precisely. On a 3×3 grid at depth 10 with χ=8, where nothing is
+truncated at all:
+
+| environment | error in ⟨Z⟩ |
+|---|---|
+| bond weights (simple update) | 7.55e−2 |
+| **exact norm-network contraction** | **5.76e−16** |
+
+The state was exactly right the whole time. Reading an expectation off it through
+a tree-shaped environment was not, and that alone accounted for the entire floor.
+
+`pepsExpectationExact` does this. The cost is the catch — the norm network carries
+both a ket and a bra index per bond, so its contraction width is roughly twice the
+state network's times log2(χ) — so it reports the width and declines rather than
+attempting something it cannot finish.
+
+**Belief-propagation environments land exactly on the simple-update answer.** Not
+better, not worse: identical to the last digit where BP converges. That is not a
+coincidence — simple update's bond weights already approximate the BP fixed point,
+so the two are the same approximation reached by different routes. (An earlier
+version had BP ten times *worse*, which was a bug: the weights live on the bonds
+in the Vidal gauge, so running BP on the bare site tensors leaves out every λ and
+the norm network is not the state. `absorbWeights` puts √λ on each end.)
+
+### A better environment on a worse state reads worse
+
+The trap that falls out of the above. On a *truncated* state the ordering
+reverses:
+
+| state | discarded | bond-weight env | exact env |
+|---|---|---|---|
+| untruncated | 2e−30 | 7.55e−2 | **5.76e−16** |
+| truncated | 2e+0 | **3.28e−2** | 2.24e−1 |
+
+Simple update truncates *in the bond-weight gauge*, so its truncation error and
+its environment error partially cancel and the estimate is self-consistent.
+Swapping in an exact environment removes one of the two and exposes the full
+truncation damage.
+
+**The two errors cannot be attacked separately.** Accuracy needs a larger bond
+dimension *and* a better environment together; improving either alone can make the
+answer worse. The suite pins both directions.
+
+**The χ-doubling convergence check must not be reused here.** It is the right test
+for MPS, where truncation is the only error. For PEPS the χ=16 and χ=32 runs agree
+to the last digit *and are both wrong by 3%*, so a check built on their agreement
+would report convergence on a wrong answer. The suite pins this explicitly.
+
+### Cashing the recommendation
+
+A verdict is a prediction until someone runs the attack, and an affordable-but-wrong
+recommendation is worse than none. `benchmark/verify-attacks.ts` executes the
+winning attack and checks it against the exact statevector, on real fragments of
+both published families — the light cone of a single-site observable on IBM's
+actual lattice, and small instances of Google's coupler family — sweeping the
+transverse field across the published range including both Clifford endpoints.
+
+All 13 recommendations cashed: tensor-network amplitudes exact to ~1e−17, MPS
+distributions inside the 200k-shot sampling floor. The ground-truth oracle caps
+the sizes, which is the point rather than a limitation — the attacks are the same
+code at any width, so the published-scale runs inherit exactly this much
+confidence and no more.
+
+**Clifford-ness is decided by the angle, not the gate name.** `Rz(−π/2)` is `S†`
+and `Rx(π/2)` is `√X`; a name-based check rejects both. That matters here because
+the published Trotter family fixes its coupling at −π/2, so `Rzz` *is* Clifford and
+at θ_h ∈ {0, π/2} the whole circuit is — a circuit Gottesman–Knill solves in
+polynomial time was being reported as unbreakable.
+
+### The published parameter sweep
+
+IBM's experiment swept the transverse field from 0 to π/2. Both endpoints are
+Clifford, so the answer there is known exactly and the adversary has to say so.
+At published scale — 127 qubits, 5 Trotter steps, ⟨Z62⟩:
+
+| θ_h | cone | winning attack | width |
+|---|---|---|---|
+| 0 (Clifford) | 88 q, 796 gates | **mps** (χ stays tiny) | 20 |
+| π/8 | 88 q, 796 gates | tensor-network | 20 |
+| π/4 | 88 q, 796 gates | tensor-network | 20 |
+| 1.2 | 88 q, 796 gates | tensor-network | 20 |
+| π/2 (Clifford) | 88 q, 796 gates | **clifford** | 20 |
+
+Both endpoints are recognised, and by different attacks: at θ_h = 0 the transverse
+rotation is the identity so entanglement never grows and MPS is cheapest; at π/2 it
+is √X, which does entangle, so the tableau wins instead. The interior falls to
+treewidth.
+
+### Where the Google family crosses over
+
+Same question on the coupler-pattern family, 54 qubits, ⟨Z27⟩:
+
+| depth | cone | width | verdict |
+|---|---|---|---|
+| 8 | 24 q | 5 | breaks |
+| 12 | 36 q | 15 | breaks |
+| 14 | 36 q | 17 | breaks |
+| 16 | 48 q | 27 | breaks |
+| 18 | 54 q | 40 | nothing landed |
+| 20 | 54 q | 39 | nothing landed |
+| 24 | 54 q | 44 | nothing landed |
+
+The boundary is a memory boundary and lands where arithmetic says it should: at
+16 GB, a width-28 intermediate is 4.3 GB and fits, a width-30 one is 17 GB and does
+not. The crossover sits at **contraction width ≈ 29**, between depth 16 and 18 —
+which puts the published depth-20 instance on the far side, as it should be.
+
+### Observable weight moves the verdict
+
+The cone is set by what you ask about, so a heavier observable is a harder
+question. IBM reported multi-site observables alongside single-site ones; on a
+connected 17-qubit region around qubit 62:
+
+| depth | observable | cone | width | verdict |
+|---|---|---|---|---|
+| 3 | ⟨Z62⟩ | 40 q | 6 | breaks |
+| 3 | weight 17 | 85 q | 15 | breaks |
+| 5 | ⟨Z62⟩ | 88 q | 20 | breaks |
+| 5 | weight 17 | 119 q | 34 | **nothing landed** |
+
+Same circuit, harder question, worse verdict — monotone in both depth and
+observable weight, and at depth 5 the heavier observable is enough on its own to
+push it past the boundary. That is a check that the cone keys off what is being
+asked rather than just the circuit.
+
+### Why the light cone stops helping
+
+Measured on the real heavy-hex lattice, cone of ⟨Z62⟩:
+
+| Trotter steps | cone qubits | gates kept | contraction width |
+|---|---|---|---|
+| 1 | 5 | 13 | 4 |
+| 2 | 18 | 69 | 4 |
+| 3 | 40 | 207 | 6 |
+| 4 | 63 | 445 | 12 |
+| 5 | 88 | 796 | **20** |
+| 6 | 105 | 1232 | — |
+| 8 | 125 | 2281 | — |
+| 10 | 127 | 3397 | **78** |
+
+The cone swallows the whole chip by depth 8 — degree-3 connectivity is sparse, but
+each Trotter step is four matching layers, so it still spreads about 20 qubits per
+step. Past saturation the cone can only delete gates, not qubits, and the
+contraction width has already outrun exact contraction. That is the quantitative
+form of the depth-10 miss above.
+
+### External checks
+
+`benchmark/external-checks.ts` is a batch of things that must be true, decided
+outside the tool: trivial limits, known algorithm outputs, cross-backend
+agreement, and invariants that hold regardless of how the adversary is
+implemented. Every defect this project has found came from a target it did not
+generate itself, and this runs that idea as a batch.
+
+The stopping rule is a batch that comes back clean **on its first run**. The first
+batch of 21 found one real defect — `pauliPathExpectation` refused `unitary` ops,
+so both Pauli attacks were structurally unavailable on the entire RCS family while
+remaining available for the Trotter family. A general conjugation table fixed it:
+`U†PU` is Hermitian, so it expands in the Pauli basis with real coefficients, and
+a general gate takes one Pauli to a weighted sum of up to d² of them where a
+Clifford takes it to exactly one. The second batch of 14 fresh checks passed
+first time.
+
+Checks worth knowing about because they encode something non-obvious:
+
+| check | what it would catch |
+|---|---|
+| Trotter at θ_h = 0 never leaves \|0…0⟩ | Rzz is diagonal and Rx(0) is the identity — a sign or ordering error moves it |
+| ⟨Z⟩ stays in [−1, 1] across the sweep | a propagation that has stopped being a physical expectation |
+| relabelling qubits does not change hardness | hardness is a property of the graph, so a treewidth that moves is a bug |
+| the light cone is idempotent | a cone that keeps shrinking was not a cone |
+| an appended identity layer changes no verdict | a report keyed off gate count rather than structure |
+| Pauli conjugation is orthogonal | a conjugation table that is not a conjugation |
+| Trotter steps compose | depth handled as anything other than repetition |
+
+### What a negative result means
+
+`best === null` says that **these attacks, at this budget, in this library** did
+not break the circuit. It does not say the circuit is hard. A better contraction
+planner, a smarter decomposition, or a technique not implemented here would each
+move the line. The honest reading is an upper bound on difficulty that tightens
+as the attacks improve.
+
+With that stated, the boundary this library currently draws on a 36-qubit grid is
+sharp, and it is depth that draws it:
+
+| circuit | qubits | verdict |
+|---|---|---|
+| RCS 6×6 depth 4 | 36 | broken by treewidth — width 9, 7.7e8× cheaper than a statevector |
+| RCS 6×6 depth 14 | 36 | **nothing lands** — χ ≥ 64, width 36 (1.1 TB), statevector 1.1 TB |
+
+| Function | Purpose |
+|---|---|
+| `analyzeHardness(circuit, budget?)` | Probe and price every attack. Set `budget.noise` and `budget.observable` to include the noise axis. |
+| `renderHardness(report)` | The report as an ASCII table. |
+| `circuit.toOps()` / `circuit.toSrOps()` | The seams the probes use to ask a backend what a circuit costs it, without running it. |
 
 ## Expectation values by Pauli path
 
@@ -1610,6 +2426,92 @@ predicted support; under `forte-1` depolarizing noise, 6.3% — exactly the unif
 baseline for a 16-element group. The signal is not degraded but erased, which is
 the concrete form of the error-correction argument.
 
+## Cryptographic resource estimates
+
+Published attacks on 256-bit elliptic-curve signatures arrive as single numbers —
+"39 million Toffoli gates", "2330 logical qubits" — and the circuits behind them
+are permanently out of reach of any simulator, so a reader has no way to take one
+apart. What *is* reachable is the composition. The discrete logarithm is a ladder
+of 2n controlled point additions; a point addition is modular multiplications,
+inversions and additions; a modular multiplication is n rounds of doubling and
+controlled addition; a modular addition is five ripple-carry adders. Every layer
+but one is small enough to build, simulate and count.
+
+`ecdlpResources(n)` does that counting and `renderEcdlp(n)` reports it:
+
+```typescript
+import { renderEcdlp } from '@kirkelliott/ket'
+
+console.log(renderEcdlp(256))
+```
+
+```
+ECDLP over a 256-bit prime field — 512 controlled point additions,
+1.37e+7 Toffoli gates each.
+
+One controlled point addition:
+subroutine              source       each  calls  toffoli  share
+──────────────────────  ────────  ───────  ─────  ───────  ─────
+modular inversion       modelled  3.68e+6      2  7.37e+6  53.8%
+modular multiplication  composed  1.05e+6      6  6.32e+6  46.1%
+modular addition        measured  2.57e+3      8  2.06e+4   0.2%
+controlled swap         composed  2.57e+2      2  5.14e+2   0.0%
+
+Against the literature:
+estimate               cite                     toffoli  ket/theirs  qubits  ket/theirs
+─────────────────────  ──────────────────────  ────────  ──────────  ──────  ──────────
+ket (this model)       measured + modelled      7.02e+9       1.00x    2325       1.00x
+Roetteler et al. 2017  arXiv:1706.06752        1.29e+11      0.0544x   2330      0.998x
+Litinski 2023          arXiv:2306.08585         4.40e+7        159x
+IonQ 2026              ionq.com press release   3.90e+7        180x    1457       1.60x
+
+Sensitivity to the one modelled term: inversion at 0x gives 3.24e+9,
+at 10x gives 4.10e+10.
+
+Logical Toffoli gates and logical qubits only. No error-correcting code, no
+magic-state cost, no code cycle, so no physical qubit count and no runtime.
+```
+
+The `source` column is the point of the table. `measured` means the count was
+taken off a gate network in `src/ecdlp.ts` that `ecdlp.test.ts` separately checks
+computes the right arithmetic — the modular adder is verified for every residue
+pair mod 5, 7, 11 and 13, the multiplier for every pair mod 7, and each closed
+form is asserted against a real gate count at every width from 3 to 10 bits.
+`composed` is arithmetic on measured terms. `modelled` marks the single
+subroutine that is *not* built here: Kaliski's modular inversion, whose 2n-round
+schedule is taken from Roetteler et al. and priced from measured primitives. The
+sensitivity line brackets it — set it to zero or to ten times the model and the
+comparison does not change sign.
+
+Every routine is a permutation of basis states, so a circuit built from them
+stays a single amplitude and the sparse statevector runs it in constant memory.
+That is what lets the validated layer sit as high as it does: the 4-bit modular
+multiplier test occupies 26 qubits, past where a dense statevector stops, and
+finishes in milliseconds.
+
+Two results are worth stating separately. The logical qubit count, arrived at by
+counting this model's own registers, lands within 0.2% of the published
+`9n + 2⌈log₂n⌉ + 10` — an independent cross-check on the register accounting.
+And the model sits 18× *below* Roetteler et al.'s stated upper bound, which is
+what a bound requires, while sitting 180× *above* the recent claims. That gap is
+the real content: it says those claims require roughly two orders of magnitude of
+algorithmic improvement over textbook shift-and-add arithmetic. Litinski (2023)
+attributes up to a factor of 5 to windowed arithmetic, shared modular division
+and state reuse; the remainder is not something this library can attribute, and a
+reader who wants it must go to the source.
+
+**What this does not cover.** The counts stop at the logical layer. Nothing here
+models an error-correcting code, a decoder, magic-state distillation, routing or
+a code cycle, so nothing here bears on a physical qubit count or a runtime in
+days. Agreement on Toffoli gates is not agreement on anything downstream of them.
+
+| Function | Purpose |
+|---|---|
+| `ecdlpResources(n, options?)` | Toffoli and logical-qubit estimate for an n-bit prime-field ECDLP, with the per-subroutine breakdown and the sensitivity bracket. |
+| `compareEcdlp(n?, options?)` | The estimate plus its ratio against each entry in `ECDLP_REFERENCES`. |
+| `renderEcdlp(n?, options?)` | The comparison as an ASCII table. |
+| `ECDLP_REFERENCES` | Published estimates at n = 256, quoted with their citations. Not verified by ket. |
+
 ## Visualization
 
 ### ASCII diagram
@@ -1974,7 +2876,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,456 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,629 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

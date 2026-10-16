@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { trotterIsing } from './rcs.js'
 import { Circuit, Distribution, IONQ_DEVICES, DEVICES } from './circuit.js'
 import type { IonQCircuit, FlatOp } from './circuit.js'
 import type { Gate2x2, Gate4x4 } from './statevector.js'
@@ -8268,6 +8269,66 @@ describe('fromQASM — unsupported constructs are rejected, not mis-parsed', () 
   }
 })
 
+describe('runClifford — Clifford angles, not Clifford names', () => {
+  /**
+   * `Rz(π/2)` is `S` and `Rx(π/2)` is `√X`. Deciding Clifford-ness from the gate
+   * name refuses circuits that are entirely Clifford — the Trotterised Ising
+   * family fixes its coupling angle at −π/2, so `Rzz` is Clifford, and at the ends
+   * of a transverse-field sweep the whole circuit is. Those instances are
+   * polynomial-time and were being routed to a statevector, or refused outright.
+   */
+  const dev = (a: Record<string, number>, b: Record<string, number>): number => {
+    let w = 0
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      w = Math.max(w, Math.abs((a[k] ?? 0) - (b[k] ?? 0)))
+    }
+    return w
+  }
+
+  it('runs every rotation at a Clifford angle, matching the statevector', () => {
+    for (const g of ['rz', 'rx', 'ry', 'u1'] as const) {
+      for (const k of [0, 1, 2, 3, -1, -2, 5]) {
+        let c = new Circuit(4).h(0).cnot(0, 1).cnot(1, 2)
+        c = c[g](k * Math.PI / 2, 1)[g](k * Math.PI / 2, 3).cnot(2, 3).h(2)
+        expect(dev(c.exactProbs(), c.runClifford({ shots: 100_000, seed: 5 }).probs),
+          `${g}(${k}π/2)`).toBeLessThan(0.02)
+      }
+    }
+  })
+
+  it('runs √X and its inverse', () => {
+    const c = new Circuit(3).v(0).cnot(0, 1).vi(2).h(1)
+    expect(dev(c.exactProbs(), c.runClifford({ shots: 100_000, seed: 3 }).probs)).toBeLessThan(0.02)
+  })
+
+  it('still refuses a genuinely non-Clifford angle, and says which', () => {
+    expect(() => new Circuit(2).rz(Math.PI / 4, 0).runClifford({ shots: 8 }))
+      .toThrow(/rz\(0.7854\) is not a Clifford angle/)
+    expect(() => new Circuit(2).t(0).runClifford({ shots: 8 }))
+      .toThrow(/gate 't' is not a Clifford gate/)
+  })
+
+  it('simulate() routes a Clifford-angle circuit to the tableau', () => {
+    let c = new Circuit(30).h(0)
+    for (let i = 0; i < 29; i++) c = c.cnot(i, i + 1)
+    for (let i = 0; i < 30; i++) c = c.rz(Math.PI / 2, i)
+    expect(c.simulate({ shots: 200, seed: 1 }).backend).toBe('clifford')
+  })
+
+  it('the Trotter family is Clifford at both ends of its sweep', () => {
+    // Rzz(-π/2) is Clifford, so θ_h ∈ {0, π/2} leaves nothing that is not.
+    const line = Array.from({ length: 9 }, (_, i) => [i, i + 1] as [number, number])
+    for (const thetaH of [0, Math.PI / 2]) {
+      const c = trotterIsing({ qubits: 10, coupling: line, depth: 3, thetaH })
+      expect(dev(c.exactProbs(), c.runClifford({ shots: 100_000, seed: 2 }).probs),
+        `θ=${thetaH}`).toBeLessThan(0.02)
+    }
+    // And not in the middle.
+    expect(() => trotterIsing({ qubits: 6, coupling: [[0, 1]], depth: 2, thetaH: Math.PI / 5 })
+      .runClifford({ shots: 8 })).toThrow(/not a Clifford angle/)
+  })
+})
+
 describe('runMps — worker pool', () => {
   // The parallel path only engages from a built bundle: runMps checks
   // `import.meta.url` and falls back to single-threaded under a .ts entry point,
@@ -8370,5 +8431,101 @@ describe('option objects reject unknown keys', () => {
     expect(() => circuit.runStabilizerRank({ shots: 8, seed: 1, targetError: 0.3 })).not.toThrow()
     expect(() => circuit.simulate({ shots: 8, seed: 1, statevectorLimit: 10 })).not.toThrow()
     expect(() => circuit.statevector({ dense: { fill: 8 } })).not.toThrow()
+  })
+})
+
+describe('Circuit — sharing the op array without leaking it', () => {
+  /**
+   * `#add` appends to a shared array rather than copying it, which took building
+   * an m-gate circuit from O(m²) to O(m) — 128,000 gates went from 12,567 ms to
+   * 17 ms. The whole risk of that change is aliasing: two circuits must never see
+   * each other's gates, and an array handed to a caller must never grow
+   * afterwards. These are the cases that would break if the seal were dropped.
+   */
+  it('keeps branches off one parent independent', () => {
+    const base = new Circuit(2).h(0)
+    const a = base.x(1)
+    const b = base.y(1)
+    expect(base.gateCounts().total).toBe(1)
+    expect(a.gateCounts().total).toBe(2)
+    expect(b.gateCounts().total).toBe(2)
+    const kinds = (c: Circuit): string[] =>
+      (c.toJSON().ops as { meta?: { name?: string } }[]).map(o => o.meta?.name ?? '')
+    expect(kinds(a)).toContain('x')
+    expect(kinds(a)).not.toContain('y')
+    expect(kinds(b)).toContain('y')
+    expect(kinds(b)).not.toContain('x')
+  })
+
+  it('does not grow an ops array that already escaped', () => {
+    // The seal exists for exactly this: a caller holding the shared array must not
+    // see later gates appear in it.
+    let c = new Circuit(2).h(0).t(1)
+    const escaped = c.toJSON().ops
+    const before = escaped.length
+    c = c.x(0).x(1).x(0)
+    expect(escaped.length).toBe(before)
+    expect(c.gateCounts().total).toBe(5)
+  })
+
+  it('preserves a long parent across many children', () => {
+    let deep = new Circuit(3)
+    for (let i = 0; i < 500; i++) deep = deep.rz(0.1, i % 3)
+    const kids = [deep.h(0), deep.h(1), deep.h(2), deep.x(0)]
+    expect(deep.gateCounts().total).toBe(500)
+    for (const k of kids) expect(k.gateCounts().total).toBe(501)
+  })
+
+  it('stays correct when reads and appends interleave', () => {
+    // Each read seals the store, so every following gate takes the copying path.
+    // Slower, still exact — and this is the case a naive shared array gets wrong.
+    let z = new Circuit(2)
+    for (let i = 0; i < 50; i++) {
+      z = z.h(0)
+      expect(z.gateCounts().total).toBe(i + 1)
+    }
+  })
+
+  it('composes without disturbing either source', () => {
+    const inner = new Circuit(2).x(0).x(1)
+    const composed = new Circuit(2).h(0).compose(inner)
+    expect(composed.gateCounts().total).toBe(3)
+    expect(inner.gateCounts().total).toBe(2)
+  })
+
+  it('round-trips a long chain to identical probabilities', () => {
+    let chain = new Circuit(3)
+    for (let i = 0; i < 200; i++) chain = chain.h(i % 3).t((i + 1) % 3).cnot(i % 3, (i + 1) % 3)
+    const fresh = Circuit.fromJSON(chain.toJSON())
+    expect(fresh.gateCounts().total).toBe(chain.gateCounts().total)
+    expect(fresh.exactProbs()).toEqual(chain.exactProbs())
+  })
+
+  it('builds a large circuit in linear time', () => {
+    // Guards the regression directly: at O(m²) the 200k-gate build below took
+    // roughly 30 s, so a generous ceiling still catches a return to copying.
+    const t0 = performance.now()
+    let c = new Circuit(4)
+    for (let i = 0; i < 200_000; i++) c = c.rz(0.1, i % 4)
+    const ms = performance.now() - t0
+    expect(c.gateCounts().total).toBe(200_000)
+    expect(ms).toBeLessThan(5_000)
+  })
+})
+
+describe('Distribution — more outcomes than Math.max can take as arguments', () => {
+  /**
+   * `Math.max(...entries)` passes one argument per outcome and overflows the call
+   * stack past about 124,500 of them. `run({shots: 300000})` on 24 qubits gives
+   * 297,359 distinct outcomes, so `render()` threw `Maximum call stack size
+   * exceeded` on a plain shot count — built directly here rather than simulated,
+   * since the bug is in the formatting and not in the sampling.
+   */
+  it('render() scales past the spread-argument limit', () => {
+    const counts = new Map<bigint, number>()
+    for (let i = 0; i < 200_000; i++) counts.set(BigInt(i), 1)
+    const d = new Distribution(18, 200_000, counts)
+    const out = d.render()
+    expect(out.split('\n')).toHaveLength(200_000)
   })
 })
