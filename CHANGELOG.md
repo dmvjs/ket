@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `shorBeauregard` reports `period` as the multiplicative order of the base.
+  Continued fractions can return a divisor of the order, and the multiples tried
+  to recover from that could land on a multiple of it instead; `a^r ≡ 1` held
+  either way, so factors were right but `period` could read 8200 where the
+  order was 200. The candidate is now reduced to the minimal order first.
+
 ## 0.12.0 — 2026-11-10
 
 ### Added — branch backend: the state as a sum of product states

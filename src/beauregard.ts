@@ -509,6 +509,20 @@ export function factor(
   return shorBeauregard(BigInt(N), opts).factors
 }
 
+/** Given a^r ≡ 1 (mod N), strip prime factors from r while the congruence still holds — the result is the order of a. */
+function minimalOrder(a: bigint, r: bigint, N: bigint): bigint {
+  let rest = r
+  for (let p = 2n; p * p <= rest; p++) {
+    while (rest % p === 0n) {
+      if (modPow(a, r / p, N) !== 1n) break
+      r /= p; rest /= p
+    }
+    while (rest % p === 0n) rest /= p
+  }
+  if (rest > 1n && rest !== r && modPow(a, r / rest, N) === 1n) r /= rest
+  return r
+}
+
 /** True when r (or a small multiple of it) is an even order of a whose a^(r/2) ≠ −1 — i.e. it will yield a factor. */
 function usablePeriod(N: bigint, a: bigint, r: bigint): boolean {
   for (let m = 1n; m <= 8n; m++) {
@@ -645,9 +659,10 @@ export function shorBeauregard(
     // the base, not of this measurement — resampling cannot rescue it.
     let sawBadBase = false
 
-    for (const r of candidates) {
-      if (r === 0n || r > N) continue
-      if (modPow(a, r, N) !== 1n) continue         // not a real period — dud sample
+    for (const rCand of candidates) {
+      if (rCand === 0n || rCand > N) continue
+      if (modPow(a, rCand, N) !== 1n) continue     // not a real period — dud sample
+      const r = minimalOrder(a, rCand, N)          // a multiple of the order satisfies a^r ≡ 1 too; report the order itself
       if (r % 2n !== 0n) { sawBadBase = true; continue }   // odd period — bad base
       const halfPow = modPow(a, r / 2n, N)
       if (halfPow === N - 1n) { sawBadBase = true; continue }  // a^(r/2) ≡ -1 — bad base

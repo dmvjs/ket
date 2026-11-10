@@ -268,6 +268,36 @@ d.backend    // which representation ran</div>
     </p>
   </div>
 </div>
+<div class="card" style="margin-bottom:1.25rem">
+  <h2 style="margin-bottom:.5rem">Against the real thing</h2>
+  <p class="desc">
+    <code>examples/node/experiment.js</code>: a Ry angle scan through a CNOT, predicted locally under the
+    <code>forte-1</code> noise profile, submitted to IonQ's cloud simulator running its own <code>forte-1</code>
+    noise model, 1,000 shots per point, and compared with <code>compareExperiments</code> — distance measured
+    against the shot-noise floor, so a deviation is only called real when it is. Recorded 2026-11-09.
+  </p>
+  <table class="bench-table">
+    <tr><th>θ</th><th>exact P(11)</th><th>ket model</th><th>device</th><th>TVD vs exact</th><th>σ</th><th>TVD vs model</th><th>σ</th></tr>
+    <tr><td>0.00</td><td>0.000</td><td>0.003</td><td>0.000</td><td>0.000</td><td>0.0</td><td>0.008</td><td style="color:var(--accent2)">3.4</td></tr>
+    <tr><td>0.50</td><td>0.061</td><td>0.066</td><td>0.076</td><td>0.023</td><td>1.8</td><td>0.011</td><td>0.4</td></tr>
+    <tr><td>1.00</td><td>0.230</td><td>0.200</td><td>0.251</td><td>0.026</td><td>1.0</td><td>0.051</td><td>2.5</td></tr>
+    <tr><td>1.57</td><td>0.500</td><td>0.516</td><td>0.486</td><td>0.014</td><td>0.1</td><td>0.030</td><td>0.9</td></tr>
+    <tr><td>2.10</td><td>0.752</td><td>0.728</td><td>0.756</td><td>0.009</td><td>−0.2</td><td>0.030</td><td>1.2</td></tr>
+    <tr><td>2.60</td><td>0.928</td><td>0.921</td><td>0.929</td><td>0.005</td><td>−0.3</td><td>0.009</td><td>0.1</td></tr>
+    <tr><td>3.14</td><td>1.000</td><td>0.991</td><td>1.000</td><td>0.000</td><td>0.0</td><td>0.009</td><td style="color:var(--accent2)">3.7</td></tr>
+  </table>
+  <div class="meta">
+    <span><b>vs exact:</b> mean TVD 0.011, beyond shot noise at 0 of 7 points</span>
+    <span><b>vs model:</b> mean TVD 0.021, beyond shot noise at 2 of 7 points</span>
+  </div>
+  <p class="desc" style="margin-top:.75rem;margin-bottom:0">
+    The device agrees with the exact answer to within shot noise everywhere. It disagrees with ket's
+    published <code>forte-1</code> profile at exactly θ=0 and θ=π: IonQ's emulated noise produces no error
+    on identity-like circuits, while the profile predicts about 1% from readout and CNOT depolarizing.
+    A real discrepancy between two models of the same device, found on the first live run — which is
+    what the comparison is for.
+  </p>
+</div>
 
 <!-- ═══ INTEROP ════════════════════════════════════════════════ -->
 <div class="section-title">Talks to the rest of the ecosystem <span class="tag">14 formats</span></div>
@@ -296,20 +326,21 @@ t q[2];
 <p style="color:var(--muted);font-size:.84rem;margin-bottom:1rem;line-height:1.65">
   Not an oracle mock-up. The full Beauregard circuit, modular exponentiation compiled down to
   primitive gates, simulated exactly — then the period recovered from phase estimation by
-  continued fractions.
+  continued fractions. With one counting qubit on the branch backend the cost is the period
+  being found and nothing else, which is what lets a 16-bit modulus run in under a second.
 </p>
 <div class="grid2" style="margin-bottom:1.25rem">
   <div class="card">
     <div class="state-box">import { shorBeauregard } from '@kirkelliott/ket'
 
-const r = shorBeauregard(15n, { a: 7n })</div>
+const r = shorBeauregard(60491n, { a: 31084n, iterative: true })</div>
     <table class="bench-table">
-      <tr><td>r.factors</td><td style="color:var(--green)">[5n, 3n]</td></tr>
-      <tr><td>r.period</td><td style="color:var(--green)">4n</td></tr>
+      <tr><td>r.factors</td><td style="color:var(--green)">[251n, 241n]</td></tr>
+      <tr><td>r.period</td><td style="color:var(--green)">200n</td></tr>
       <tr><td>r.method</td><td style="color:var(--green)">'quantum'</td></tr>
-      <tr><td>r.qubits</td><td style="color:var(--green)">19</td></tr>
+      <tr><td>r.qubits</td><td style="color:var(--green)">35</td></tr>
     </table>
-    <div class="meta"><span><b>Wall time:</b> 478ms</span><span><b>Gate-decomposed:</b> no oracle</span></div>
+    <div class="meta"><span><b>Wall time:</b> 3.0s, 0.8s per trajectory</span><span><b>Gates:</b> 997,393</span><span><b>Base:</b> random, order 200</span><span><b>Oracle:</b> none</span></div>
   </div>
   <div class="card">
     <h2 style="margin-bottom:.5rem">It tells you when it cheated</h2>
@@ -326,6 +357,47 @@ shorBeauregard(15n, { a: 7n }).method
     <p class="desc" style="margin-bottom:0">
       This does not reach cryptographic sizes — no classical simulator does. What you get is the real
       circuit, exactly simulated, at sizes you can inspect.
+    </p>
+  </div>
+</div>
+<div class="grid2" style="margin-bottom:1.25rem">
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Why it is fast, and why that is not a trick</h2>
+    <p class="desc">
+      Inside the modular arithmetic every register is an integer or the Fourier transform of one —
+      both product states. <code>runBranch()</code> stores the state as a sum of product states, so a
+      branch costs O(n) in any basis and the branch count equals the multiplicative order of the base.
+      The circuit is simulated gate by gate with no shortcut; the price is the period, which is exactly
+      what a quantum computer would not pay.
+    </p>
+    <table class="bench-table">
+      <tr><th>bits</th><th>N</th><th>qubits</th><th>gates</th><th>period = branches</th><th>time per trajectory</th></tr>
+      <tr><td>8</td><td>143</td><td>19</td><td>96k</td><td>20</td><td>0.1s</td></tr>
+      <tr><td>12</td><td>3233</td><td>27</td><td>369k</td><td>156</td><td>0.3s</td></tr>
+      <tr><td>16</td><td>60491</td><td>35</td><td>997k</td><td>200</td><td>0.8s</td></tr>
+      <tr><td>20</td><td>1022117</td><td>43</td><td>2.2M</td><td>1288</td><td>8s</td></tr>
+    </table>
+    <p class="desc" style="margin-bottom:0">
+      A 20-bit base of order 255,024 takes about 25 minutes. Time follows the period, not the size —
+      <code>r.period</code> is the bill.
+    </p>
+  </div>
+  <div class="card">
+    <h2 style="margin-bottom:.5rem">Every 8-bit semiprime, every base</h2>
+    <p class="desc">
+      4,944 bases across all 26 semiprimes from 129 to 253, one trajectory each, on the branch backend:
+    </p>
+    <table class="bench-table">
+      <tr><td>share a factor with N — <code>gcd</code> exit, no circuit</td><td style="color:var(--green)">24%</td></tr>
+      <tr><td>continued fractions returns the exact order</td><td style="color:var(--green)">47%</td></tr>
+      <tr><td>… after trying small multiples</td><td style="color:var(--green)">94%</td></tr>
+      <tr><td>coprime base factors N on the first shot</td><td style="color:var(--green)">62%</td></tr>
+      <tr><td>usable bases when p−1, q−1 carry the same power of 2</td><td style="color:var(--green)">50–51%</td></tr>
+      <tr><td>usable bases when they differ</td><td style="color:var(--green)">76–95%</td></tr>
+    </table>
+    <p class="desc" style="margin-bottom:0">
+      The textbook bound of one half is tight exactly when p−1 and q−1 share their power of two; the
+      census shows it number by number. Branches never exceeded the period.
     </p>
   </div>
 </div>
