@@ -166,6 +166,37 @@ describe('runChsh', () => {
     expect(Math.abs(r.S - S_MAX)).toBeLessThan(4 * r.stderr!)
   })
 
+  it('refuses to report without an error bar, and accepts exact probabilities as infinite shots', async () => {
+    await expect(runChsh(c => c.exactProbs())).rejects.toThrow(/shot count unknown for setting 0/)
+    const r = await runChsh(c => c.exactProbs(), { shots: Infinity })
+    expect(r.S).toBeCloseTo(S_MAX, 10)
+    expect(r.stderr).toBe(0)
+    expect(r.sigma).toBe(Infinity)
+    expect(r.sigmaFromIdeal).toBe(0)
+    for (const s of r.settings) { expect(s.tvd).toBeCloseTo(0, 10); expect(s.shotNoise).toBeUndefined() }
+    // A RunReport's shots count too.
+    const viaReport = await runChsh(c => ({ outcomes: c.run({ shots: 500, seed: 2 }).probs, shots: 500 }))
+    expect(viaReport.stderr).toBeGreaterThan(0)
+  })
+
+  it('compares every setting against the simulator and reports deviation from ideal', async () => {
+    const clean = await runChsh(c => c.run({ shots: 4000, seed: 21 }), { seed: 1 })
+    expect(clean.ideal).toBeCloseTo(S_MAX, 12)
+    expect(Math.abs(clean.sigmaFromIdeal!)).toBeLessThan(4)
+    expect(clean.settings).toHaveLength(4)
+    for (const s of clean.settings) { expect(s.shotNoise).toBeDefined(); expect(s.sigma!).toBeLessThan(4) }
+
+    const noisy = await runChsh(c => c.run({ shots: 4000, seed: 22, noise: { p2: 0.2 } }), { seed: 1 })
+    expect(noisy.sigmaFromIdeal!).toBeLessThan(-5)          // S fell well below 2√2
+    expect(noisy.settings.filter(s => s.sigma! > 3).length).toBeGreaterThanOrEqual(3)
+    expect(noisy.ideal).toBe(clean.ideal)
+
+    const angles = { a: 0.1, a2: 1.2, b: 0.5, b2: 2.0 }
+    const custom = await runChsh(c => c.exactProbs(), { shots: Infinity, angles })
+    expect(custom.ideal).toBeCloseTo(chshIdeal(angles), 12)
+    expect(chshAnalyze(chshCircuits({ angles }).map(c => c.exactProbs()), { angles }).sigmaFromIdeal).toBeUndefined()
+  })
+
   it('accepts an async executor returning probability maps, with shots for the error bar', async () => {
     const seen: number[] = []
     const r = await runChsh(async (c, i) => {
@@ -381,6 +412,12 @@ describe('rbFit', () => {
     expect(() => rbFit(pts, { fixB: 1.5 })).toThrow(RangeError)
   })
 
+  it('refuses a bootstrap over single sequences, which would be a fake error bar', () => {
+    const pts: RbPoint[] = [1, 2, 4, 8].map(m => ({ length: m, survival: 0.5 * 0.95 ** m + 0.5 }))
+    expect(() => rbFit(pts)).toThrow(/only one sequence at m=1/)
+    expect(() => rbFit(pts, { bootstrap: 0 })).not.toThrow()
+  })
+
   it('requires three distinct lengths and a valid qubit count', () => {
     expect(() => rbFit([{ length: 1, survival: 1 }, { length: 2, survival: 1 }])).toThrow(/3 distinct lengths/)
     expect(() => rbFit([], { qubits: 0 })).toThrow(RangeError)
@@ -453,6 +490,25 @@ describe('runRb', () => {
     const fixed = await runRb(run, { ...opts, fixB: 0.5 })
     expect(fixed.B).toBe(0.5)
     expect(Math.abs(fixed.errorPerClifford - want)).toBeLessThan(3 * fixed.errorPerCliffordStderr! + 3e-4)
+  })
+
+  it('predicts the same sequences under a noise model and reports the deviation', async () => {
+    const p1 = 0.003
+    const opts = { lengths: [1, 2, 4, 8, 16, 32, 64], samples: 12, seed: 5 }
+    const run = (c: Circuit, i: number) => c.runClifford({ shots: 1000, seed: i + 1, noise: { p1 } })
+    const matching = await runRb(run, { ...opts, model: { p1 } })
+    expect(matching.model).toBeDefined()
+    expect(matching.model!.errorPerClifford).toBeGreaterThan(0)
+    expect(Math.abs(matching.sigmaFromModel!)).toBeLessThan(3)
+
+    const wrong = await runRb(run, { ...opts, model: { p1: 4 * p1 } })
+    expect(wrong.sigmaFromModel!).toBeLessThan(-3)          // device is better than the model claims
+    expect(wrong.model!.errorPerClifford).toBeGreaterThan(matching.model!.errorPerClifford * 2)
+
+    const named = await runRb(run, { ...opts, model: 'forte-1', modelShots: 200 })
+    expect(named.model).toBeDefined()
+    const none = await runRb(run, opts)
+    expect(none.model).toBeUndefined(); expect(none.sigmaFromModel).toBeUndefined()
   })
 
   it('runs circuits in order and works with an async executor', async () => {

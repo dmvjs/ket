@@ -5,10 +5,15 @@
  *
  * Run:  IONQ_API_KEY=... node examples/node/experiment.js
  *
- * Defaults to IonQ's cloud `simulator` (free, finishes in seconds). On a QPU
- * the queue can be hours, so the run is resumable: the first invocation submits
- * and writes `experiment.pending.json`; run it again later and it collects
- * whatever has finished, finishing the record when everything is in.
+ * Defaults to IonQ's cloud `simulator` (free, finishes in seconds) under its
+ * `forte-1` noise model, so there is something to measure: the ideal model
+ * returns the exact distribution, not even shot-sampled. Choose the model with
+ * IONQ_NOISE (`ideal`, `aria-1`, `forte-1`, ...).
+ *
+ * On a QPU the queue can be hours, so the run is resumable: the first
+ * invocation submits and writes `experiment.pending.json`; run it again later
+ * and it collects whatever has finished, finishing the record when everything
+ * is in.
  *
  *   IONQ_API_KEY=... IONQ_TARGET=qpu.forte-1 node examples/node/experiment.js
  */
@@ -28,6 +33,8 @@ if (!apiKey) {
   process.exit(1)
 }
 const target = process.env.IONQ_TARGET ?? 'simulator'
+const onQpu = target.startsWith('qpu.')
+const simNoise = onQpu ? undefined : (process.env.IONQ_NOISE ?? 'forte-1')
 const shots = Number(process.env.IONQ_SHOTS ?? 1000)
 const PENDING = 'experiment.pending.json'
 const DONE = 'experiment.json'
@@ -40,20 +47,24 @@ const build = ({ theta }) => new Circuit(2).ry(theta, 0).cnot(0, 1)
 // ─── 2. Reference and prediction, locally — free, instant ─────────────────────
 const reference = await sweep(grid, build, c => c.exactProbs(), { name: 'ry-cnot exact' })
 
-// Noise model: the device's latest published characterisation if we can get it,
-// else the profile frozen in DEVICES, else none (the cloud simulator is ideal).
+// Noise model: on a QPU, the device's latest published characterisation if we
+// can get it, else the profile frozen in DEVICES. On the simulator, the DEVICES
+// profile of whatever model IonQ is emulating; none if that is `ideal`.
 let noise, noiseSource = 'none'
-if (target.startsWith('qpu.')) {
+const fromDevices = name => {
+  const profile = DEVICES[name]
+  if (profile) { noise = profile.noise; noiseSource = `DEVICES profile ${name}` }
+}
+if (onQpu) {
   try {
     const r = await getIonQNoise(target, { apiKey })
     noise = r.noise
     noiseSource = `IonQ characterisation of ${new Date((r.characterization.date ?? 0) * 1000).toISOString().slice(0, 10)}`
   } catch (e) {
-    const profile = DEVICES[target.replace(/^qpu\./, '')]
-    if (profile) { noise = profile.noise; noiseSource = 'DEVICES profile' }
+    fromDevices(target.slice(4))
     console.warn(`characterisation unavailable (${e.message.split('\n')[0]}); using ${noiseSource}`)
   }
-}
+} else if (simNoise !== 'ideal') fromDevices(simNoise)
 const predicted = await sweep(grid, build, (c, i) => c.run({ shots, seed: i + 1, ...(noise && { noise }) }),
   { name: `ry-cnot predicted (${noiseSource})`, meta: { noise, noiseSource } })
 
@@ -64,9 +75,9 @@ if (existsSync(PENDING)) {
   console.log(`resuming ${pending.points.length} jobs from ${PENDING}`)
 } else {
   pending = await submitSweep(grid, build, async c => {
-    const { id } = await submitIonQ(c.toIonQ(), { apiKey, target, shots, noise: { model: 'ideal' } })
+    const { id } = await submitIonQ(c.toIonQ(), { apiKey, target, shots, ...(simNoise && { noise: { model: simNoise } }) })
     return id
-  }, { name: `ry-cnot on ${target}`, meta: { target, shots }, concurrency: 4 })
+  }, { name: `ry-cnot on ${target}`, meta: { target, shots, ...(simNoise && { simulatorNoise: simNoise }) }, concurrency: 4 })
   writeFileSync(PENDING, JSON.stringify(pending, null, 2))
   console.log(`submitted ${pending.points.length} jobs → ${PENDING}`)
 }
@@ -101,7 +112,7 @@ writeFileSync(DONE, JSON.stringify(measured, null, 2))
 const vsIdeal = compareExperiments(measured, reference, { seed: 1 })
 const vsModel = compareExperiments(measured, predicted, { seed: 1 })
 
-console.log(`\n${target}, ${shots} shots per point — P(11) against sin²(θ/2)\n`)
+console.log(`\n${target}${simNoise ? ` (${simNoise} noise model)` : ''}, ${shots} shots per point — P(11) against sin²(θ/2)\n`)
 console.log('   θ      exact   model   device   TVD vs exact   σ    TVD vs model   σ')
 for (const [i, p] of measured.points.entries()) {
   const theta = p.params.theta

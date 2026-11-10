@@ -383,6 +383,77 @@ export function finishSweep<P>(pending: PendingExperiment<P>): Experiment<P> {
   })
 }
 
+// ── Diffing records ──────────────────────────────────────────────────────────
+
+/** A field of an `ExperimentPoint` that can differ between two records. */
+export type PointField = 'params' | 'circuit' | 'probs' | 'shots' | 'backend' | 'jobId' | 'meta'
+
+export interface ExperimentDiff {
+  /** True when nothing differs beyond timestamps and `ms`. */
+  readonly same: boolean
+  /** Record-level differences, one line each: `name: "a" → "b"`. */
+  readonly header: readonly string[]
+  /** Point indices present only in `b`. */
+  readonly added: readonly number[]
+  /** Point indices present only in `a`. */
+  readonly removed: readonly number[]
+  /** Points present in both whose content differs, with the fields that do and the TVD when `probs` is one of them. */
+  readonly changed: readonly { readonly index: number; readonly fields: readonly PointField[]; readonly tvd: number | undefined }[]
+}
+
+function stable(v: unknown): string {
+  if (v === undefined) return 'undefined'
+  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`
+  if (typeof v === 'object' && v !== null)
+    return `{${Object.keys(v as object).sort().map(k => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`).join(',')}}`
+  return JSON.stringify(v)
+}
+
+/** ½·Σ|p − q| over two probability maps, without the width checks `stats.tvd` applies. */
+function plainTvd(p: Readonly<Record<string, number>>, q: Readonly<Record<string, number>>): number {
+  let d = 0
+  for (const k of new Set([...Object.keys(p), ...Object.keys(q)])) d += Math.abs((p[k] ?? 0) - (q[k] ?? 0))
+  return d / 2
+}
+
+/**
+ * Structural difference between two records: what changed, not whether the
+ * change is significant — `compareExperiments` answers that. Points match by
+ * index. `tolerance` is the TVD below which two probability maps count as the
+ * same (default 0: any difference counts). Timestamps and timings are ignored.
+ *
+ * @example
+ * const d = diffExperiments(parseExperiment(yesterday), parseExperiment(today))
+ * d.same                         // false
+ * d.header                       // ['ket: "0.9.1" → "0.9.2"']
+ * d.changed                      // [{ index: 3, fields: ['probs'], tvd: 0.021 }]
+ */
+export function diffExperiments<P>(a: Experiment<P>, b: Experiment<P>, options: { tolerance?: number } = {}): ExperimentDiff {
+  const { tolerance = 0 } = options
+  if (!(tolerance >= 0)) throw new RangeError(`diffExperiments: tolerance must be ≥ 0, got ${tolerance}`)
+  const header: string[] = []
+  for (const k of ['format', 'formatVersion', 'ket', 'name', 'meta'] as const)
+    if (stable(a[k]) !== stable(b[k])) header.push(`${k}: ${stable(a[k])} → ${stable(b[k])}`)
+
+  const byIndex = (e: Experiment<P>) => new Map(e.points.map(p => [p.index, p]))
+  const A = byIndex(a), B = byIndex(b)
+  const added = [...B.keys()].filter(i => !A.has(i)).sort((x, y) => x - y)
+  const removed = [...A.keys()].filter(i => !B.has(i)).sort((x, y) => x - y)
+  const changed: { index: number; fields: PointField[]; tvd: number | undefined }[] = []
+  for (const [i, pa] of [...A.entries()].sort((x, y) => x[0] - y[0])) {
+    const pb = B.get(i)
+    if (!pb) continue
+    const fields: PointField[] = []
+    let dist: number | undefined
+    for (const f of ['params', 'circuit', 'shots', 'backend', 'jobId', 'meta'] as const)
+      if (stable(pa[f]) !== stable(pb[f])) fields.push(f)
+    const t = plainTvd(pa.probs, pb.probs)
+    if (t > tolerance) { fields.push('probs'); dist = t }
+    if (fields.length) changed.push({ index: i, fields, tvd: dist })
+  }
+  return { same: header.length === 0 && added.length === 0 && removed.length === 0 && changed.length === 0, header, added, removed, changed }
+}
+
 // ── Reading back ─────────────────────────────────────────────────────────────
 
 function isRecord(v: unknown): v is Record<string, unknown> {

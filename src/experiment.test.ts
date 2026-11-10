@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { Circuit } from './circuit.js'
-import { cartesian, collectSweep, experiment, finishSweep, parseExperiment, parsePendingExperiment, recordPoint, submitSweep, sweep } from './experiment.js'
+import { cartesian, collectSweep, diffExperiments, experiment, finishSweep, parseExperiment, parsePendingExperiment, recordPoint, submitSweep, sweep } from './experiment.js'
 import type { Experiment, Outcomes, PendingExperiment } from './experiment.js'
 import { rbFit, rbSequences, rbSurvival, runChsh, runRb } from './protocols.js'
 import { VERSION } from './version.js'
@@ -201,8 +201,9 @@ describe('protocols on top of sweep', () => {
   })
 
   it('protocol runners accept executors that return RunReports', async () => {
-    const chsh = await runChsh(c => ({ outcomes: c.exactProbs(), backend: 'exact' }))
+    const chsh = await runChsh(c => ({ outcomes: c.exactProbs(), backend: 'exact' }), { shots: Infinity })
     expect(chsh.S).toBeCloseTo(2 * Math.SQRT2, 10)
+    expect(chsh.sigmaFromIdeal).toBe(0)
     const rb = await runRb(c => ({ outcomes: c.exactProbs() }), { lengths: [1, 2, 4], samples: 2, bootstrap: 0 })
     expect(rb.errorPerClifford).toBeLessThan(1e-9)
   })
@@ -302,5 +303,71 @@ describe('resumable sweeps', () => {
     const badResult = structuredClone(good) as { points: Record<string, unknown>[] }
     badResult.points[0]!['result'] = { index: 0 }
     expect(() => parsePendingExperiment(badResult)).toThrow(/points\[0\]\.result\.circuit/)
+  })
+})
+
+describe('diffExperiments', () => {
+  const grid = { theta: [0.3, 0.9, 1.5] }
+  const build = ({ theta }: { theta: number }) => new Circuit(1).ry(theta, 0)
+
+  it('calls two records of the same run the same, ignoring timestamps and timings', async () => {
+    const a = await sweep(grid, build, c => c.run({ shots: 300, seed: 1 }), { name: 'x', meta: { k: 1 } })
+    const b = parseExperiment<{ theta: number }>(JSON.stringify(a))
+    expect(diffExperiments(a, b).same).toBe(true)
+    const later = { ...b, createdAt: '2000-01-01T00:00:00.000Z', points: b.points.map(p => ({ ...p, ms: 999 })) }
+    expect(diffExperiments(a, later)).toEqual({ same: true, header: [], added: [], removed: [], changed: [] })
+  })
+
+  it('reports header, added, removed and changed points with the fields that differ', async () => {
+    const a = await sweep(grid, build, c => c.run({ shots: 300, seed: 1 }), { name: 'x' })
+    const b = await sweep({ theta: [0.3, 0.9, 1.5, 2.0] }, build, (c, i) => c.run({ shots: 300, seed: i === 1 ? 99 : 1 }), { name: 'y', meta: { k: 1 } })
+    const d = diffExperiments(a, { ...b, ket: '9.9.9' })
+    expect(d.same).toBe(false)
+    expect(d.header).toEqual(['ket: "0.9.1" → "9.9.9"', 'name: "x" → "y"', 'meta: undefined → {"k":1}'].map(h => h.replace('0.9.1', VERSION)))
+    expect(d.added).toEqual([3])
+    expect(d.removed).toEqual([])
+    expect(d.changed).toHaveLength(1)
+    expect(d.changed[0]!.index).toBe(1)
+    expect(d.changed[0]!.fields).toEqual(['probs'])
+    expect(d.changed[0]!.tvd).toBeGreaterThan(0)
+
+    const c = { ...a, points: a.points.slice(0, 2).map((p, i) => i === 0 ? { ...p, backend: 'qpu', shots: 7, params: { theta: 9 } } : p) }
+    const e = diffExperiments(a, c)
+    expect(e.removed).toEqual([2])
+    expect(e.changed[0]!.fields).toEqual(['params', 'shots', 'backend'])
+    expect(e.changed[0]!.tvd).toBeUndefined()
+  })
+
+  it('tolerance lets small probability differences pass', async () => {
+    const a = await sweep(grid, build, c => c.run({ shots: 300, seed: 1 }))
+    const b = await sweep(grid, build, c => c.run({ shots: 300, seed: 2 }))
+    expect(diffExperiments(a, b).changed.length).toBeGreaterThan(0)
+    expect(diffExperiments(a, b, { tolerance: 0.5 }).same).toBe(true)
+    expect(() => diffExperiments(a, b, { tolerance: -1 })).toThrow(RangeError)
+  })
+})
+
+describe('docs/experiment.schema.json', () => {
+  const schema = JSON.parse(readFileSync(new URL('../docs/experiment.schema.json', import.meta.url), 'utf8')) as {
+    $defs: Record<string, { required?: string[]; properties?: Record<string, unknown>; additionalProperties?: boolean }>
+  }
+  const keysOf = (o: object) => Object.keys(o).sort()
+  const defined = (name: string) => keysOf(schema.$defs[name]!.properties!)
+  const required = (name: string) => [...schema.$defs[name]!.required!].sort()
+
+  it('describes exactly the fields the records carry', async () => {
+    const exp = JSON.parse(JSON.stringify(await sweep([1], () => new Circuit(1), c => ({ outcomes: c.run({ shots: 5 }), jobId: 'j', meta: {} }), { name: 'n', meta: {} }))) as Record<string, unknown>
+    expect(keysOf(exp)).toEqual(defined('Experiment'))
+    expect(keysOf((exp['points'] as object[])[0]!)).toEqual(defined('ExperimentPoint'))
+    const pend = JSON.parse(JSON.stringify(await submitSweep([1], () => new Circuit(1), () => 'j', { name: 'n', meta: {} }))) as Record<string, unknown>
+    expect(keysOf(pend)).toEqual(defined('PendingExperiment'))
+    const pt = (pend['points'] as object[])[0]!
+    expect(keysOf(pt)).toEqual(defined('PendingPoint').filter(k => k !== 'result'))
+    // Required fields are exactly those parseExperiment refuses to do without.
+    const minimal = JSON.parse(JSON.stringify(await sweep([undefined], () => new Circuit(1), c => c.exactProbs()))) as Record<string, unknown>
+    expect(keysOf(minimal)).toEqual(required('Experiment'))
+    expect(keysOf((minimal['points'] as object[])[0]!)).toEqual(required('ExperimentPoint'))
+    for (const name of ['Experiment', 'ExperimentPoint', 'PendingExperiment', 'PendingPoint'])
+      expect(schema.$defs[name]!.additionalProperties).toBe(false)
   })
 })

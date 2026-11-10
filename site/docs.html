@@ -966,12 +966,12 @@ vqe(circuit, H1.add(H2).toTerms())</code></pre>
     <tr><td>chshCircuits</td><td>chshCircuits({ qubits?, width?, angles? })</td><td>Four circuits for the settings (a,b), (a,b&prime;), (a&prime;,b), (a&prime;,b&prime;). Default angles reach S = 2&radic;2 on |&Phi;&#8314;&#10217;.</td></tr>
     <tr><td>chshAnalyze</td><td>chshAnalyze(outcomes, { qubits?, shots? })</td><td>S, the four correlators, shot-noise <code>stderr</code>, and <code>sigma</code> above the classical bound of 2.</td></tr>
     <tr><td>chshIdeal</td><td>chshIdeal(angles?)</td><td>The S an ideal |&Phi;&#8314;&#10217; gives for these angles.</td></tr>
-    <tr><td>runChsh</td><td>runChsh(execute, options?)</td><td>Generate, run and analyse in one call.</td></tr>
+    <tr><td>runChsh</td><td>runChsh(execute, { shots?, seed?, &hellip; })</td><td>Generate, run and analyse in one call. Adds <code>ideal</code>, <code>sigmaFromIdeal</code> and a per-setting <code>settings</code> comparison against <code>exactProbs()</code>. Throws if the shot count is unknown &mdash; no result without an error bar.</td></tr>
     <tr><td>CHSH_OPTIMAL</td><td></td><td>a = 0, a&prime; = &pi;/2, b = &pi;/4, b&prime; = 3&pi;/4.</td></tr>
     <tr><td>rbSequences</td><td>rbSequences({ qubits?, width?, lengths, samples?, seed? })</td><td>Clifford RB sequences: m random Cliffords plus one inverting Clifford. One or two qubits.</td></tr>
     <tr><td>rbSurvival</td><td>rbSurvival(outcomes, qubits?)</td><td>Probability that every benchmarked qubit read 0.</td></tr>
     <tr><td>rbFit</td><td>rbFit(points, { qubits?, bootstrap?, seed?, fixB? })</td><td>Fit A&middot;p<sup>m</sup> + B with A, B &isin; [0, 1]; returns <code>errorPerClifford</code> = (1 &minus; p)(1 &minus; 2<sup>&minus;n</sup>) with a bootstrap error bar. <code>fixB</code> holds the asymptote when the lengths do not reach it.</td></tr>
-    <tr><td>runRb</td><td>runRb(execute, options)</td><td>Generate, run and fit in one call.</td></tr>
+    <tr><td>runRb</td><td>runRb(execute, { &hellip;, model?, modelShots? })</td><td>Generate, run and fit in one call. With <code>model</code> (a <code>DEVICES</code> name or <code>NoiseParams</code>) the same sequences are predicted on the Clifford simulator and <code>sigmaFromModel</code> says whether the device matches its model.</td></tr>
     <tr><td>cliffordGroup</td><td>cliffordGroup(1 | 2)</td><td>The 24- or 11,520-element Clifford group as circuits over {H, S, S&dagger;, CNOT}.</td></tr>
   </table>
 
@@ -1024,7 +1024,10 @@ await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002, p2: 0.01 } }),
     <tr><td>collectSweep</td><td>collectSweep(pending, collect, { concurrency? })</td><td>Fill in results for finished jobs; a collector returning <code>undefined</code> leaves its point pending. Never mutates its input.</td></tr>
     <tr><td>finishSweep</td><td>finishSweep(pending)</td><td>A complete pending record as an <code>Experiment</code>; throws naming the indices still queued.</td></tr>
     <tr><td>parsePendingExperiment</td><td>parsePendingExperiment(json | object)</td><td>Validate and type a stored pending record.</td></tr>
+    <tr><td>diffExperiments</td><td>diffExperiments(a, b, { tolerance? })</td><td>Structural diff of two records: header changes, points added, removed and changed with the differing fields. Timestamps and timings never count.</td></tr>
   </table>
+
+  <p>The record is the interface. <a href="https://github.com/dmvjs/ket/blob/main/docs/experiment.schema.json">experiment.schema.json</a> is the JSON Schema for both record kinds; <code>formatVersion</code> changes only for incompatible changes, unknown fields are parse errors, and a test keeps the schema and the records in agreement field for field.</p>
 
   <pre><code class="language-typescript">import { sweep, parseExperiment, Circuit } from '@kirkelliott/ket'
 
@@ -1047,7 +1050,7 @@ await sweep(grid, build, async c => {
 const back = parseExperiment(JSON.stringify(exp))
 Circuit.fromJSON(back.points[2].circuit).draw()</code></pre>
 
-  <p>For a prediction of what a device will do today rather than at release, <code>getIonQNoise(target, { apiKey })</code> maps IonQ&rsquo;s latest published characterisation to <code>NoiseParams</code> (1 &minus; fidelity); simulate under it and <code>compareExperiments</code> then tests the model. <code>examples/node/experiment.js</code> runs the whole loop &mdash; exact reference, calibrated prediction, resumable submission, comparison &mdash; against the IonQ simulator by default.</p>
+  <p>For a prediction of what a device will do today rather than at release, <code>getIonQNoise(target, { apiKey })</code> maps IonQ&rsquo;s latest published characterisation to <code>NoiseParams</code> (1 &minus; fidelity); simulate under it and <code>compareExperiments</code> then tests the model. <code>examples/node/experiment.js</code> runs the whole loop &mdash; exact reference, calibrated prediction, resumable submission, comparison &mdash; against the IonQ simulator under its <code>forte-1</code> noise model by default (<code>IONQ_NOISE</code> picks another; <code>ideal</code> returns the exact distribution, not samples).</p>
 
   <p>Executors everywhere &mdash; <code>sweep</code>, <code>runChsh</code>, <code>runRb</code> &mdash; may return bare outcomes or a <code>RunReport</code> <code>{ outcomes, shots?, backend?, jobId?, meta? }</code>; include <code>shots</code> with a probability map so error bars survive. Protocol circuits are a grid like any other: <code>sweep(rbSequences(opts), s =&gt; s.circuit, execute)</code> keeps the whole RB run as a record, and <code>rbFit</code> reads it back from the points.</p>
 </div>

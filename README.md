@@ -205,7 +205,7 @@ exp.points.map(p => [p.params.theta, p.probs['1'] ?? 0])   // [[0, 0], [1.57, 0.
 simulator, point by point, with the distance measured against its shot-noise
 floor so a deviation is only called real when it is.
 
-The whole loop, against IonQ's free simulator, resumable across runs on a QPU:
+The whole loop, against IonQ's free simulator under its forte-1 noise model, resumable across runs on a QPU:
 
 ```bash
 IONQ_API_KEY=... node examples/node/experiment.js
@@ -222,7 +222,7 @@ See [protocols](docs/REFERENCE.md#characterisation-protocols),
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,579 tests.** Analytic correctness against known amplitudes — gate
+- **2,587 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.

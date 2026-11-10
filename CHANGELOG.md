@@ -60,6 +60,22 @@ circuits carry no explicit measurement and submit to IonQ as they are.
   *in excess of shot noise* as `excess` and `sigma`, with `beyondNoise`
   listing the points that genuinely disagree.
 
+### Added — results carry their evidence; the record is the interface
+
+- **No protocol result without an error bar.** `runChsh` throws when the shot
+  count is unknown (`shots: Infinity` declares exact probabilities) and now
+  reports `ideal`, `sigmaFromIdeal` and a per-setting `settings` comparison
+  against `exactProbs()` with its shot-noise floor. `rbFit` refuses to
+  bootstrap over single sequences, which would report a zero-width bar.
+- **RB against a device model.** `runRb({ model })` simulates the same
+  sequences under a `DEVICES` profile or `NoiseParams` — e.g. from
+  `getIonQNoise` — and reports `model` and `sigmaFromModel`.
+- **`docs/experiment.schema.json`** — JSON Schema for `Experiment` and
+  `PendingExperiment`, with `additionalProperties: false`; a test keeps it and
+  the records in agreement field for field.
+- **`diffExperiments(a, b)`** — structural diff of two records: header,
+  added, removed, changed points with the differing fields and TVD.
+
 ### Added — resumable hardware sweeps, calibrated noise, end-to-end example
 
 - **`submitSweep` / `collectSweep` / `finishSweep`** split a sweep so it can
@@ -75,6 +91,9 @@ circuits carry no explicit measurement and submit to IonQ as they are.
 - **`examples/node/experiment.js`** runs the loop end to end: exact reference,
   calibrated prediction, resumable submission, comparison with error bars, and
   both records written to disk.
+  Verified against the live IonQ simulator under its `forte-1` noise model
+  (the default; `IONQ_NOISE` picks another). The ideal model returns exact
+  probabilities, not samples, so it measures nothing.
 
 ## 0.9.1
 

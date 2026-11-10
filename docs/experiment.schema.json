@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dmvjs.com/ket/experiment.schema.json",
+  "title": "ket experiment records",
+  "description": "The two JSON records ket produces: a finished Experiment (from sweep or finishSweep) and a PendingExperiment (from submitSweep / collectSweep). formatVersion is bumped only for incompatible changes; new optional fields may be added without a bump. Bitstrings have qubit 0 leftmost.",
+  "oneOf": [
+    { "$ref": "#/$defs/Experiment" },
+    { "$ref": "#/$defs/PendingExperiment" }
+  ],
+  "$defs": {
+    "Experiment": {
+      "type": "object",
+      "required": ["format", "formatVersion", "ket", "createdAt", "finishedAt", "points"],
+      "properties": {
+        "format": { "const": "ket-experiment" },
+        "formatVersion": { "const": 1 },
+        "ket": { "type": "string", "description": "ket version that produced the record" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" },
+        "meta": { "type": "object" },
+        "points": { "type": "array", "items": { "$ref": "#/$defs/ExperimentPoint" } }
+      },
+      "additionalProperties": false
+    },
+    "ExperimentPoint": {
+      "type": "object",
+      "required": ["index", "circuit", "probs", "ms"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "params": { "description": "Whatever the sweep's grid supplied; any JSON value" },
+        "circuit": { "$ref": "#/$defs/CircuitJSON" },
+        "probs": { "$ref": "#/$defs/Probs" },
+        "shots": { "type": "integer", "minimum": 1 },
+        "backend": { "type": "string" },
+        "jobId": { "type": "string" },
+        "meta": { "type": "object" },
+        "ms": { "type": "number", "minimum": 0, "description": "wall-clock milliseconds the executor took" }
+      },
+      "additionalProperties": false
+    },
+    "PendingExperiment": {
+      "type": "object",
+      "required": ["format", "formatVersion", "ket", "createdAt", "points"],
+      "properties": {
+        "format": { "const": "ket-experiment-pending" },
+        "formatVersion": { "const": 1 },
+        "ket": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "meta": { "type": "object" },
+        "points": { "type": "array", "items": { "$ref": "#/$defs/PendingPoint" } }
+      },
+      "additionalProperties": false
+    },
+    "PendingPoint": {
+      "type": "object",
+      "required": ["index", "circuit", "jobId", "submittedAt"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "params": {},
+        "circuit": { "$ref": "#/$defs/CircuitJSON" },
+        "jobId": { "type": "string", "minLength": 1 },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "result": { "$ref": "#/$defs/ExperimentPoint" }
+      },
+      "additionalProperties": false
+    },
+    "Probs": {
+      "type": "object",
+      "description": "bitstring → probability, qubit 0 leftmost",
+      "propertyNames": { "pattern": "^[01]+$" },
+      "additionalProperties": { "type": "number", "minimum": 0 }
+    },
+    "CircuitJSON": {
+      "type": "object",
+      "description": "Circuit.toJSON() output; Circuit.fromJSON() reads it",
+      "required": ["ket", "qubits", "cregs", "gates", "ops"],
+      "properties": {
+        "ket": { "const": 1 },
+        "qubits": { "type": "integer", "minimum": 1 },
+        "cregs": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "gates": { "type": "object" },
+        "ops": { "type": "array" }
+      }
+    }
+  }
+}

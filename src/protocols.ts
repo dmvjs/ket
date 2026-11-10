@@ -14,7 +14,10 @@
 
 import { Circuit, checkOptions } from './circuit.js'
 import { isDistribution, resolveOutcomes } from './experiment.js'
-import type { Outcomes, Executor } from './experiment.js'
+import type { Outcomes, Executor, ExecutorResult } from './experiment.js'
+import { compareOutcomes } from './stats.js'
+import type { Comparison } from './stats.js'
+import type { NoiseParams } from './circuit.js'
 import { CliffordSim } from './clifford.js'
 import { makePrng } from './prng.js'
 
@@ -83,6 +86,10 @@ export interface ChshResult {
   readonly stderr: number | undefined
   /** How many standard errors S lies above the classical bound of 2. Negative when it does not. */
   readonly sigma: number | undefined
+  /** The S an ideal |Φ⁺⟩ gives for the angles analysed — what the simulator predicts. */
+  readonly ideal: number
+  /** (S − ideal) in standard errors: the device's deviation from the simulator, signed. */
+  readonly sigmaFromIdeal: number | undefined
 }
 
 /**
@@ -124,9 +131,9 @@ export function chshIdeal(angles: ChshAngles = CHSH_OPTIMAL): number {
  */
 export function chshAnalyze(
   outcomes: readonly Outcomes[],
-  options: { qubits?: readonly [number, number]; shots?: number } = {},
+  options: { qubits?: readonly [number, number]; shots?: number | readonly number[]; angles?: ChshAngles } = {},
 ): ChshResult {
-  checkOptions(options, ['qubits', 'shots'], 'chshAnalyze')
+  checkOptions(options, ['qubits', 'shots', 'angles'], 'chshAnalyze')
   if (outcomes.length !== 4)
     throw new TypeError(`chshAnalyze: expected outcomes for 4 settings, got ${outcomes.length}`)
   const [qa, qb] = options.qubits ?? [0, 1]
@@ -142,15 +149,24 @@ export function chshAnalyze(
   // settings are independent experiments and their variances add.
   let variance = 0, known = true
   outcomes.forEach((o, i) => {
-    const n = shotsOf(o) ?? options.shots
+    const given = Array.isArray(options.shots) ? (options.shots as readonly number[])[i] : options.shots as number | undefined
+    const n = shotsOf(o) ?? given
     if (n === undefined || n <= 0) { known = false; return }
-    variance += (1 - E[i]! ** 2) / n
+    variance += (1 - E[i]! ** 2) / n      // n = Infinity (exact probabilities) contributes 0
   })
   const stderr = known ? Math.sqrt(variance) : undefined
-  const sigma  = stderr === undefined ? undefined
-               : stderr > 0           ? (S - 2) / stderr
-               : S > 2 ? Infinity : S < 2 ? -Infinity : 0
-  return { S, correlations: E, stderr, sigma }
+  const ratio = (num: number): number | undefined =>
+    stderr === undefined ? undefined : stderr > 0 ? num / stderr : num > 1e-12 ? Infinity : num < -1e-12 ? -Infinity : 0
+  const ideal = chshIdeal(options.angles ?? CHSH_OPTIMAL)
+  return { S, correlations: E, stderr, sigma: ratio(S - 2), ideal, sigmaFromIdeal: ratio(S - ideal) }
+}
+
+/** Shots behind an executor's result: the Distribution's, else the RunReport's, else the caller's. */
+function shotsBehind(r: ExecutorResult, fallback: number | undefined): number | undefined {
+  const o = resolveOutcomes(r)
+  if (isDistribution(o)) return o.shots
+  if (typeof r === 'object' && r !== null && 'outcomes' in r && typeof r.shots === 'number') return r.shots
+  return fallback
 }
 
 /**
@@ -168,17 +184,32 @@ export function chshAnalyze(
  */
 export async function runChsh(
   execute: Executor,
-  options: ChshOptions & { shots?: number } = {},
-): Promise<ChshResult & { readonly circuits: readonly Circuit[] }> {
-  checkOptions(options, ['qubits', 'width', 'angles', 'shots'], 'runChsh')
-  const { shots, ...rest } = options
+  options: ChshOptions & { shots?: number; seed?: number } = {},
+): Promise<ChshResult & { readonly circuits: readonly Circuit[]; readonly settings: readonly Comparison[] }> {
+  checkOptions(options, ['qubits', 'width', 'angles', 'shots', 'seed'], 'runChsh')
+  const { shots, seed, ...rest } = options
   const circuits = chshCircuits(rest)
-  const outcomes: Outcomes[] = []
-  for (let i = 0; i < circuits.length; i++) outcomes.push(resolveOutcomes(await execute(circuits[i]!, i)))
-  const analyzeOpts: { qubits?: readonly [number, number]; shots?: number } = {}
+  const outcomes: Outcomes[] = [], perSetting: number[] = []
+  for (let i = 0; i < circuits.length; i++) {
+    const r = await execute(circuits[i]!, i)
+    const n = shotsBehind(r, shots)
+    if (n === undefined)
+      throw new TypeError(`runChsh: shot count unknown for setting ${i}, so no error bar is possible. ` +
+        'Return a Distribution or a RunReport with shots, pass { shots }, or pass { shots: Infinity } for exact probabilities.')
+    outcomes.push(resolveOutcomes(r)); perSetting.push(n)
+  }
+  // Each setting against what the simulator says it should be, with its noise floor.
+  const settings = outcomes.map((o, i) => {
+    const n = perSetting[i]!
+    const opts: { shots?: number; seed?: number } = {}
+    if (Number.isFinite(n)) opts.shots = n
+    if (seed !== undefined) opts.seed = seed
+    return compareOutcomes(o, circuits[i]!.exactProbs(), opts)
+  })
+  const analyzeOpts: { qubits?: readonly [number, number]; shots: readonly number[]; angles?: ChshAngles } = { shots: perSetting }
   if (rest.qubits !== undefined) analyzeOpts.qubits = rest.qubits
-  if (shots !== undefined) analyzeOpts.shots = shots
-  return { ...chshAnalyze(outcomes, analyzeOpts), circuits }
+  if (rest.angles !== undefined) analyzeOpts.angles = rest.angles
+  return { ...chshAnalyze(outcomes, analyzeOpts), circuits, settings }
 }
 
 // ── Clifford group ───────────────────────────────────────────────────────────
@@ -512,6 +543,10 @@ export function rbFit(points: readonly RbPoint[], options: RbFitOptions = {}): R
   const needed = fixB === undefined ? 3 : 2
   if (byLength.size < needed)
     throw new TypeError(`rbFit: need at least ${needed} distinct lengths to fit A·pᵐ${fixB === undefined ? ' + B' : ''}, got ${byLength.size}`)
+  if (bootstrap > 0)
+    for (const [length, arr] of byLength)
+      if (arr.length < 2)
+        throw new TypeError(`rbFit: only one sequence at m=${length}, so the bootstrap cannot give an error bar. Use samples ≥ 2, or pass bootstrap: 0 to fit without one.`)
 
   const scale = 1 - 2 ** -qubits
   const { p, A, B } = fitDecay(points, fixB)
@@ -552,6 +587,10 @@ export interface RbResult extends RbFit {
   readonly sequences: readonly RbSequence[]
   /** One survival probability per sequence, in `sequences` order. */
   readonly survivals: readonly RbPoint[]
+  /** The same sequences fitted under the `model` noise on the Clifford simulator, when a model was given. */
+  readonly model: RbFit | undefined
+  /** (errorPerClifford − model.errorPerClifford) over the combined standard error: does the device match its model? */
+  readonly sigmaFromModel: number | undefined
 }
 
 /**
@@ -570,10 +609,15 @@ export interface RbResult extends RbFit {
  */
 export async function runRb(
   execute: Executor,
-  options: RbOptions & Omit<RbFitOptions, 'qubits'>,
+  options: RbOptions & Omit<RbFitOptions, 'qubits'> & {
+    /** Noise model to predict the same sequences with — a `DEVICES` name or `NoiseParams`, e.g. from `getIonQNoise`. */
+    model?: string | NoiseParams
+    /** Shots per sequence for the model prediction. Default 1000. */
+    modelShots?: number
+  },
 ): Promise<RbResult> {
-  checkOptions(options, [...RB_OPTION_KEYS, 'bootstrap', 'fixB'], 'runRb')
-  const { bootstrap, fixB, ...rbOpts } = options
+  checkOptions(options, [...RB_OPTION_KEYS, 'bootstrap', 'fixB', 'model', 'modelShots'], 'runRb')
+  const { bootstrap, fixB, model, modelShots = 1000, ...rbOpts } = options
   const sequences = rbSequences(rbOpts)
   const { qs } = resolveRbQubits(rbOpts, 'runRb')
   const survivals: RbPoint[] = []
@@ -581,10 +625,24 @@ export async function runRb(
     const seq = sequences[i]!
     survivals.push({ length: seq.length, survival: rbSurvival(resolveOutcomes(await execute(seq.circuit, i)), qs) })
   }
-  // One seed drives both the sequence draw and the bootstrap.
+  // One seed drives the sequence draw, the bootstrap and the model simulation.
   const fitOpts: RbFitOptions = { qubits: qs.length }
   if (bootstrap !== undefined) fitOpts.bootstrap = bootstrap
   if (fixB !== undefined) fitOpts.fixB = fixB
   if (rbOpts.seed !== undefined) fitOpts.seed = rbOpts.seed
-  return { ...rbFit(survivals, fitOpts), sequences, survivals }
+  const fit = rbFit(survivals, fitOpts)
+
+  let modelFit: RbFit | undefined, sigmaFromModel: number | undefined
+  if (model !== undefined) {
+    const base = rbOpts.seed ?? 0
+    const predicted = sequences.map((s, i) => ({
+      length: s.length,
+      survival: rbSurvival(s.circuit.runClifford({ shots: modelShots, seed: base + i + 1, noise: model }), qs),
+    }))
+    modelFit = rbFit(predicted, fitOpts)
+    const diff = fit.errorPerClifford - modelFit.errorPerClifford
+    const se = Math.hypot(fit.errorPerCliffordStderr ?? 0, modelFit.errorPerCliffordStderr ?? 0)
+    sigmaFromModel = se > 1e-12 ? diff / se : Math.abs(diff) > 1e-12 ? Math.sign(diff) * Infinity : 0
+  }
+  return { ...fit, sequences, survivals, model: modelFit, sigmaFromModel }
 }

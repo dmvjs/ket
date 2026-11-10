@@ -1639,9 +1639,12 @@ chshAnalyze(chshCircuits().map(c => c.exactProbs())).S   // 2.8284 = 2√2
 
 // Sampled, locally. stderr comes from the Distribution's shot count.
 const r = await runChsh(c => c.run({ shots: 4096 }))
-r.S              // 2.83 ± 0.02
-r.correlations   // [E(a,b), E(a,b′), E(a′,b), E(a′,b′)] ≈ [0.71, −0.71, 0.71, 0.71]
-r.sigma          // standard errors above the classical bound of 2: ≈ 40
+r.S               // 2.83 ± 0.02
+r.correlations    // [E(a,b), E(a,b′), E(a′,b), E(a′,b′)] ≈ [0.71, −0.71, 0.71, 0.71]
+r.sigma           // standard errors above the classical bound of 2: ≈ 40
+r.ideal           // 2.828 — what the simulator predicts for these angles
+r.sigmaFromIdeal  // (S − ideal)/stderr: the device's deviation from the simulator, ≈ 0 here
+r.settings[0]     // each setting against exactProbs(): { tvd, fidelity, shotNoise, excess, sigma }
 
 // Noisy — the violation shrinks
 await runChsh(c => c.run({ shots: 4096, noise: 'forte-1' }))
@@ -1650,6 +1653,11 @@ await runChsh(c => c.run({ shots: 4096, noise: 'forte-1' }))
 chshCircuits({ qubits: [1, 3], width: 4, angles: { a: 0, a2: Math.PI / 2, b: Math.PI / 4, b2: 3 * Math.PI / 4 } })
 chshIdeal({ a: 0, a2: 0, b: 0, b2: 0 })   // 2 — one setting each, no violation possible
 ```
+
+A result without an error bar cannot be produced: `runChsh` throws if the shot
+count is unknown. A `Distribution` or a `RunReport` carries it; for a plain
+probability map pass `shots`, and for exact probabilities pass
+`shots: Infinity`.
 
 On hardware the executor submits the circuit and converts the result; pass
 `shots` so the error bar can be computed from plain probability maps:
@@ -1687,6 +1695,11 @@ rb.errorPerClifford         // 0.0044 ± 0.0003 (bootstrap)
 rb.p, rb.A, rb.B            // 0.991, 0.47, 0.53
 rb.points                   // per length: { length, mean, stderr, samples }
 
+// Against a device model: the same sequences simulated under the model's noise
+const vs = await runRb(hardwareExecutor, { lengths, samples: 20, model: (await getIonQNoise('qpu.forte-1', { apiKey })).noise })
+vs.model!.errorPerClifford  // what the published fidelities predict
+vs.sigmaFromModel           // (measured − predicted) over the combined error bar; |σ| > 3 means the model is wrong
+
 // Two qubits — CNOT error dominates
 await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002, p2: 0.01 } }), {
   qubits: [0, 1], lengths: [1, 2, 4, 8, 16, 32, 64], samples: 20, seed: 7,
@@ -1695,6 +1708,10 @@ await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002, p2: 0.01 } }),
 // A specific qubit of a wider register — the others are ignored in analysis
 await runRb(c => c.run({ shots: 500, noise: 'aria-1' }), { qubits: [3], width: 5, lengths: [1, 4, 16, 64] })
 ```
+
+The bootstrap error bar is on by default and needs at least two sequences per
+length; `rbFit` throws rather than report a zero-width bar from one sequence.
+Pass `bootstrap: 0` to fit without one.
 
 The pieces are available separately. `rbSequences(options)` returns
 `{ length, sample, circuit }[]`; `rbSurvival(outcomes, qubits)` is the
@@ -1795,6 +1812,33 @@ result, ms?)` builds one point and `experiment(points, { name?, meta? })` wraps
 them. `VERSION` is the library version string the records carry;
 `scripts/check-site-version.ts` fails a release if it drifts from package.json.
 
+### The record format
+
+The record is the interface: anything downstream — a notebook, a dashboard, a
+paper's supplementary data — attaches to the JSON, not to this library.
+[`docs/experiment.schema.json`](experiment.schema.json) is the JSON Schema for
+both `Experiment` and `PendingExperiment`. `formatVersion` changes only for
+incompatible changes; optional fields may be added without a bump, and
+`additionalProperties` is false so an unknown field is a parse error rather
+than silently dropped. A test asserts the schema and the records agree field
+for field.
+
+`diffExperiments(a, b)` is the structural diff — what changed between two
+records, as distinct from `compareExperiments`, which says whether a change is
+significant:
+
+```typescript
+const d = diffExperiments(parseExperiment(yesterday), parseExperiment(today))
+d.same        // false
+d.header      // ['ket: "0.9.1" → "0.9.2"', 'name: "ry-scan" → "ry-scan v2"']
+d.added       // point indices only in today
+d.removed     // only in yesterday
+d.changed     // [{ index: 3, fields: ['probs', 'backend'], tvd: 0.021 }]
+diffExperiments(a, b, { tolerance: 0.01 })   // probability changes below this TVD do not count
+```
+
+Timestamps and timings never count as differences.
+
 ### Resumable hardware sweeps
 
 A QPU sweep outlives the process that started it — jobs queue for minutes or
@@ -1853,7 +1897,9 @@ compareExperiments(measured, predicted) // tests the model, not just "is it nois
 fetched some other way; `getIonQCharacterizations(opts)` returns the whole
 fleet's entries. `examples/node/experiment.js` runs the entire loop — exact
 reference, calibrated prediction, resumable submission, comparison — against
-the IonQ simulator by default and a QPU with `IONQ_TARGET`.
+the IonQ simulator under its `forte-1` noise model by default (`IONQ_NOISE`
+picks another; `ideal` returns the exact distribution, not samples) and a QPU
+with `IONQ_TARGET`.
 
 ## Statistics
 
@@ -2284,7 +2330,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,579 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,587 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test
