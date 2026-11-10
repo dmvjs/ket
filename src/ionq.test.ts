@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   ionqSubmitRequest, submitIonQ, getIonQJob, awaitIonQJob, cancelIonQJob,
   ionqHistogramToCounts, countsToProbs, getIonQResults, runIonQ,
+  noiseFromCharacterization, getIonQCharacterizations, getIonQNoise,
 } from './ionq.js'
 import { Circuit } from './circuit.js'
 
@@ -253,5 +254,43 @@ describe('runIonQ', () => {
     expect(counts.get(0n)).toBe(512)
     expect(counts.get(3n)).toBe(512)
     expect(calls.map(c => c.init.method ?? 'GET')).toEqual(['POST', 'GET', 'GET'])
+  })
+})
+
+describe('device characterisation → noise', () => {
+  const forte = { backend: 'qpu.forte-1', qubits: 36, date: 1_700_000_000,
+    fidelity: { '1q': { mean: 0.9998 }, '2q': { mean: 0.9959 }, spam: { mean: 0.9951 } } }
+  const forteOld = { ...forte, date: 1_600_000_000, fidelity: { '1q': { mean: 0.99 }, '2q': { mean: 0.98 }, spam: { mean: 0.97 } } }
+  const aria = { backend: 'qpu.aria-1', date: 1_700_000_000, fidelity: { '2q': { mean: 0.99 } } }
+
+  it('maps fidelities to error rates and drops what is not reported', () => {
+    const n = noiseFromCharacterization(forte)
+    expect(n.p1).toBeCloseTo(0.0002, 10)
+    expect(n.p2).toBeCloseTo(0.0041, 10)
+    expect(n.pMeas).toBeCloseTo(0.0049, 10)
+    expect(noiseFromCharacterization(aria)).toEqual({ p2: expect.closeTo(0.01, 10) as number })
+    expect(() => noiseFromCharacterization({ backend: 'x' })).toThrow(/no fidelity data/)
+    expect(() => noiseFromCharacterization({ fidelity: { '1q': { mean: 1.2 } } })).toThrow(/not in \[0, 1\]/)
+  })
+
+  it('fetches the authenticated characterizations endpoint', async () => {
+    const { f, calls } = stubFetch([{ json: [forte, aria] }])
+    const all = await getIonQCharacterizations({ apiKey: KEY, fetch: f })
+    expect(all).toHaveLength(2)
+    expect(calls[0]!.url).toBe('https://api.ionq.co/v0.3/characterizations/backends')
+    expect((calls[0]!.init.headers as Record<string, string>)['Authorization']).toBe(`apiKey ${KEY}`)
+    const bad = stubFetch([{ json: { not: 'an array' } }])
+    await expect(getIonQCharacterizations({ apiKey: KEY, fetch: bad.f })).rejects.toThrow(/expected an array/)
+  })
+
+  it('picks the latest characterisation for the target, however the name is spelt', async () => {
+    const { f } = stubFetch([{ json: [forteOld, aria, forte] }])
+    const r = await getIonQNoise('forte-1', { apiKey: KEY, fetch: f })
+    expect(r.characterization.date).toBe(1_700_000_000)
+    expect(r.noise.p2).toBeCloseTo(0.0041, 10)
+    const r2 = await getIonQNoise('QPU.Forte-1', { apiKey: KEY, fetch: stubFetch([{ json: [forte] }]).f })
+    expect(r2.noise).toEqual(r.noise)
+    await expect(getIonQNoise('qpu.harmony', { apiKey: KEY, fetch: stubFetch([{ json: [forte, aria] }]).f }))
+      .rejects.toThrow(/none for 'qpu.harmony' \(have: qpu.forte-1, qpu.aria-1\)/)
   })
 })

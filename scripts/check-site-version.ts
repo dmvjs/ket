@@ -16,6 +16,10 @@ const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const BADGE = /<span class="ver">v([\d.]+)<\/span>/g
 const issues: string[] = []
 
+// src/version.ts is stamped into experiment records, so it must be the real version.
+const src = readFileSync(join(root, 'src', 'version.ts'), 'utf8').match(/VERSION = '([\d.]+)'/)?.[1]
+if (src !== version) issues.push(`src/version.ts says ${src}, package.json says ${version}`)
+
 for (const file of readdirSync(join(root, 'site')).filter(f => f.endsWith('.html'))) {
   const html = readFileSync(join(root, 'site', file), 'utf8')
   for (const [, found] of html.matchAll(BADGE))
@@ -31,7 +35,7 @@ for (const file of readdirSync(join(root, 'site')).filter(f => f.endsWith('.html
 // footer left at an old value then fails against the header beside it.
 const COUNT = /([\d,]+) tests/g
 const counts = new Map<string, string[]>()
-for (const file of ['README.md', ...readdirSync(join(root, 'site')).filter(f => f.endsWith('.html')).map(f => `site/${f}`)]) {
+for (const file of ['README.md', 'docs/REFERENCE.md', ...readdirSync(join(root, 'site')).filter(f => f.endsWith('.html')).map(f => `site/${f}`)]) {
   for (const [, n] of readFileSync(join(root, file), 'utf8').matchAll(COUNT)) {
     if (!counts.has(n)) counts.set(n, [])
     counts.get(n)!.push(file)

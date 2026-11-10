@@ -172,6 +172,49 @@ gate count, not the width, so it goes where a statevector cannot. See
 [the reference](docs/REFERENCE.md#simulation-backends) for bond dimensions, term
 budgets, and the error accounting on approximate runs.
 
+## Characterise a device
+
+The same circuit object that simulates locally also measures hardware. Two
+standard protocols ship as generate / analyse / run triples, so they run against
+any backend or a QPU through one executor function:
+
+```typescript
+import { runChsh, runRb } from '@kirkelliott/ket'
+
+const chsh = await runChsh(c => c.run({ shots: 4096 }))
+chsh.S                // 2.83 ± 0.02 — the Tsirelson bound; classical physics stops at 2
+
+const rb = await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002 } }), {
+  lengths: [1, 2, 4, 8, 16, 32, 64, 128], samples: 20,
+})
+rb.errorPerClifford   // 0.0044 ± 0.0003 — randomized benchmarking, SPAM factored out
+```
+
+Swap the executor for one that calls `runIonQ` and the numbers come from trapped
+ions instead. `sweep` runs any circuit family over a parameter grid through the
+same executor and returns a JSON record — circuits, parameters, outcomes,
+backend, timing, version — that `parseExperiment` reads back:
+
+```typescript
+const exp = await sweep({ theta: [0, Math.PI / 2, Math.PI] },
+  ({ theta }) => new Circuit(1).ry(theta, 0), c => c.run({ shots: 1000 }))
+exp.points.map(p => [p.params.theta, p.probs['1'] ?? 0])   // [[0, 0], [1.57, 0.49], [3.14, 1]]
+```
+
+`compareExperiments` then puts a hardware sweep beside the same sweep on the
+simulator, point by point, with the distance measured against its shot-noise
+floor so a deviation is only called real when it is.
+
+The whole loop, against IonQ's free simulator, resumable across runs on a QPU:
+
+```bash
+IONQ_API_KEY=... node examples/node/experiment.js
+```
+
+See [protocols](docs/REFERENCE.md#characterisation-protocols),
+[experiments](docs/REFERENCE.md#experiments) and
+[statistics](docs/REFERENCE.md#statistics).
+
 ## Why you can build on it
 
 - **Typed, and the types are the source.** Strict TypeScript, not JS with a `.d.ts`
@@ -179,7 +222,7 @@ budgets, and the error accounting on approximate runs.
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,456 tests.** Analytic correctness against known amplitudes — gate
+- **2,579 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.

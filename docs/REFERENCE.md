@@ -1610,6 +1610,316 @@ predicted support; under `forte-1` depolarizing noise, 6.3% — exactly the unif
 baseline for a 16-element group. The signal is not degraded but erased, which is
 the concrete form of the error-correction argument.
 
+## Characterisation protocols
+
+Protocols that measure a device rather than compute with it. Each is split into
+three pure pieces — circuit generation, analysis of outcomes, and a runner that
+threads an *executor* through both — so the same protocol definition runs on a
+local backend or a QPU without change. An executor is any function
+`(circuit, index) => Outcomes | Promise<Outcomes>`, where `Outcomes` is a
+`Distribution` or a bitstring → probability map such as `countsToProbs` returns.
+An executor may also return `{ outcomes, shots?, backend?, jobId?, meta? }` to
+keep provenance; see [Experiments](#experiments).
+
+The generated circuits carry no explicit measurement: every shot sampler in ket
+and the IonQ API read out all qubits at the end, so they submit as they are.
+
+### CHSH
+
+Four circuits prepare |Φ⁺⟩ and measure cos θ·Z + sin θ·X on each qubit at the
+settings (a,b), (a,b′), (a′,b), (a′,b′). The default angles are the ones that
+maximise S for |Φ⁺⟩, so an ideal device gives S = 2√2 ≈ 2.828; local hidden
+variables bound |S| ≤ 2.
+
+```typescript
+import { chshCircuits, chshAnalyze, chshIdeal, runChsh } from '@kirkelliott/ket'
+
+// Exact — no shot noise
+chshAnalyze(chshCircuits().map(c => c.exactProbs())).S   // 2.8284 = 2√2
+
+// Sampled, locally. stderr comes from the Distribution's shot count.
+const r = await runChsh(c => c.run({ shots: 4096 }))
+r.S              // 2.83 ± 0.02
+r.correlations   // [E(a,b), E(a,b′), E(a′,b), E(a′,b′)] ≈ [0.71, −0.71, 0.71, 0.71]
+r.sigma          // standard errors above the classical bound of 2: ≈ 40
+
+// Noisy — the violation shrinks
+await runChsh(c => c.run({ shots: 4096, noise: 'forte-1' }))
+
+// Any angles, any pair, any register width
+chshCircuits({ qubits: [1, 3], width: 4, angles: { a: 0, a2: Math.PI / 2, b: Math.PI / 4, b2: 3 * Math.PI / 4 } })
+chshIdeal({ a: 0, a2: 0, b: 0, b2: 0 })   // 2 — one setting each, no violation possible
+```
+
+On hardware the executor submits the circuit and converts the result; pass
+`shots` so the error bar can be computed from plain probability maps:
+
+```typescript
+import { runChsh, runIonQ, countsToProbs } from '@kirkelliott/ket'
+
+const shots = 1000
+const r = await runChsh(async c => {
+  const { counts } = await runIonQ(c.toIonQ(), { apiKey, target: 'qpu.forte-1', shots })
+  return countsToProbs(counts, c.qubits, shots)
+}, { shots })
+```
+
+`chshAnalyze(outcomes, { qubits?, shots? })` is the analysis step on its own, for
+results gathered some other way. `qubits` must be the pair the circuits were
+built for.
+
+### Randomized benchmarking
+
+Standard Clifford RB: `m` uniformly random Cliffords followed by the one Clifford
+that inverts their product, so an ideal device returns to |0…0⟩ with certainty.
+Survival decays as A·pᵐ + B, and the average error per Clifford is
+r = (1 − p)(1 − 2⁻ⁿ). State preparation and readout error land in A and B, not
+in p — that is the point of the protocol.
+
+```typescript
+import { rbSequences, rbSurvival, rbFit, runRb } from '@kirkelliott/ket'
+
+// One qubit, locally, under per-gate depolarizing noise
+const rb = await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002 } }), {
+  lengths: [1, 2, 4, 8, 16, 32, 64, 128], samples: 20, seed: 7,
+})
+rb.errorPerClifford         // 0.0044 ± 0.0003 (bootstrap)
+rb.p, rb.A, rb.B            // 0.991, 0.47, 0.53
+rb.points                   // per length: { length, mean, stderr, samples }
+
+// Two qubits — CNOT error dominates
+await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002, p2: 0.01 } }), {
+  qubits: [0, 1], lengths: [1, 2, 4, 8, 16, 32, 64], samples: 20, seed: 7,
+})                          // errorPerClifford ≈ 0.022
+
+// A specific qubit of a wider register — the others are ignored in analysis
+await runRb(c => c.run({ shots: 500, noise: 'aria-1' }), { qubits: [3], width: 5, lengths: [1, 4, 16, 64] })
+```
+
+The pieces are available separately. `rbSequences(options)` returns
+`{ length, sample, circuit }[]`; `rbSurvival(outcomes, qubits)` is the
+probability that every benchmarked qubit read 0; `rbFit(points, { qubits?,
+bootstrap?, seed? })` fits the decay to per-sequence `{ length, survival }`
+points. Use them when the circuits should be submitted concurrently rather than
+one after another, or when results come back out of band:
+
+```typescript
+const seqs = rbSequences({ qubits: [0], lengths: [1, 4, 16, 64, 256], samples: 30, seed: 1 })
+const jobs = await Promise.all(seqs.map(s => submitIonQ(s.circuit.toIonQ(), { apiKey, target: 'qpu.forte-1', shots: 500 })))
+// …later, once they have run
+const points = await Promise.all(seqs.map(async (s, i) => ({
+  length:   s.length,
+  survival: rbSurvival(countsToProbs(await resultsFor(jobs[i]), s.circuit.qubits, 500), [0]),
+})))
+rbFit(points).errorPerClifford
+```
+
+Two things the numbers mean. The fit reports error per *Clifford*, and a random
+Clifford averages 3 gates from {H, S, S†} for one qubit and 6.9 gates including
+1.7 CNOTs for two. And lengths must reach far enough to see the curve bend
+towards its plateau. Over a short range A·pᵐ + B is nearly a straight line, and
+a line does not say whether it is a small decay towards B ≈ ½ or a smaller one
+towards B ≈ 0 — the two differ in r by about a factor of two, and the bootstrap
+error bar cannot see it because the ambiguity is in the model, not the sample.
+A and B are held in [0, 1] so the fit stays physical either way; when the
+lengths cannot reach the plateau, pass `fixB: 2 ** -n` to hold the asymptote at
+its ideal-SPAM value and fit p alone:
+
+```typescript
+rbFit(points, { fixB: 0.5 })                         // one qubit, short range
+await runRb(execute, { lengths: [1, 4, 16, 64], fixB: 0.5 })
+```
+
+`cliffordGroup(1)` and `cliffordGroup(2)` expose the groups the sequences draw
+from — 24 and 11,520 circuits over {H, S, S†, CNOT}, each a shortest word found by
+breadth-first search, so the closing inverse is a single bounded-depth Clifford
+however long the sequence.
+
+## Experiments
+
+A protocol answers one question about a device. An experiment is the loop
+around it: vary something, run each point, keep every result with enough
+provenance to reproduce or re-analyse it later. `sweep` runs the loop and
+returns an `Experiment` — plain JSON holding every circuit, its parameters,
+what came back, which backend ran it, how long it took, and the library
+version — and `parseExperiment` reads one back.
+
+```typescript
+import { sweep, cartesian, parseExperiment, Circuit } from '@kirkelliott/ket'
+
+// Scan a rotation angle locally
+const exp = await sweep(
+  { theta: [0, Math.PI / 4, Math.PI / 2, Math.PI] },   // named axes → cartesian product
+  ({ theta }) => new Circuit(1).ry(theta, 0),          // build a circuit per point
+  c => c.run({ shots: 1000 }),                         // run it anywhere
+  { name: 'ry-scan', meta: { hypothesis: 'P(1) = sin²(θ/2)' } },
+)
+exp.points.map(p => [p.params.theta, p.probs['1'] ?? 0])
+exp.points[0]                 // { index, params, circuit, probs, shots, backend: 'statevector', jobId, meta, ms }
+exp.ket                       // '0.9.1' — the version that produced it
+
+// Several axes, or an explicit list of anything
+cartesian({ depth: [1, 2, 4], noise: ['ideal', 'forte-1'] }).length    // 6
+await sweep([2, 3, 4], n => new Circuit(n).h(0), c => c.exactProbs())
+
+// Keep it, read it back, rebuild any circuit
+const text = JSON.stringify(exp)
+const back = parseExperiment<{ theta: number }>(text)   // validates shape; throws naming the first bad field
+Circuit.fromJSON(back.points[2]!.circuit).draw()
+```
+
+On hardware the executor returns a `RunReport` so the shot count, job id and
+device travel with the result — `compareExperiments` needs the shots for its
+noise floor. `concurrency` keeps several jobs in flight; results come back
+in grid order regardless:
+
+```typescript
+await sweep(grid, build, async c => {
+  const { id } = await submitIonQ(c.toIonQ(), { apiKey, target: 'qpu.forte-1', shots })
+  const counts = ionqHistogramToCounts(await getIonQResults(await awaitIonQJob(id, { apiKey }), { apiKey }), shots)
+  return { outcomes: countsToProbs(counts, c.qubits, shots), shots, backend: 'ionq:qpu.forte-1', jobId: id }
+}, { concurrency: 4 })
+```
+
+Protocol circuits are a grid like any other, so a protocol run can be kept as
+a record and analysed from it:
+
+```typescript
+const seqs = rbSequences({ lengths: [1, 4, 16, 64, 256], samples: 20, seed: 1 })
+const rb = await sweep(seqs, s => s.circuit, execute, { name: 'rb-q3' })
+rbFit(rb.points.map(p => ({ length: p.params.length, survival: rbSurvival(p.probs, [3]) })))
+```
+
+For results gathered some other way, `recordPoint(index, params, circuit,
+result, ms?)` builds one point and `experiment(points, { name?, meta? })` wraps
+them. `VERSION` is the library version string the records carry;
+`scripts/check-site-version.ts` fails a release if it drifts from package.json.
+
+### Resumable hardware sweeps
+
+A QPU sweep outlives the process that started it — jobs queue for minutes or
+hours — so for hardware the run is split in two. `submitSweep` sends every
+circuit and returns a record of job ids; `collectSweep` fetches whatever has
+finished and returns the record with those results filled in; `finishSweep`
+turns a complete record into an ordinary `Experiment`. Every intermediate
+record is plain JSON, so store it and come back:
+
+```typescript
+import { submitSweep, collectSweep, finishSweep, parsePendingExperiment,
+         submitIonQ, getIonQJob, getIonQResults, ionqHistogramToCounts, countsToProbs } from '@kirkelliott/ket'
+
+// Day 1 — submit and leave
+const pending = await submitSweep(grid, build, async c => {
+  const { id } = await submitIonQ(c.toIonQ(), { apiKey, target: 'qpu.forte-1', shots })
+  return id
+}, { name: 'ry-scan', concurrency: 4 })
+await writeFile('ry-scan.pending.json', JSON.stringify(pending))
+
+// Day 2 — collect what is done; `undefined` means "not yet", a throw means failed
+let p = parsePendingExperiment(await readFile('ry-scan.pending.json', 'utf8'))
+p = await collectSweep(p, async (id, c) => {
+  const job = await getIonQJob(id, { apiKey })
+  if (job.status !== 'completed') return undefined
+  const counts = ionqHistogramToCounts(await getIonQResults(job, { apiKey }), shots)
+  return { outcomes: countsToProbs(counts, c.qubits, shots), shots, backend: 'ionq:qpu.forte-1', jobId: id }
+}, { concurrency: 4 })
+await writeFile('ry-scan.pending.json', JSON.stringify(p))
+
+p.points.filter(pt => pt.result === undefined).length   // still queued → run again later
+const exp = finishSweep(p)                              // throws, naming the indices, until that is 0
+```
+
+`collectSweep` never mutates its input, and a collector that throws aborts the
+call without keeping anything from it, so a stored record is always consistent.
+
+### Predicting a device: calibrated noise
+
+`DEVICES` carries a noise profile per device, frozen at release. For a
+prediction of what the device will do *today*, pull IonQ's latest published
+characterisation and simulate under it:
+
+```typescript
+import { getIonQNoise, noiseFromCharacterization } from '@kirkelliott/ket'
+
+const { noise, characterization } = await getIonQNoise('qpu.forte-1', { apiKey })
+noise                                   // { p1: 0.0002, p2: 0.0041, pMeas: 0.0049 } — 1 − fidelity
+new Date(characterization.date * 1000)  // when it was measured
+
+const predicted = await sweep(grid, build, c => c.run({ shots, noise }))
+compareExperiments(measured, predicted) // tests the model, not just "is it noisy"
+```
+
+`noiseFromCharacterization(c)` does the mapping on its own for a payload
+fetched some other way; `getIonQCharacterizations(opts)` returns the whole
+fleet's entries. `examples/node/experiment.js` runs the entire loop — exact
+reference, calibrated prediction, resumable submission, comparison — against
+the IonQ simulator by default and a QPU with `IONQ_TARGET`.
+
+## Statistics
+
+The question an experiment ends on is whether the device agrees with the
+simulator, and the honest answer needs two numbers: how far apart the
+distributions are, and how far apart they would be from shot noise alone.
+Every function here accepts `Outcomes` — a `Distribution`, a probability map,
+or raw counts — and normalises.
+
+```typescript
+import { tvd, hellingerFidelity, klDivergence, linearXeb, zExpectation,
+         wilson, probInterval, bootstrapOutcomes, shotNoiseTvd,
+         compareOutcomes, compareExperiments } from '@kirkelliott/ket'
+
+const ideal = bell.exactProbs()
+const qpu   = countsToProbs(counts, 2, 1000)       // from runIonQ
+
+tvd(qpu, ideal)                 // ½·Σ|p − q|      — 0 identical, 1 disjoint
+hellingerFidelity(qpu, ideal)   // (Σ√(p·q))²      — 1 identical, 0 disjoint
+klDivergence(qpu, ideal)        // Σ p·ln(p/q), nats; ∞ where the reference has no support
+linearXeb(ideal, qpu)           // 2ⁿ·Σ p_ideal·p_measured − 1 — 1 ideal, 0 uniform noise
+zExpectation(qpu)               // ⟨ZZ⟩ from parities; zExpectation(qpu, [0]) for ⟨ZI⟩
+
+// Intervals on counts
+wilson(487, 1000)               // { low: 0.456, high: 0.518 } — 95% by default, sane at k = 0 and k = n
+probInterval(dist, '00')        // the same for one bitstring of a Distribution
+
+// Error bar on any statistic, by parametric bootstrap
+bootstrapOutcomes(dist, o => zExpectation(o), { resamples: 500, seed: 1 })
+// { estimate, mean, stderr, low, high }
+```
+
+The comparison functions put the distance beside its noise floor.
+`shotNoiseTvd(reference, shots)` is how far a `shots`-shot sample of the
+reference itself typically lands from it; `compareOutcomes` subtracts that:
+
+```typescript
+compareOutcomes(qpu, ideal, { shots: 1000 })
+// {
+//   tvd: 0.041, fidelity: 0.998,
+//   shotNoise: { mean: 0.018, stderr: 0.009, … },   // expected from 1000 shots alone
+//   tvdStderr: 0.008,                                // uncertainty of the measured tvd itself
+//   excess: 0.023,                                   // what the device is responsible for
+//   sigma: 1.9,                                      // excess over √(shotNoise.stderr² + tvdStderr²)
+// }
+```
+
+Beyond about 3σ the disagreement is real. Below it, more shots are needed
+before anything can be said — which is the answer the number is there to give.
+
+`compareExperiments(observed, reference)` does this for two records from
+`sweep` point by point — a hardware sweep against the same sweep on a
+simulator — and summarises:
+
+```typescript
+const reference = await sweep(grid, build, c => c.exactProbs())
+const hardware  = await sweep(grid, build, ionqExecutor)     // or parseExperiment(stored)
+const cmp = compareExperiments(hardware, reference)
+cmp.points[0]       // { index, params, tvd, fidelity, shotNoise, excess, sigma }
+cmp.meanTvd, cmp.maxTvd, cmp.meanFidelity
+cmp.beyondNoise     // indices whose sigma exceeds 3 (set `threshold` to change)
+```
+
+Points must line up: same count, same parameters in the same order. Shot
+counts are read from the observed record.
+
 ## Visualization
 
 ### ASCII diagram
@@ -1974,7 +2284,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,456 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,579 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

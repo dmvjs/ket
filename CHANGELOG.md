@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+### Added — characterisation protocols: CHSH and randomized benchmarking
+
+A new `protocols` module turns ket from a simulator into something that can
+measure a device. Each protocol is three pure pieces — circuit generation,
+analysis of outcomes, and a runner that threads an *executor* through both — so
+one definition runs on any local backend or on a QPU unchanged. The generated
+circuits carry no explicit measurement and submit to IonQ as they are.
+
+- **CHSH.** `chshCircuits` builds the four settings on |Φ⁺⟩; `chshAnalyze`
+  returns S, the four correlators, the shot-noise standard error and how many
+  standard errors S sits above the classical bound of 2; `chshIdeal` gives the
+  analytic S for any angles; `runChsh` does all three. Default angles
+  (`CHSH_OPTIMAL`) reach 2√2 exactly on `exactProbs()`.
+- **Randomized benchmarking.** `rbSequences` draws uniformly from the full 1- or
+  2-qubit Clifford group and closes each sequence with a single looked-up
+  inverse, so the inverting step is bounded-depth however long the sequence.
+  `rbSurvival` reads the return-to-zero probability; `rbFit` fits A·pᵐ + B by
+  exhaustive search with golden-section refinement, reports
+  r = (1 − p)(1 − 2⁻ⁿ) with a bootstrap error bar, and summarises each length.
+  `runRb` does all three. Verified against the analytic prediction for ket's
+  depolarizing model on one and two qubits.
+- **`cliffordGroup(1 | 2)`** — the 24- and 11,520-element groups as circuits
+  over {H, S, S†, CNOT}, each a shortest word by breadth-first search over the
+  stabilizer tableau. Enumerating the two-qubit group takes about 50 ms, once.
+- **`CliffordSim.tableau()`** — the full tableau as 2n signed Pauli strings
+  (destabilizers then stabilizers), the key the group enumeration uses.
+
+### Added — experiment records and parameter sweeps
+
+- **`sweep(grid, build, execute, options?)`** runs a circuit family over a
+  parameter grid — named axes via `cartesian`, or an explicit list — through
+  an executor, with optional `concurrency`, and returns an `Experiment`.
+- **`Experiment`** is plain JSON: every point keeps its parameters, circuit
+  JSON, probabilities, shot count, backend label, job id, free-form meta and
+  wall time; the record carries name, meta, timestamps and the library version.
+  `parseExperiment` validates and types a stored record, naming the first bad
+  field. `recordPoint` and `experiment` build records from results gathered out
+  of band.
+- **`RunReport`.** Executors — in `sweep`, `runChsh` and `runRb` alike — may
+  return `{ outcomes, shots?, backend?, jobId?, meta? }` instead of bare
+  outcomes, so hardware provenance travels with the result.
+- **`VERSION`** — the library version string; `check-site-version` fails a
+  release if `src/version.ts` drifts from package.json.
+
+### Added — statistics for comparing outcomes
+
+- **Distances and fidelities** on any `Outcomes` (Distribution, probability
+  map, or raw counts): `tvd`, `hellingerFidelity`, `klDivergence`,
+  `linearXeb`, and `zExpectation` for Pauli-Z parities.
+- **Intervals and bootstrap.** `wilson` and `probInterval` for proportions;
+  `bootstrapOutcomes` resamples any statistic of a measured distribution and
+  returns estimate, standard error and a percentile interval; `shotNoiseTvd`
+  is the TVD a sample of the reference itself typically shows.
+- **`compareOutcomes` and `compareExperiments`** put a measured distribution,
+  or a whole `sweep` record, beside its reference and report the distance
+  *in excess of shot noise* as `excess` and `sigma`, with `beyondNoise`
+  listing the points that genuinely disagree.
+
+### Added — resumable hardware sweeps, calibrated noise, end-to-end example
+
+- **`submitSweep` / `collectSweep` / `finishSweep`** split a sweep so it can
+  survive a QPU queue: submit everything and store the job ids as a
+  `PendingExperiment`; collect whatever has finished, as many times as needed;
+  finish when all points are in. `parsePendingExperiment` reads stored pending
+  records. `collectSweep` never mutates its input and keeps nothing from a call
+  in which the collector threw.
+- **`getIonQNoise(target, opts)`** maps IonQ's latest published characterisation
+  to `NoiseParams` so the simulator predicts the device as it is today, not as
+  frozen in `DEVICES`; `noiseFromCharacterization` and
+  `getIonQCharacterizations` are the pieces.
+- **`examples/node/experiment.js`** runs the loop end to end: exact reference,
+  calibrated prediction, resumable submission, comparison with error bars, and
+  both records written to disk.
+
 ## 0.9.1
 
 ### Fixed — stabilizer-rank sampling was wrong on any support single-bit flips cannot cross

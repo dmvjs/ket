@@ -278,9 +278,25 @@ export class CliffordSim {
    * Rows n..2n-1 of the tableau; sign from the phase bit (0 → '+', 1 → '-').
    */
   stabilizerGenerators(): string[] {
+    return this.rows(this.n, 2 * this.n)
+  }
+
+  /**
+   * The full tableau as 2n signed Pauli strings: destabilizers first, then
+   * stabilizers. Starting from |0…0⟩ the rows are the images U X_i U† and
+   * U Z_i U† of the gates applied so far, which pins down the Clifford U up to
+   * a global phase — two gate sequences implement the same Clifford exactly
+   * when their tableaus agree. `protocols.ts` enumerates the Clifford group on
+   * that key.
+   */
+  tableau(): string[] {
+    return this.rows(0, 2 * this.n)
+  }
+
+  private rows(from: number, to: number): string[] {
     const { n, W, _x, _z, _r } = this
     const out: string[] = []
-    for (let i = n; i < 2 * n; i++) {
+    for (let i = from; i < to; i++) {
       const iW = i * W
       let s = (_r[i] ?? 0) ? '-' : '+'
       for (let q = 0; q < n; q++) {

@@ -281,6 +281,9 @@
     <a class="nav-link" href="#shor">Shor's algorithm</a>
     <a class="nav-link" href="#vqe">VQE &amp; optimization</a>
     <a class="nav-link" href="#pauli">Pauli algebra</a>
+    <a class="nav-link" href="#protocols">Characterisation protocols</a>
+    <a class="nav-link" href="#experiments">Experiments &amp; sweeps</a>
+    <a class="nav-link" href="#statistics">Statistics</a>
   </div>
 
   <div class="nav-group">
@@ -951,6 +954,142 @@ vqe(circuit, H1.add(H2).toTerms())</code></pre>
 </div>
 
 <!-- ─────────────────── IMPORT / EXPORT ─────────────────── -->
+<!-- ─────────────────── PROTOCOLS ─────────────────── -->
+<span class="section-anchor" id="protocols"></span>
+<div class="section">
+  <h2>Characterisation protocols</h2>
+
+  <p>Protocols that measure a device rather than compute with it. Each is three pure pieces &mdash; circuit generation, analysis of outcomes, and a runner that threads an <em>executor</em> through both &mdash; so one definition runs on a local backend or a QPU unchanged. An executor is any <code>(circuit, index) =&gt; Outcomes | Promise&lt;Outcomes&gt;</code>, where <code>Outcomes</code> is a <code>Distribution</code> or a bitstring &rarr; probability map such as <code>countsToProbs</code> returns, or a <code>RunReport</code> carrying provenance (see <a href="#experiments">Experiments</a>). The circuits carry no explicit measurement; every ket sampler and the IonQ API read out all qubits at the end.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>chshCircuits</td><td>chshCircuits({ qubits?, width?, angles? })</td><td>Four circuits for the settings (a,b), (a,b&prime;), (a&prime;,b), (a&prime;,b&prime;). Default angles reach S = 2&radic;2 on |&Phi;&#8314;&#10217;.</td></tr>
+    <tr><td>chshAnalyze</td><td>chshAnalyze(outcomes, { qubits?, shots? })</td><td>S, the four correlators, shot-noise <code>stderr</code>, and <code>sigma</code> above the classical bound of 2.</td></tr>
+    <tr><td>chshIdeal</td><td>chshIdeal(angles?)</td><td>The S an ideal |&Phi;&#8314;&#10217; gives for these angles.</td></tr>
+    <tr><td>runChsh</td><td>runChsh(execute, options?)</td><td>Generate, run and analyse in one call.</td></tr>
+    <tr><td>CHSH_OPTIMAL</td><td></td><td>a = 0, a&prime; = &pi;/2, b = &pi;/4, b&prime; = 3&pi;/4.</td></tr>
+    <tr><td>rbSequences</td><td>rbSequences({ qubits?, width?, lengths, samples?, seed? })</td><td>Clifford RB sequences: m random Cliffords plus one inverting Clifford. One or two qubits.</td></tr>
+    <tr><td>rbSurvival</td><td>rbSurvival(outcomes, qubits?)</td><td>Probability that every benchmarked qubit read 0.</td></tr>
+    <tr><td>rbFit</td><td>rbFit(points, { qubits?, bootstrap?, seed?, fixB? })</td><td>Fit A&middot;p<sup>m</sup> + B with A, B &isin; [0, 1]; returns <code>errorPerClifford</code> = (1 &minus; p)(1 &minus; 2<sup>&minus;n</sup>) with a bootstrap error bar. <code>fixB</code> holds the asymptote when the lengths do not reach it.</td></tr>
+    <tr><td>runRb</td><td>runRb(execute, options)</td><td>Generate, run and fit in one call.</td></tr>
+    <tr><td>cliffordGroup</td><td>cliffordGroup(1 | 2)</td><td>The 24- or 11,520-element Clifford group as circuits over {H, S, S&dagger;, CNOT}.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { runChsh, runRb, runIonQ, countsToProbs } from '@kirkelliott/ket'
+
+// CHSH, locally — S → 2√2, error bar from the shot count
+const chsh = await runChsh(c => c.run({ shots: 4096 }))
+chsh.S        // 2.83 ± 0.02
+chsh.sigma    // ≈ 40 standard errors above 2
+
+// The same experiment on a QPU
+const shots = 1000
+await runChsh(async c => {
+  const { counts } = await runIonQ(c.toIonQ(), { apiKey, target: 'qpu.forte-1', shots })
+  return countsToProbs(counts, c.qubits, shots)
+}, { shots })
+
+// Single-qubit RB under depolarizing noise
+const rb = await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002 } }), {
+  lengths: [1, 2, 4, 8, 16, 32, 64, 128], samples: 20, seed: 7,
+})
+rb.errorPerClifford   // 0.0044 ± 0.0003 — about 3 gates per Clifford
+rb.points             // per length: { length, mean, stderr, samples }
+
+// Two-qubit RB — CNOT error dominates
+await runRb(c => c.runClifford({ shots: 1000, noise: { p1: 0.002, p2: 0.01 } }),
+  { qubits: [0, 1], lengths: [1, 2, 4, 8, 16, 32, 64], samples: 20 })</code></pre>
+
+  <p>Readout and preparation error land in A and B, not in p &mdash; that is what RB is for. Lengths must reach far enough to see the curve bend towards its plateau: over a short range the model is nearly a line, which cannot tell a small decay towards B &asymp; &frac12; from a smaller one towards B &asymp; 0, and the bootstrap error bar does not see that ambiguity. Pass <code>fixB: 2 ** -n</code> to hold the asymptote at its ideal-SPAM value when the range is short. For concurrent hardware submission use <code>rbSequences</code>, <code>rbSurvival</code> and <code>rbFit</code> directly; <code>runRb</code> executes one circuit after another.</p>
+</div>
+
+<!-- ─────────────────── EXPERIMENTS ─────────────────── -->
+<span class="section-anchor" id="experiments"></span>
+<div class="section">
+  <h2>Experiments &amp; sweeps</h2>
+
+  <p>A protocol answers one question; an experiment is the loop around it. <code>sweep</code> varies parameters over a circuit family, runs each point through an executor, and returns an <code>Experiment</code> &mdash; plain JSON holding every circuit, its parameters, the outcomes, which backend ran it, how long it took, and the library version. <code>parseExperiment</code> reads one back and names the first field that is wrong.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>sweep</td><td>sweep(grid, build, execute, { name?, meta?, concurrency? })</td><td>Run <code>build(params)</code> for every grid point through <code>execute</code>. <code>grid</code> is named axes or an explicit list. Results stay in grid order at any concurrency.</td></tr>
+    <tr><td>cartesian</td><td>cartesian({ axis: values, &hellip; })</td><td>Every combination of the axes, first axis slowest.</td></tr>
+    <tr><td>recordPoint</td><td>recordPoint(index, params, circuit, result, ms?)</td><td>One record point from a result gathered out of band.</td></tr>
+    <tr><td>experiment</td><td>experiment(points, { name?, meta? })</td><td>Wrap points into a stamped <code>Experiment</code>.</td></tr>
+    <tr><td>parseExperiment</td><td>parseExperiment(json | object)</td><td>Validate and type a stored record.</td></tr>
+    <tr><td>resolveOutcomes</td><td>resolveOutcomes(result)</td><td>The outcomes inside an executor result, whether bare or a <code>RunReport</code>.</td></tr>
+    <tr><td>isDistribution</td><td>isDistribution(outcomes)</td><td>Structural test for a <code>Distribution</code>, safe across bundle copies.</td></tr>
+    <tr><td>VERSION</td><td></td><td>The library version string stamped into records.</td></tr>
+    <tr><td>submitSweep</td><td>submitSweep(grid, build, submit, options?)</td><td>Submit every circuit; return a <code>PendingExperiment</code> of job ids. For QPU queues that outlive the process.</td></tr>
+    <tr><td>collectSweep</td><td>collectSweep(pending, collect, { concurrency? })</td><td>Fill in results for finished jobs; a collector returning <code>undefined</code> leaves its point pending. Never mutates its input.</td></tr>
+    <tr><td>finishSweep</td><td>finishSweep(pending)</td><td>A complete pending record as an <code>Experiment</code>; throws naming the indices still queued.</td></tr>
+    <tr><td>parsePendingExperiment</td><td>parsePendingExperiment(json | object)</td><td>Validate and type a stored pending record.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { sweep, parseExperiment, Circuit } from '@kirkelliott/ket'
+
+const exp = await sweep(
+  { theta: [0, Math.PI / 4, Math.PI / 2, Math.PI] },
+  ({ theta }) => new Circuit(1).ry(theta, 0),
+  c => c.run({ shots: 1000 }),
+  { name: 'ry-scan' },
+)
+exp.points.map(p => [p.params.theta, p.probs['1'] ?? 0])
+
+// Hardware: keep the job id and device with each point, four jobs in flight
+await sweep(grid, build, async c => {
+  const { id } = await submitIonQ(c.toIonQ(), { apiKey, target: 'qpu.forte-1', shots })
+  const counts = ionqHistogramToCounts(await getIonQResults(await awaitIonQJob(id, { apiKey }), { apiKey }), shots)
+  return { outcomes: countsToProbs(counts, c.qubits, shots), shots, backend: 'ionq:qpu.forte-1', jobId: id }
+}, { concurrency: 4 })
+
+// Store, reload, rebuild
+const back = parseExperiment(JSON.stringify(exp))
+Circuit.fromJSON(back.points[2].circuit).draw()</code></pre>
+
+  <p>For a prediction of what a device will do today rather than at release, <code>getIonQNoise(target, { apiKey })</code> maps IonQ&rsquo;s latest published characterisation to <code>NoiseParams</code> (1 &minus; fidelity); simulate under it and <code>compareExperiments</code> then tests the model. <code>examples/node/experiment.js</code> runs the whole loop &mdash; exact reference, calibrated prediction, resumable submission, comparison &mdash; against the IonQ simulator by default.</p>
+
+  <p>Executors everywhere &mdash; <code>sweep</code>, <code>runChsh</code>, <code>runRb</code> &mdash; may return bare outcomes or a <code>RunReport</code> <code>{ outcomes, shots?, backend?, jobId?, meta? }</code>; include <code>shots</code> with a probability map so error bars survive. Protocol circuits are a grid like any other: <code>sweep(rbSequences(opts), s =&gt; s.circuit, execute)</code> keeps the whole RB run as a record, and <code>rbFit</code> reads it back from the points.</p>
+</div>
+
+<!-- ─────────────────── STATISTICS ─────────────────── -->
+<span class="section-anchor" id="statistics"></span>
+<div class="section">
+  <h2>Statistics</h2>
+
+  <p>Does the device agree with the simulator? The honest answer needs two numbers: how far apart the distributions are, and how far apart shot noise alone would put them. Every function accepts <code>Outcomes</code> &mdash; a <code>Distribution</code>, a probability map, or raw counts &mdash; and normalises.</p>
+
+  <table class="ref-table">
+    <tr><th>Export</th><th>Signature</th><th>Description</th></tr>
+    <tr><td>tvd</td><td>tvd(p, q)</td><td>Total variation distance &frac12;&middot;&Sigma;|p &minus; q|.</td></tr>
+    <tr><td>hellingerFidelity</td><td>hellingerFidelity(p, q)</td><td>Classical fidelity (&Sigma;&radic;(p&middot;q))&sup2;.</td></tr>
+    <tr><td>klDivergence</td><td>klDivergence(p, q)</td><td>&Sigma; p&middot;ln(p/q) in nats; &infin; where q has no support.</td></tr>
+    <tr><td>linearXeb</td><td>linearXeb(ideal, measured)</td><td>Linear cross-entropy fidelity 2<sup>n</sup>&middot;&Sigma; p<sub>ideal</sub>&middot;p<sub>measured</sub> &minus; 1.</td></tr>
+    <tr><td>zExpectation</td><td>zExpectation(outcomes, qubits?)</td><td>&#10216;Z&hellip;Z&#10217; from parities.</td></tr>
+    <tr><td>wilson</td><td>wilson(k, n, z?)</td><td>Wilson score interval for a proportion.</td></tr>
+    <tr><td>probInterval</td><td>probInterval(outcomes, bits, { shots?, z? })</td><td>Wilson interval for one bitstring&rsquo;s probability.</td></tr>
+    <tr><td>bootstrapOutcomes</td><td>bootstrapOutcomes(outcomes, statistic, { resamples?, confidence?, seed?, shots? })</td><td>Parametric bootstrap of any statistic: <code>{ estimate, mean, stderr, low, high }</code>.</td></tr>
+    <tr><td>shotNoiseTvd</td><td>shotNoiseTvd(reference, shots)</td><td>Expected TVD of a <code>shots</code>-shot sample of the reference from itself: the noise floor.</td></tr>
+    <tr><td>compareOutcomes</td><td>compareOutcomes(observed, reference, { shots? })</td><td><code>tvd</code>, <code>fidelity</code>, <code>shotNoise</code>, <code>tvdStderr</code>, <code>excess</code> and <code>sigma</code> &mdash; the deviation over its combined standard error.</td></tr>
+    <tr><td>compareExperiments</td><td>compareExperiments(observed, reference, { threshold? })</td><td>Point-by-point comparison of two <code>sweep</code> records with <code>meanTvd</code>, <code>maxTvd</code>, <code>meanFidelity</code> and <code>beyondNoise</code>.</td></tr>
+  </table>
+
+  <pre><code class="language-typescript">import { compareOutcomes, compareExperiments, sweep } from '@kirkelliott/ket'
+
+const ideal = bell.exactProbs()
+const qpu   = countsToProbs(counts, 2, 1000)
+compareOutcomes(qpu, ideal, { shots: 1000 })
+// { tvd: 0.041, fidelity: 0.998, shotNoise: { mean: 0.018, … }, tvdStderr: 0.008, excess: 0.023, sigma: 1.9 }
+
+// A whole sweep: hardware against the same sweep on the simulator
+const reference = await sweep(grid, build, c => c.exactProbs())
+const hardware  = await sweep(grid, build, ionqExecutor)
+const cmp = compareExperiments(hardware, reference)
+cmp.beyondNoise     // indices that disagree beyond 3σ</code></pre>
+
+  <p>Beyond about 3&sigma; the disagreement is real. Below it, more shots are needed before anything can be said &mdash; which is the answer the number is there to give.</p>
+</div>
+
 <span class="section-anchor" id="import-export"></span>
 <div class="section">
   <h2>Import / Export</h2>
@@ -1316,7 +1455,7 @@ for (const p2 of [0.001, 0.005, 0.01, 0.02, 0.05]) {
     </div>
     <div style="font-size:.74rem;color:var(--muted)">
       Built by <a href="https://github.com/dmvjs" target="_blank" style="color:#54b4c5;text-decoration:none">@dmvjs</a>
-      · MIT License · 2,456 tests
+      · MIT License
     </div>
   </div>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap">

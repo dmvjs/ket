@@ -12,7 +12,7 @@
  *
  * Reference: https://docs.ionq.com/api-reference/v0.3/jobs/create-a-job
  */
-import type { IonQCircuit } from './circuit.js'
+import type { IonQCircuit, NoiseParams } from './circuit.js'
 
 const DEFAULT_ENDPOINT = 'https://api.ionq.co/v0.3'
 
@@ -99,11 +99,11 @@ export function ionqSubmitRequest(
   }
 }
 
-async function send(url: string, init: RequestInit, f: typeof globalThis.fetch): Promise<IonQJob> {
+async function send<T = IonQJob>(url: string, init: RequestInit, f: typeof globalThis.fetch): Promise<T> {
   const res = await f(url, init)
   const text = await res.text()
   if (!res.ok) throw new Error(`IonQ ${init.method ?? 'GET'} ${url} failed: ${res.status} ${res.statusText} — ${text}`)
-  return JSON.parse(text) as IonQJob
+  return JSON.parse(text) as T
 }
 
 /** Submit a circuit. Returns as soon as the job is queued, not when it finishes. */
@@ -238,4 +238,86 @@ export async function runIonQ(
   const job = await awaitIonQJob(queued.id, opts)
   const histogram = await getIonQResults(job, opts)
   return { job, histogram, counts: ionqHistogramToCounts(histogram, shots) }
+}
+
+// ── Device characterisation → noise model ────────────────────────────────────
+
+/**
+ * One entry from `GET /characterizations/backends`. Payloads vary by device;
+ * only the fields ket reads are typed, the rest pass through.
+ */
+export interface IonQCharacterization {
+  backend?: string
+  qubits?: number
+  fidelity?: {
+    '1q'?: { mean?: number }
+    '2q'?: { mean?: number }
+    spam?: { mean?: number }
+  }
+  timing?: Record<string, number>
+  /** Unix seconds. */
+  date?: number
+  [k: string]: unknown
+}
+
+/**
+ * Turn measured fidelities into ket `NoiseParams`: p1 = 1 − F₁q, p2 = 1 − F₂q,
+ * pMeas = 1 − F_spam. Fields the device does not report are left out. Throws
+ * when none are present, since that would be an empty noise model presented
+ * as a calibrated one.
+ */
+export function noiseFromCharacterization(c: IonQCharacterization): NoiseParams {
+  const f = c.fidelity ?? {}
+  const rate = (mean: number | undefined, name: string): number | undefined => {
+    if (mean === undefined) return undefined
+    if (!(mean >= 0 && mean <= 1)) throw new TypeError(`noiseFromCharacterization: ${name} fidelity ${mean} is not in [0, 1]`)
+    return 1 - mean
+  }
+  const p1 = rate(f['1q']?.mean, '1q'), p2 = rate(f['2q']?.mean, '2q'), pMeas = rate(f.spam?.mean, 'spam')
+  if (p1 === undefined && p2 === undefined && pMeas === undefined)
+    throw new TypeError(`noiseFromCharacterization: no fidelity data for ${c.backend ?? 'this backend'}`)
+  return {
+    ...(p1 !== undefined && { p1 }),
+    ...(p2 !== undefined && { p2 }),
+    ...(pMeas !== undefined && { pMeas }),
+  }
+}
+
+/** Fetch the current characterisations for every backend. Authenticated. */
+export async function getIonQCharacterizations(opts: IonQOptions): Promise<IonQCharacterization[]> {
+  const endpoint = opts.endpoint ?? DEFAULT_ENDPOINT
+  const out = await send<unknown>(`${endpoint}/characterizations/backends`, {
+    method: 'GET',
+    headers: opts.apiKey ? { 'Authorization': `apiKey ${opts.apiKey}` } : {},
+  }, opts.fetch ?? globalThis.fetch)
+  if (!Array.isArray(out)) throw new TypeError('IonQ characterizations: expected an array')
+  return out as IonQCharacterization[]
+}
+
+/** `qpu.forte-1`, `forte-1` and `Forte-1` name the same device. */
+function sameBackend(a: string, b: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/^qpu\./, '')
+  return norm(a) === norm(b)
+}
+
+/**
+ * The noise model IonQ's latest published characterisation implies for a
+ * device — what the simulator should assume to predict that device today,
+ * rather than the snapshot frozen in `DEVICES`.
+ *
+ * @example
+ * const { noise, characterization } = await getIonQNoise('qpu.forte-1', { apiKey })
+ * noise                       // { p1: 0.0002, p2: 0.0041, pMeas: 0.0049 }
+ * characterization.date       // when it was measured
+ * circuit.run({ shots, noise })
+ */
+export async function getIonQNoise(
+  target: string, opts: IonQOptions,
+): Promise<{ noise: NoiseParams; characterization: IonQCharacterization }> {
+  const all = await getIonQCharacterizations(opts)
+  const mine = all.filter(c => typeof c.backend === 'string' && sameBackend(c.backend, target))
+  if (mine.length === 0)
+    throw new Error(`IonQ characterizations: none for '${target}' (have: ${[...new Set(all.map(c => c.backend ?? '?'))].join(', ')})`)
+  const latest = mine.reduce((a, b) => ((b.date ?? 0) > (a.date ?? 0) ? b : a))
+  return { noise: noiseFromCharacterization(latest), characterization: latest }
 }

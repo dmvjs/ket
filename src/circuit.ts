@@ -1668,7 +1668,8 @@ function toTrajOps(flatOps: readonly FlatOp[]): TrajOp[] {
  * numbers. That is the same silently-wrong-answer failure this library rejects
  * everywhere else, so option objects are checked too.
  */
-function checkOptions(opts: object | undefined, allowed: readonly string[], where: string): void {
+/** @internal Reject unknown option keys with a near-miss suggestion. Shared with protocols.ts. */
+export function checkOptions(opts: object | undefined, allowed: readonly string[], where: string): void {
   if (!opts) return
   for (const key of Object.keys(opts)) {
     if (allowed.includes(key)) continue

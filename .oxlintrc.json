@@ -8,5 +8,5 @@
     "eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
     "unicorn/no-new-array": "off"
   },
-  "ignorePatterns": ["dist", "node_modules", "benchmark", "examples", "ket-guide", "scripts"]
+  "ignorePatterns": ["dist", "node_modules", "benchmark", "examples", "ket-guide", "scripts", "site"]
 }
