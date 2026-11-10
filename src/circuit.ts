@@ -2185,7 +2185,17 @@ export interface StabilizerRankRunOptions {
 
 export class Circuit {
   readonly qubits: number
-  readonly #ops:   readonly Op[]
+  // Ops live in an append-only buffer shared along a chain of `.gate()` calls:
+  // each Circuit sees the first `#len` entries. Appending to the chain's tip
+  // pushes in place, so building a circuit of G gates is O(G) rather than the
+  // O(G²) of copying the list per gate (a 300k-gate Shor circuit took minutes).
+  // Branching off a non-tip circuit copies its prefix first, which keeps every
+  // Circuit immutable as observed. `#shared` is false for a buffer handed in by
+  // a caller, which is never mutated.
+  readonly #buf:   Op[]
+  #len:            number
+  #shared:         boolean
+  #view:           readonly Op[] | undefined
   readonly #cregs: ReadonlyMap<string, number>  // name → declared size
   readonly #gates: ReadonlyMap<string, Circuit>  // name → registered sub-circuit
 
@@ -2196,14 +2206,38 @@ export class Circuit {
     gates: ReadonlyMap<string, Circuit>  = new Map(),
   ) {
     this.qubits  = qubits
-    this.#ops    = ops
+    this.#buf    = ops as Op[]
+    this.#len    = ops.length
+    this.#shared = false
     this.#cregs  = cregs
     this.#gates  = gates
   }
 
+  static #make(qubits: number, buf: Op[], len: number, cregs: ReadonlyMap<string, number>, gates: ReadonlyMap<string, Circuit>, shared: boolean): Circuit {
+    const c = new Circuit(qubits, buf, cregs, gates)
+    c.#len = len
+    c.#shared = shared
+    return c
+  }
+
+  get #ops(): readonly Op[] {
+    if (this.#view === undefined) {
+      this.#view = !this.#shared && this.#len === this.#buf.length ? this.#buf : this.#buf.slice(0, this.#len)
+    }
+    return this.#view
+  }
+
+  /** Append one op, sharing the buffer when this circuit is the chain's tip. */
+  #append(op: Op, cregs: ReadonlyMap<string, number> = this.#cregs): Circuit {
+    let buf = this.#buf
+    if (!this.#shared || buf.length !== this.#len) buf = buf.slice(0, this.#len)
+    buf.push(op)
+    return Circuit.#make(this.qubits, buf, this.#len + 1, cregs, this.#gates, true)
+  }
+
   #add(op: Op): Circuit {
     this.#checkOp(op)
-    return new Circuit(this.qubits, [...this.#ops, op], this.#cregs, this.#gates)
+    return this.#append(op)
   }
 
   #checkOp(op: Op): void {
@@ -2709,7 +2743,7 @@ export class Circuit {
 
   /** Declare a classical register of `size` bits. */
   creg(name: string, size: number): Circuit {
-    return new Circuit(this.qubits, this.#ops, new Map(this.#cregs).set(name, size), this.#gates)
+    return Circuit.#make(this.qubits, this.#buf, this.#len, new Map(this.#cregs).set(name, size), this.#gates, this.#shared)
   }
 
   /**
@@ -2719,12 +2753,7 @@ export class Circuit {
    */
   measure(q: number, creg: string, bit: number): Circuit {
     const size = Math.max(this.#cregs.get(creg) ?? 0, bit + 1)
-    return new Circuit(
-      this.qubits,
-      [...this.#ops, { kind: 'measure', q, creg, bit }],
-      new Map(this.#cregs).set(creg, size),
-      this.#gates,
-    )
+    return this.#append({ kind: 'measure', q, creg, bit }, new Map(this.#cregs).set(creg, size))
   }
 
   /**
@@ -2773,7 +2802,7 @@ export class Circuit {
     if (sub.#ops.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
       throw new TypeError(`Gate '${name}' contains classical ops (measure/reset/if), which are not supported inside named gates`)
     }
-    return new Circuit(this.qubits, this.#ops, this.#cregs, new Map(this.#gates).set(name, sub))
+    return Circuit.#make(this.qubits, this.#buf, this.#len, this.#cregs, new Map(this.#gates).set(name, sub), this.#shared)
   }
 
   /**

@@ -601,7 +601,7 @@ console.log(\`Δ energy:  \${((e0 - energy) / Math.abs(e0) * 100).toFixed(1)}% i
 `,
   },
   {
-    name: "Shor's",
+    name: "Shor's (oracle)",
     code:
 `// Shor's algorithm — real quantum period-finding, then classical factoring.
 //
@@ -733,6 +733,39 @@ for (const r of [...periods].sort((x, y) => Number(x - y))) {
 }
 if (!found) console.log('  no factor — Shor\\'s retries with a fresh base a')
 }
+`,
+  },
+  {
+    name: "Shor's (full circuit)",
+    code:
+`// Shor's algorithm with no shortcuts.
+//
+// The oracle tab hands the simulator a precomputed permutation matrix and a
+// base chosen to have period 4. This tab does neither: modular exponentiation
+// is the Beauregard construction compiled to Toffoli and controlled-phase
+// gates, the counting register is the full 2n+1 qubits, and the period is
+// measured. \`method\` reports whether a circuit ran at all — at these sizes a
+// random base often shares a factor with N and gcd finishes without one, so
+// the bases below are coprime to force the quantum path.
+//
+// Cost grows about an order of magnitude per bit of N: 15 in under a second,
+// 21 in seconds, 35 in a minute. Nothing above 7 bits is practical anywhere.
+const { shorBeauregard } = ket
+
+for (const [N, a] of [[15n, 7n], [21n, 2n]]) {
+  const t0 = performance.now()
+  const r = shorBeauregard(N, { a, shots: 8 })
+  const ms = Math.round(performance.now() - t0)
+  console.log(\`N = \${N}  a = \${a}  —  \${r.qubits} qubits, \${ms} ms\`)
+  console.log(\`  method:  \${r.method}\`)
+  console.log(\`  period:  \${r.period}   (a^r mod N = \${a ** r.period % N})\`)
+  console.log(\`  factors: \${r.factors ? r.factors.join(' × ') : r.failure}\`)
+  console.log()
+}
+
+// Compare: the same call with a base sharing a factor never builds a circuit.
+const cheap = shorBeauregard(15n, { a: 6n })
+console.log(\`N = 15  a = 6  —  method: \${cheap.method}  (gcd(6, 15) = 3, no circuit)\`)
 `,
   },
 ]
