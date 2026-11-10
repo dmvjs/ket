@@ -1847,7 +1847,7 @@ const exp = await sweep(
 )
 exp.points.map(p => [p.params.theta, p.probs['1'] ?? 0])
 exp.points[0]                 // { index, params, circuit, probs, shots, backend: 'statevector', jobId, meta, ms }
-exp.ket                       // '0.10.0' — the version that produced it
+exp.ket                       // '0.11.0' — the version that produced it
 
 // Several axes, or an explicit list of anything
 cartesian({ depth: [1, 2, 4], noise: ['ideal', 'forte-1'] }).length    // 6
@@ -1904,7 +1904,7 @@ significant:
 ```typescript
 const d = diffExperiments(parseExperiment(yesterday), parseExperiment(today))
 d.same        // false
-d.header      // ['ket: "0.10.0" → "0.10.1"', 'name: "ry-scan" → "ry-scan v2"']
+d.header      // ['ket: "0.11.0" → "0.11.1"', 'name: "ry-scan" → "ry-scan v2"']
 d.added       // point indices only in today
 d.removed     // only in yesterday
 d.changed     // [{ index: 3, fields: ['probs', 'backend'], tvd: 0.021 }]
