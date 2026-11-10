@@ -23,6 +23,7 @@ import type { WorkerJob } from './mps.worker.js'
 import { DensityMatrix, DM_DEVICE_NOISE, DmNoiseParams, runDM } from './density.js'
 import { CliffordSim } from './clifford.js'
 import { makePrng } from './prng.js'
+import { BranchState, applyBranchOps } from './branch.js'
 import { StabilizerRank, buildSlice, countSplits, termBudget, type SrOp } from './stabilizer-rank.js'
 import { sampleFromOracle } from './stabilizer-sampling.js'
 
@@ -1767,6 +1768,18 @@ export interface SimulateOptions {
   dense?: DenseOptions
 }
 
+/** Options for {@link Circuit.runBranch}. */
+export interface BranchRunOptions {
+  /** Number of measurement samples (default 1024). */
+  shots?: number
+  /** PRNG seed for reproducible sampling. */
+  seed?: number
+  /** Starting computational basis state as a bitstring (q0 leftmost). */
+  initialState?: string
+  /** Throw once the state needs more product-state branches than this. Default: unbounded. */
+  maxBranches?: number
+}
+
 export interface MpsRunOptions {
   /**
    * Hard ceiling on bond dimension χ.
@@ -1853,12 +1866,18 @@ export class Distribution {
    * Which simulation backend produced this result.
    * Set by `simulate()` and the individual `run*` methods.
    */
-  readonly backend: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | undefined
+  readonly backend: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | 'branch' | undefined
   /**
    * Peak bond dimension χ used during MPS simulation.
    * Only defined when `backend === 'mps'`.
    */
   readonly peakChi: number | undefined
+  /**
+   * Largest number of product-state branches `runBranch()` carried at once.
+   * `undefined` for other backends. For Shor's circuits this equals the
+   * multiplicative order being found.
+   */
+  readonly peakBranches: number | undefined
   /**
    * Which statevector representation the run finished on.
    *
@@ -1876,9 +1895,10 @@ export class Distribution {
     counts: Map<bigint, number>,
     cregCounts: Map<string, number[]> = new Map(),
     truncated = false,
-    backend?: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank',
+    backend?: 'clifford' | 'statevector' | 'mps' | 'stabilizer-rank' | 'branch',
     peakChi?: number,
     representation?: 'sparse' | 'dense',
+    peakBranches?: number,
   ) {
     this.qubits    = qubits
     this.shots     = shots
@@ -1886,6 +1906,7 @@ export class Distribution {
     this.backend   = backend
     this.peakChi   = peakChi
     this.representation = representation
+    this.peakBranches = peakBranches
 
     const probs: Record<string, number>     = {}
     const histogram: Record<string, number> = {}
@@ -2077,7 +2098,7 @@ export class Distribution {
         [name, fracs.map(f => Math.round(f * this.shots))] as [string, number[]]
       )
     )
-    return new Distribution(this.qubits, this.shots, counts, cregCounts, this.truncated, this.backend, this.peakChi)
+    return new Distribution(this.qubits, this.shots, counts, cregCounts, this.truncated, this.backend, this.peakChi, this.representation, this.peakBranches)
   }
 }
 
@@ -4783,6 +4804,96 @@ export class Circuit {
     }
 
     return new Distribution(this.qubits, shots, counts, cregCounts, false, 'statevector', undefined, lastKind)
+  }
+
+  /**
+   * Simulate a pure circuit on the branch backend and return its state as a
+   * sum of product states — the counterpart of `statevector()` for inspecting
+   * how many branches a circuit needs (`peakBranches`) or expanding small
+   * states exactly (`amplitudes()`). Requires a pure circuit.
+   */
+  branchState(options: { initialState?: string; maxBranches?: number } = {}): BranchState {
+    checkOptions(options, ['initialState', 'maxBranches'], 'branchState')
+    const { initialState, maxBranches } = options
+    const flat = flattenOps(this.#ops)
+    if (flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')) {
+      throw new TypeError('branchState() requires a pure circuit — remove measure/reset/if ops, or use runBranch()')
+    }
+    if (initialState !== undefined && initialState.length !== this.qubits) {
+      throw new RangeError(`branchState: initialState has ${initialState.length} bits for a ${this.qubits}-qubit circuit`)
+    }
+    const opts = maxBranches === undefined ? {} : { maxBranches }
+    const state = initialState ? BranchState.fromBitstring(initialState, opts) : new BranchState(this.qubits, opts)
+    applyBranchOps(state, flat, new Map(), () => 0)
+    return state
+  }
+
+  /**
+   * Run the circuit as a sum of product states.
+   *
+   * Each branch stores one 2-vector per qubit, so a branch costs O(n) in any
+   * local basis. A gate splits a branch only when it has to — a controlled gate
+   * whose control is a basis state never does — and branches that agree on
+   * every basis-state qubit are summed back together at each measurement.
+   * Exact for any circuit, including mid-circuit `measure` / `reset` / `if`;
+   * cheap when the state is a short sum of product states, which is a regime
+   * none of the other backends target: a Fourier-transformed integer is dense
+   * for the statevector and high-χ for MPS, yet a single product state here.
+   *
+   * The motivating case is Shor's with one counting qubit
+   * (`shorBeauregard({ iterative: true })`): the branch count equals the
+   * multiplicative order being found, so `result.peakBranches` *is* the cost,
+   * and a 16-bit modulus runs in under a second where the full register needed
+   * MPS and stalled at 7 bits.
+   *
+   * Options: `shots` (default 1024); `seed`; `initialState` a basis bitstring;
+   * `maxBranches` — throw once the state needs more branches than this, which
+   * is how to find out early that a circuit is not in this backend's regime.
+   */
+  runBranch(options: BranchRunOptions = {}): Distribution {
+    checkOptions(options, ['shots', 'seed', 'initialState', 'maxBranches'], 'runBranch')
+    const { shots = 1024, seed, initialState, maxBranches } = options
+    if (initialState !== undefined && initialState.length !== this.qubits) {
+      throw new RangeError(`runBranch: initialState has ${initialState.length} bits for a ${this.qubits}-qubit circuit`)
+    }
+    const rng  = makePrng(seed)
+    const flat = flattenOps(this.#ops)
+    const opts = maxBranches === undefined ? {} : { maxBranches }
+    const fresh = () => initialState ? BranchState.fromBitstring(initialState, opts) : new BranchState(this.qubits, opts)
+    const counts = new Map<bigint, number>()
+    const cregCounts = new Map<string, number[]>(
+      Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<number>(size).fill(0)])
+    )
+    let peak = 1
+
+    const pure = !flat.some(op => op.kind === 'measure' || op.kind === 'reset' || op.kind === 'if')
+    if (pure) {
+      // Simulate once, then sample copies: sampling collapses the state.
+      const state = fresh()
+      applyBranchOps(state, flat, new Map(), rng)
+      peak = state.peakBranches
+      for (let i = 0; i < shots; i++) {
+        const idx = state.clone().sample(rng)
+        counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      }
+      return new Distribution(this.qubits, shots, counts, cregCounts, false, 'branch', undefined, undefined, peak)
+    }
+
+    for (let i = 0; i < shots; i++) {
+      const shotCregs = new Map<string, boolean[]>(
+        Array.from(this.#cregs.entries(), ([name, size]) => [name, new Array<boolean>(size).fill(false)])
+      )
+      const state = fresh()
+      applyBranchOps(state, flat, shotCregs, rng)
+      peak = Math.max(peak, state.peakBranches)
+      const idx = state.sample(rng)
+      counts.set(idx, (counts.get(idx) ?? 0) + 1)
+      for (const [name, bits] of shotCregs) {
+        const acc = cregCounts.get(name)!
+        for (const [j, b] of bits.entries()) if (b) acc[j]! += 1
+      }
+    }
+    return new Distribution(this.qubits, shots, counts, cregCounts, false, 'branch', undefined, undefined, peak)
   }
 
   /**

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added — branch backend: the state as a sum of product states
+
+- **`circuit.runBranch({ shots, seed, initialState, maxBranches })`** carries the
+  state as a sum of product states, one 2-vector per qubit per branch. A gate
+  splits a branch only when it must — a controlled gate whose control is a basis
+  state never does — and branches that agree on every basis-state qubit are
+  summed at each measurement. Exact for any circuit, including mid-circuit
+  `measure` / `reset` / `if`. `Distribution.backend` is `'branch'` and
+  `Distribution.peakBranches` is the cost actually paid. `circuit.branchState()`
+  returns the representation of a pure circuit; `BranchState` is exported.
+- **`shorCircuitIterative(N, a)`** and **`shorBeauregard(N, { iterative: true })`**:
+  Shor's with one counting qubit, measured and reset 2n+1 times with the
+  inverse-QFT rotations as classically conditioned phases. Same Beauregard
+  arithmetic, 2n+3 qubits, and inside it every register is an integer or the
+  QFT of one — a product state — so on the branch backend the cost is the
+  period being found and nothing else. Random base, period measured, no oracle:
+  8-bit in 0.1 s, 12-bit in 0.3 s, 16-bit in 0.8 s, 20-bit in 8 s (period 1288).
+  The full-register form on MPS stops near 7 bits, and its doc comment no
+  longer claims otherwise.
+
+### Changed
+
+- **Building a circuit is O(gates), not O(gates²).** Ops live in an append-only
+  buffer shared along a chain of calls; each `Circuit` sees its own prefix and a
+  branch off a non-tip circuit copies first. Observable immutability is
+  unchanged and caller-supplied arrays are never mutated. A 370k-gate Shor
+  circuit built in 124 s before and 0.1 s now.
+
 ## 0.10.0 — 2026-11-09
 
 ### Added — characterisation protocols: CHSH and randomized benchmarking

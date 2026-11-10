@@ -252,8 +252,9 @@ circuit.simulate({ statevectorLimit: 30 })  // use statevector up to n=30
 | Exact density matrix | `circuit.dm({ noise? })` | sparse → dense, automatic | Mixed-state and noisy simulation |
 | Clifford stabilizer | `circuit.runClifford({ shots, noise? })` | O(n²) | Clifford-only circuits, QEC threshold curves |
 | Stabilizer rank | `circuit.runStabilizerRank({ shots, targetError? })` | O(2^0.228t · n²/8) | Clifford+T at 100+ qubits |
+| Branch (sum of product states) | `circuit.runBranch({ shots, maxBranches? })` | O(branches · n) | Few-branch states in any local basis — Shor's arithmetic, QFT of integers |
 
-All five backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
+All six backends populate `Distribution.backend`. The MPS backend also sets `Distribution.peakChi` — the actual peak bond dimension used (not the allocation size), useful for profiling circuit entanglement:
 
 ```typescript
 const d = myCircuit.runMps({ shots: 1024 })
@@ -352,6 +353,42 @@ fits the budget.
 
 Reference: Bravyi, Browne, Calpin, Campbell, Gosset, Howard, *Simulation of
 quantum circuits by low-rank stabilizer decompositions*, Quantum 3, 181 (2019).
+
+### Sum of product states: the branch backend
+
+`runBranch()` carries the state as a sum of product states, one 2-vector per
+qubit per branch, so a branch costs O(n) whatever local basis its qubits are in.
+A gate on k qubits is applied to the k-qubit product inside each branch and the
+result is split back into product states by fixing all but one of those qubits
+in the computational basis. A controlled gate whose control is a basis state in
+a branch never splits; a `cu1` splits only when both sides are superposed. At
+each measurement, branches that agree on every basis-state qubit are summed.
+
+It is exact for any circuit, including mid-circuit `measure` / `reset` / `if`,
+and cheap in a regime none of the other backends target: a Fourier-transformed
+integer is dense for the statevector and high-χ for MPS, but a single product
+state here. That is exactly the state inside Shor's modular arithmetic, where
+every register is an integer or the QFT of one.
+
+```typescript
+const d = circuit.runBranch({ shots: 1024, seed: 1, maxBranches: 10_000 })
+d.backend        // 'branch'
+d.peakBranches   // the largest number of product states carried at once — the cost
+
+circuit.branchState()              // pure circuits: the state itself
+  .peakBranches                    // how many branches this circuit needs
+  .amplitudes()                    // Map<bigint, Complex>, for small circuits
+```
+
+`maxBranches` throws once the state needs more branches than that, which is the
+quick way to learn a circuit is not in this regime; a Bell pair is two branches,
+a random 20-qubit circuit is 2²⁰. `BranchState` is exported for anyone who wants
+to drive the representation directly.
+
+For Shor's with one counting qubit the branch count is the multiplicative order
+being found — see [`iterative`](#shors-algorithm--beauregard-gate-decomposed-circuit)
+below — so `peakBranches` reports the period and the run time is the period
+times the gate count, with no shortcut anywhere in the circuit.
 
 ### Tuning sparse → dense promotion
 
@@ -1512,6 +1549,43 @@ runs in seconds; N=77 takes about 15 minutes. Factoring an RSA modulus this way 
 a matter of waiting longer. What ket gives you is the real circuit — every gate, exactly
 simulated — at sizes where you can inspect and learn from it.
 
+#### One counting qubit: `iterative`
+
+The full circuit keeps `2n+1` counting qubits and runs on MPS, where the peak
+bond dimension grows about threefold per bit of N; it is practical to about
+7 bits. `iterative: true` builds `shorCircuitIterative(N, a)` instead: one
+counting qubit, measured and reset `2n+1` times with the inverse-QFT rotations
+applied as classically conditioned phases (the Griffiths–Niu semiclassical
+QFT), and runs it on the branch backend. Same algorithm, same arithmetic, `2n+3`
+qubits, and the registers only ever hold as many distinct values as the order
+of `a`, so the cost is the period itself.
+
+```typescript
+const r = shorBeauregard(3233n, { iterative: true, seed: 1 })
+r.method    // 'quantum'
+r.factors   // [61n, 53n]
+r.period    // 156 — and the branch count that run carried
+r.qubits    // 27
+
+shorCircuitIterative(143n, 73n).runBranch({ shots: 1, seed: 1 }).peakBranches   // 20, the order of 73 mod 143
+```
+
+Measured on one core, random base, period found from the measured phase:
+
+| bits | N | qubits | gates | period | time |
+|---|---|---|---|---|---|
+| 8 | 143 | 19 | 96k | 20 | 0.1 s |
+| 12 | 3233 | 27 | 369k | 156 | 0.3 s |
+| 16 | 60491 | 35 | 997k | 200 | 0.8 s |
+| 20 | 1022117 | 43 | 2.2M | 1288 | 8 s |
+
+Time scales with the period, not with N: a 20-bit base of order 255,024 would
+take about 25 minutes. That is the honest shape of the problem — knowing the
+period is the whole of factoring, and a classical simulation pays it in full
+where the quantum computer pays its logarithm. Numbers whose p−1 and q−1 are
+smooth have small orders and simulate quickly; they are also the ones Pollard's
+p−1 factors classically.
+
 ### Inspecting the Shor circuit directly
 
 `shorBeauregard` runs the circuit and post-processes the measured phase.
@@ -2330,7 +2404,7 @@ minimum-weight or union-find decoder is left to the caller.
 
 ## Testing
 
-2,587 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
+2,598 tests, ~40s (the Beauregard Shor's suite dominates). Run with:
 
 ```bash
 npm test

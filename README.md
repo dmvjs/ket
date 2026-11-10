@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Quantum circuits in TypeScript — simulate locally, then run on real hardware.**
-Immutable API, seven backends, zero dependencies.
+Immutable API, eight backends, zero dependencies.
 
 ```typescript
 import { Circuit } from '@kirkelliott/ket'
@@ -222,7 +222,7 @@ See [protocols](docs/REFERENCE.md#characterisation-protocols),
   gates later.
 - **Immutable.** Every gate method returns a new `Circuit`.
 - **BigInt state indices.** No 32-bit overflow at qubit 31.
-- **2,587 tests.** Analytic correctness against known amplitudes — gate
+- **2,598 tests.** Analytic correctness against known amplitudes — gate
   invertibility, backend cross-agreement, and full round-trips for every
   import/export format. Stabilizer backends are checked against the statevector
   kernel *including global phase*.

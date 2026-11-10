@@ -2,7 +2,9 @@
  * Beauregard circuit for gate-decomposed Shor's algorithm.
  *
  * Implements modular arithmetic using only CNOT, CU1, and single-qubit
- * gates — no dense matrices. Scales to 40-bit semiprimes via MPS.
+ * gates — no dense matrices. The full 4n+3-qubit register runs on MPS to
+ * about 7 bits; the iterative (one counting qubit) form on the branch backend
+ * factors 16–20-bit moduli in seconds, with cost set by the period found.
  *
  * Reference: Beauregard (2003), "Circuit for Shor's algorithm using 2n+3 qubits"
  * arXiv:quant-ph/0205095
@@ -396,6 +398,49 @@ export function shorCircuit(N: bigint, a: bigint, precision?: number): Circuit {
   return applyIqft(c, prec, 0)
 }
 
+/**
+ * Shor's phase estimation with a single counting qubit, measured and reset
+ * `precision` times (Griffiths–Niu semiclassical QFT). Round k applies
+ * controlled-U^(2^k) for k = precision−1 down to 0, so the first bit read is
+ * the least significant bit of the phase; the inverse-QFT rotations become
+ * phase corrections conditioned on the bits already measured, stored in
+ * classical registers `m0 … m{precision−1}` (`mk` holds phase bit k).
+ *
+ * Layout: counting qubit 0, x register `[1, n]` (starts |1⟩), accumulator
+ * `[n+1, 2n+1]`, ancilla `2n+2` — `2n+3` qubits instead of `precision + 2n + 2`.
+ *
+ * Built for `runBranch()`: with one counting qubit the registers hold only as
+ * many distinct values as the multiplicative order of `a`, so the branch count
+ * — and the run time — is the period being found. `shorBeauregard` uses it with
+ * `iterative: true`.
+ *
+ * @example
+ * const d = shorCircuitIterative(143n, 73n).runBranch({ shots: 1, seed: 1 })
+ * d.peakBranches        // 20 — the order of 73 mod 143
+ * d.cregs['m16'][0]     // most significant phase bit of this trajectory
+ */
+export function shorCircuitIterative(N: bigint, a: bigint, precision?: number): Circuit {
+  const n    = Math.ceil(Math.log2(Number(N)))
+  const prec = precision ?? 2 * n + 1
+  const ctrl = 0, xOff = 1, bOff = n + 1, ancilla = 2 * n + 2
+
+  let c = new Circuit(2 * n + 3).x(xOff)
+  const powers: bigint[] = []
+  let ak = a % N
+  for (let k = 0; k < prec; k++) { powers.push(ak); ak = ak * ak % N }
+
+  for (let k = prec - 1; k >= 0; k--) {
+    c = c.h(ctrl)
+    c = beauregardU(c, n, powers[k]!, modInverse(powers[k]!, N), N, ctrl, xOff, bOff, ancilla)
+    // Semiclassical inverse QFT: rotate by the bits already known.
+    for (let j = k + 1; j < prec; j++) {
+      c = c.if(`m${j}`, 1, cc => cc.p(-2 * Math.PI / 2 ** (j - k + 1), ctrl))
+    }
+    c = c.h(ctrl).measure(ctrl, `m${k}`, 0).reset(ctrl)
+  }
+  return c
+}
+
 
 /**
  * How a factor was obtained.
@@ -464,11 +509,24 @@ export function factor(
   return shorBeauregard(BigInt(N), opts).factors
 }
 
+/** True when r (or a small multiple of it) is an even order of a whose a^(r/2) ≠ −1 — i.e. it will yield a factor. */
+function usablePeriod(N: bigint, a: bigint, r: bigint): boolean {
+  for (let m = 1n; m <= 8n; m++) {
+    const rr = r * m
+    if (rr === 0n || rr > N) return false
+    if (modPow(a, rr, N) !== 1n) continue
+    return rr % 2n === 0n && modPow(a, rr / 2n, N) !== N - 1n
+  }
+  return false
+}
+
 /**
  * Full Shor's algorithm using the Beauregard gate-decomposed circuit.
  *
  * Builds the QPE circuit with an explicit quantum Fourier adder oracle —
- * no dense matrices, O(n³) gate count. Uses MPS simulation (required for n ≥ 7).
+ * no dense matrices, O(n³) gate count. The default full-register form runs on
+ * MPS and is practical to about 7 bits; `iterative: true` reuses one counting
+ * qubit and runs on the branch backend, where the cost is the period itself.
  *
  * Check `method === 'quantum'` on the result to confirm period-finding ran
  * rather than a classical shortcut succeeding first.
@@ -482,6 +540,12 @@ export function factor(
  *                        yield a usable period, so 1 shot fails often.
  * @param opts.maxAttempts  Maximum retries (default: 20). Each attempt reseeds.
  * @param opts.seed  PRNG seed — makes both base selection and sampling reproducible.
+ * @param opts.iterative  Use one counting qubit (`shorCircuitIterative`) on the
+ *   branch backend instead of the full register on MPS. Same algorithm, 2n+3
+ *   qubits, and the run time is set by the period rather than by 2^(3n); this is
+ *   the form that reaches 16–20-bit moduli in seconds. `shots` becomes the
+ *   maximum number of trajectories per attempt; sampling stops at the first
+ *   usable period.
  *
  * Circuit layout (total = precision + 2n + 2 qubits):
  *   0..precision-1       — counting register (QPE)
@@ -499,10 +563,12 @@ export function shorBeauregard(
     maxAttempts?: number
     seed?:       number
     truncErr?:   number
+    iterative?:  boolean
   } = {},
 ): ShorResult {
   const n          = Math.ceil(Math.log2(Number(N)))
   const precision  = opts.precision  ?? 2 * n + 1
+  const iterative  = opts.iterative  ?? false
   // Each shot is one sample of the QPE output register. Only a fraction of
   // outcomes yield a usable period (for N=15, a=7 the good outcomes are 128 and
   // 384 out of {0,128,256,384}), so a single shot fails outright about half the
@@ -510,7 +576,7 @@ export function shorBeauregard(
   const shots      = opts.shots      ?? 16
   const maxTries   = opts.maxAttempts ?? 20
   const truncErr   = opts.truncErr   ?? 0
-  const totalQ     = precision + 2 * n + 2
+  const totalQ     = iterative ? 2 * n + 3 : precision + 2 * n + 2
 
   // Quick classical checks
   if (N < 4n) throw new RangeError('N must be ≥ 4')
@@ -534,26 +600,45 @@ export function shorBeauregard(
 
     const a    = aCand
 
-    const c = shorCircuit(N, a, precision)
-
-    // Run via MPS (handles the entanglement efficiently).
     // Vary the seed per attempt — otherwise every retry rebuilds an identical
     // circuit and resamples the identical dud outcome, turning maxAttempts into
     // an expensive no-op.
     const attemptSeed = opts.seed !== undefined
       ? ((opts.seed + attempt * 0x9e3779b9) >>> 0) || 1
       : undefined
-    const dist = c.runMps({ shots, ...(attemptSeed !== undefined && { seed: attemptSeed }), truncErr })
 
-    // Extract period candidates from all measurement outcomes
+    // Measured phase values, one per sample.
+    const phases: number[] = []
+    if (iterative) {
+      // One counting qubit on the branch backend: each trajectory is a full run,
+      // so take them one at a time and stop as soon as one yields a usable period.
+      const c = shorCircuitIterative(N, a, precision)
+      for (let sNo = 0; sNo < shots; sNo++) {
+        const seedS = attemptSeed === undefined ? undefined : ((attemptSeed + sNo * 0x9e3779b9) >>> 0) || 1
+        const d = c.runBranch({ shots: 1, ...(seedS !== undefined && { seed: seedS }) })
+        let val = 0
+        for (let k = 0; k < precision; k++) if (d.cregs[`m${k}`]![0]! > 0.5) val += 2 ** k
+        if (val !== 0) phases.push(val)
+        if (val !== 0 && usablePeriod(N, a, continuedFractions(val, precision, N))) break
+      }
+    } else {
+      const c = shorCircuit(N, a, precision)
+      const dist = c.runMps({ shots, ...(attemptSeed !== undefined && { seed: attemptSeed }), truncErr })
+      for (const bs of Object.keys(dist.probs)) {
+        // bs is qubit-0-first (LSB), convert to integer
+        let val = 0
+        for (let i = 0; i < precision; i++) if (bs[i] === '1') val |= 1 << i
+        if (val !== 0) phases.push(val)
+      }
+    }
+
+    // Period candidates. Continued fractions returns the denominator of the
+    // reduced fraction s/r; when s shares a factor with r that is a divisor of
+    // the order, so small multiples are tried too.
     const candidates = new Set<bigint>()
-    for (const bs of Object.keys(dist.probs)) {
-      // bs is qubit-0-first (LSB), convert to integer
-      let val = 0
-      for (let i = 0; i < precision; i++) if (bs[i] === '1') val |= 1 << i
-      if (val === 0) continue
+    for (const val of phases) {
       const r = continuedFractions(val, precision, N)
-      candidates.add(r)
+      for (let m = 1n; m <= 8n; m++) if (r * m <= N) candidates.add(r * m)
     }
 
     // Did we recover the true period but find it unusable? That is a property of

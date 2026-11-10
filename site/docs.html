@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ket API reference · dmvjs</title>
-<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, seven backends, zero dependencies.">
+<meta name="description" content="API reference for @kirkelliott/ket — quantum circuit simulator in JavaScript. TypeScript-strict, eight backends, zero dependencies.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/material-darker.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
@@ -313,7 +313,7 @@
 <div class="section" style="margin-bottom:2.5rem">
   <h1>ket</h1>
   <p class="lead">
-    TypeScript quantum circuit simulator. Immutable API, seven backends (statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
+    TypeScript quantum circuit simulator. Immutable API, eight backends (statevector, MPS, density matrix, Clifford, stabilizer rank, tensor-network contraction, Pauli path), 14 import/export formats, zero dependencies. Runs in Node.js ≥ 22 and any modern browser.
   </p>
 </div>
 
@@ -651,6 +651,12 @@ d.peakChi   // peak bond dimension, when the MPS path ran</code></pre>
       <p>Clifford+T at 100+ qubits. Cost is exponential in the <i>non-Clifford</i> count <i>t</i>, not the width, so it goes where a statevector cannot. Exact runs stop near t=18; setting <code>targetError</code> derives a term budget from the circuit&rsquo;s stabilizer extent and reaches t=50 in seconds. <code>maxTGates({ qubits, targetError, memoryBytes })</code> gives the memory bound; runtime binds sooner. Approximate runs set <code>Distribution.truncated</code>, and <code>estimateNorm()</code> measures the damage &mdash; an exact decomposition of a unitary circuit has &#8214;&psi;&#8214;&sup2; = 1, so drift from 1 is the cost.</p>
     </div>
     <div class="backend-card">
+      <h4>Branch (sum of product states)</h4>
+      <div class="method">circuit.runBranch({ shots, maxBranches? })</div>
+      <div class="mem">O(branches &middot; n)</div>
+      <p>States that are a short sum of product states in any local basis. A controlled gate whose control is a basis state never splits a branch, so Shor&rsquo;s modular arithmetic &mdash; integers and their Fourier transforms &mdash; stays product throughout, and <code>Distribution.peakBranches</code> equals the period being found. Exact, supports mid-circuit <code>measure</code>/<code>reset</code>/<code>if</code>; <code>maxBranches</code> throws when a circuit is not in this regime. <code>circuit.branchState()</code> returns the representation for a pure circuit.</p>
+    </div>
+    <div class="backend-card">
       <h4>Tensor Network Contraction</h4>
       <div class="method">amplitudeByContraction(circuit, bitstring)</div>
       <div class="mem">O(2<sup>width</sup>), width = treewidth not n</div>
@@ -849,6 +855,11 @@ r.qubits   // 19</code></pre>
 
   <pre><code class="language-typescript">shorBeauregard(15n, { a: 3n }).method  // 'classical-gcd' — no circuit
 shorBeauregard(15n, { a: 7n }).method  // 'quantum'</code></pre>
+  <p><code>iterative: true</code> uses one counting qubit, measured and reset 2n+1 times (<code>shorCircuitIterative</code>), and runs it on the branch backend. Same arithmetic, 2n+3 qubits, and the run time is the period rather than 2<sup>3n</sup>: 8-bit in 0.1&nbsp;s, 12-bit in 0.3&nbsp;s, 16-bit in 0.8&nbsp;s, 20-bit in 8&nbsp;s for a base of order 1288, with <code>r.period</code> also the branch count carried. The full-register form on MPS stops near 7 bits.</p>
+  <pre><code class="language-typescript">const r = shorBeauregard(3233n, { iterative: true, seed: 1 })
+r.method    // 'quantum'
+r.factors   // [61n, 53n]
+r.period    // 156n — and the cost: branches carried = period</code></pre>
 
   <table class="ref-table">
     <tr><th>N</th><th>qubits</th><th>time</th></tr>
