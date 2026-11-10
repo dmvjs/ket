@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.11.0 — 2026-11-10
+## 0.12.0 — 2026-11-10
 
 ### Added — branch backend: the state as a sum of product states
 
